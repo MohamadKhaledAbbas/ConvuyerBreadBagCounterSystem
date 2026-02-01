@@ -1,0 +1,26 @@
+# Core dependencies
+opencv-python>=4.8.0
+numpy>=1.24.0
+
+# Ultralytics YOLO (for Windows/development)
+ultralytics>=8.0.0
+
+# PyTorch (required by ultralytics)
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Scientific computing
+scipy>=1.10.0
+
+# Database
+# sqlite3 is built into Python
+
+# Utilities
+Pillow>=9.0.0
+
+# Optional: ROS2 dependencies (install separately on RDK)
+# rclpy
+# hbmem_msgs
+
+# Optional: BPU support (RDK only)
+# hobot_dnn (pre-installed on RDK)
