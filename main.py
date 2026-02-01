@@ -143,35 +143,34 @@ def main():
     
     # Apply command line overrides
     if args.source.isdigit():
-        app_config.video_source = int(args.source)
+        video_source = int(args.source)
     else:
-        app_config.video_source = args.source
+        video_source = args.source
     
     if args.detector_model:
-        app_config.detection_model_path = args.detector_model
+        app_config.detection_model = args.detector_model
     
     if args.classifier_model:
-        app_config.classifier_model_path = args.classifier_model
-    
-    app_config.database_path = args.database
+        app_config.classification_model = args.classifier_model
     
     tracking_config.detection_confidence = args.detection_conf
     tracking_config.classification_confidence = args.classification_conf
     tracking_config.spool_dir = args.output_dir
     
     # Log configuration
-    logger.info(f"Source: {app_config.video_source}")
+    logger.info(f"Source: {video_source}")
     logger.info(f"Testing mode: {args.testing}")
     logger.info(f"Display: {not args.no_display}")
     logger.info(f"Recording: {not args.no_recording}")
-    logger.info(f"Detection model: {app_config.detection_model_path}")
-    logger.info(f"Classifier model: {app_config.classifier_model_path}")
+    logger.info(f"Detection model: {app_config.detection_model}")
+    logger.info(f"Classifier model: {app_config.classification_model}")
     logger.info(f"Output dir: {tracking_config.spool_dir}")
     
     # Create and run application
     app = ConveyorCounterApp(
         app_config=app_config,
         tracking_config=tracking_config,
+        video_source=video_source,
         enable_display=not args.no_display,
         enable_recording=not args.no_recording,
         testing_mode=args.testing

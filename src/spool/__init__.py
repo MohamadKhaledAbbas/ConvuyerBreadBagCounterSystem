@@ -23,8 +23,7 @@ from src.spool.h264_nal import (
     parse_nal_units,
     detect_frame_type,
     extract_sps_pps,
-    is_idr_frame,
-    get_nal_unit_name
+    is_idr_frame
 )
 
 from src.spool.segment_io import (
@@ -79,7 +78,6 @@ __all__ = [
     'detect_frame_type',
     'extract_sps_pps',
     'is_idr_frame',
-    'get_nal_unit_name',
     # Segment I/O
     'FrameRecord',
     'SegmentMetadata',

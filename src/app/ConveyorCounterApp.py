@@ -36,7 +36,8 @@ from src.tracking.ConveyorTracker import ConveyorTracker, TrackedObject, TrackEv
 from src.tracking.BidirectionalSmoother import BidirectionalSmoother, ClassificationRecord
 
 from src.logging.Database import DatabaseManager
-from src.spool.segment_io import SegmentWriter, RetentionManager
+from src.spool.segment_io import SegmentWriter
+from src.spool.retention import RetentionPolicy, RetentionConfig
 
 
 @dataclass
@@ -70,6 +71,7 @@ class ConveyorCounterApp:
         self,
         app_config: Optional[AppConfig] = None,
         tracking_config: Optional[TrackingConfig] = None,
+        video_source: Optional[str] = None,
         frame_source: Optional[FrameSource] = None,
         detector: Optional[BaseDetector] = None,
         classifier: Optional[BaseClassifier] = None,
@@ -84,6 +86,7 @@ class ConveyorCounterApp:
         Args:
             app_config: Application configuration
             tracking_config: Tracking configuration
+            video_source: Video source (file path, camera index, or RTSP URL)
             frame_source: Optional pre-configured frame source
             detector: Optional pre-configured detector
             classifier: Optional pre-configured classifier
@@ -94,6 +97,7 @@ class ConveyorCounterApp:
         """
         self.app_config = app_config or AppConfig()
         self.tracking_config = tracking_config or TrackingConfig()
+        self.video_source = video_source
         self.testing_mode = testing_mode
         self.enable_display = enable_display
         self.enable_recording = enable_recording
@@ -109,13 +113,13 @@ class ConveyorCounterApp:
         
         # Recording components
         self._segment_writer: Optional[SegmentWriter] = None
-        self._retention_manager: Optional[RetentionManager] = None
+        self._retention_policy: Optional[RetentionPolicy] = None
         
         # Database
         self._db: Optional[DatabaseManager] = None
         
         # Structured logging
-        self._structured_logger = StructuredLogger()
+        self._structured_logger = StructuredLogger(logger)
         
         # Metrics
         self._metrics = PipelineMetrics()
@@ -145,9 +149,10 @@ class ConveyorCounterApp:
         # Frame source
         if self._frame_source is None:
             source_type = 'opencv'  # Default to OpenCV
+            source = self.video_source or self.app_config.video_path
             self._frame_source = FrameSourceFactory.create(
                 source_type,
-                source=self.app_config.video_source,
+                source=source,
                 testing_mode=self.testing_mode
             )
         
@@ -196,12 +201,15 @@ class ConveyorCounterApp:
                 fps=self.tracking_config.recording_fps
             )
             
-            self._retention_manager = RetentionManager(
-                segment_dir=self.tracking_config.spool_dir,
-                max_retention_days=self.tracking_config.retention_days,
+            retention_config = RetentionConfig(
+                max_age_hours=self.tracking_config.retention_days * 24,
                 max_storage_bytes=self.tracking_config.max_storage_gb * 1024 * 1024 * 1024
             )
-            self._retention_manager.start()
+            self._retention_policy = RetentionPolicy(
+                spool_dir=self.tracking_config.spool_dir,
+                config=retention_config
+            )
+            self._retention_policy.start()
         
         # Database
         self._db = DatabaseManager(self.app_config.database_path)

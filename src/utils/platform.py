@@ -28,3 +28,14 @@ elif IS_WINDOWS:
     PLATFORM_NAME = "Windows"
 else:
     PLATFORM_NAME = "Linux"
+
+
+def is_rdk_platform() -> bool:
+    """Check if running on RDK platform."""
+    return IS_RDK
+
+
+def is_windows() -> bool:
+    """Check if running on Windows."""
+    return IS_WINDOWS
+
