@@ -18,9 +18,17 @@ import time
 import numpy as np
 
 from src.detection.BaseDetection import Detection
-from src.utils.Utils import compute_iou, compute_centroid
+from src.utils.Utils import compute_iou
 from src.config.tracking_config import TrackingConfig
 from src.utils.AppLogging import logger
+
+# Try to import scipy for optimal linear assignment
+try:
+    from scipy.optimize import linear_sum_assignment  # noqa
+    HAS_SCIPY = True
+except ImportError:
+    linear_sum_assignment = None  # type: ignore
+    HAS_SCIPY = False
 
 
 @dataclass
@@ -174,7 +182,7 @@ class ConveyorTracker:
         
         logger.info(
             f"[ConveyorTracker] Initialized with iou_threshold={self.config.iou_threshold}, "
-            f"max_age={self.config.max_age}, min_hits={self.config.min_hits}"
+            f"max_age={self.config.max_frames_without_detection}, min_hits={self.config.min_track_duration_frames}"
         )
     
     def _compute_cost_matrix(
@@ -215,12 +223,6 @@ class ConveyorTracker:
         Returns:
             Tuple of (matches, unmatched_tracks, unmatched_detections)
         """
-        try:
-            from scipy.optimize import linear_sum_assignment
-            use_scipy = True
-        except ImportError:
-            use_scipy = False
-        
         if cost_matrix.size == 0:
             return (
                 [],
@@ -228,7 +230,7 @@ class ConveyorTracker:
                 set(range(cost_matrix.shape[1]))
             )
         
-        if use_scipy:
+        if HAS_SCIPY:
             row_indices, col_indices = linear_sum_assignment(cost_matrix)
         else:
             # Greedy fallback
@@ -277,8 +279,8 @@ class ConveyorTracker:
             return False
         
         cx, cy = track.center
-        margin = self.config.exit_margin
-        
+        margin = 20  # Pixel margin from edge to consider as exiting
+
         return (
             cx < margin or
             cx > self.frame_width - margin or
@@ -375,13 +377,13 @@ class ConveyorTracker:
             event_type = 'track_completed'
             
             # Check if track exceeded max age
-            if track.time_since_update > self.config.max_age:
+            if track.time_since_update > self.config.max_frames_without_detection:
                 should_complete = True
                 event_type = 'track_lost'
             
             # Check if track is exiting frame and has been tracked long enough
             elif (
-                track.hits >= self.config.min_hits and
+                track.hits >= self.config.min_track_duration_frames and
                 self._is_exiting_frame(track)
             ):
                 should_complete = True
@@ -412,14 +414,14 @@ class ConveyorTracker:
     
     def get_confirmed_tracks(self) -> List[TrackedObject]:
         """
-        Get tracks that have been confirmed (min_hits reached).
-        
+        Get tracks that have been confirmed (min_track_duration_frames reached).
+
         Returns:
             List of confirmed tracks
         """
         return [
             track for track in self.tracks.values()
-            if track.hits >= self.config.min_hits
+            if track.hits >= self.config.min_track_duration_frames
         ]
     
     def get_completed_events(self) -> List[TrackEvent]:

@@ -14,13 +14,13 @@ import time
 import cv2
 import signal
 from dataclasses import dataclass
-from typing import Optional, Dict, List, Tuple, Callable
+from typing import Optional, Dict, List, Callable
 import numpy as np
 
 from src.config.settings import AppConfig
 from src.config.tracking_config import TrackingConfig
 from src.utils.AppLogging import logger, StructuredLogger
-from src.utils.PipelineMetrics import PipelineMetrics, DetectionMetrics, TrackingMetrics, ClassificationMetrics
+from src.utils.PipelineMetrics import PipelineMetrics
 
 from src.frame_source.FrameSourceFactory import FrameSourceFactory
 from src.frame_source.FrameSource import FrameSource
@@ -160,7 +160,7 @@ class ConveyorCounterApp:
         if self._detector is None:
             self._detector = DetectorFactory.create(
                 config=self.app_config,
-                confidence_threshold=self.tracking_config.detection_confidence
+                confidence_threshold=self.tracking_config.min_detection_confidence
             )
         
         # Classifier
@@ -170,16 +170,16 @@ class ConveyorCounterApp:
         # Classifier service
         quality_config = ROIQualityConfig(
             min_sharpness=self.tracking_config.min_sharpness,
-            min_brightness=self.tracking_config.min_brightness,
-            max_brightness=self.tracking_config.max_brightness
+            min_brightness=self.tracking_config.min_mean_brightness,
+            max_brightness=self.tracking_config.max_mean_brightness
         )
         
         self._classifier_service = ClassifierService(
             classifier=self._classifier,
             quality_config=quality_config,
-            min_evidence_samples=self.tracking_config.min_evidence_samples,
-            min_vote_ratio=self.tracking_config.min_vote_ratio,
-            min_confidence=self.tracking_config.classification_confidence
+            min_evidence_samples=self.tracking_config.min_candidates_for_classification,
+            min_vote_ratio=self.tracking_config.evidence_ratio_threshold,
+            min_confidence=self.tracking_config.high_confidence_threshold
         )
         
         # Tracker
@@ -187,23 +187,22 @@ class ConveyorCounterApp:
         
         # Bidirectional smoother
         self._smoother = BidirectionalSmoother(
-            confidence_threshold=self.tracking_config.smoothing_confidence_threshold,
-            vote_ratio_threshold=self.tracking_config.smoothing_vote_threshold,
-            batch_size=self.tracking_config.smoothing_batch_size,
-            batch_timeout_seconds=self.tracking_config.smoothing_timeout
+            confidence_threshold=self.tracking_config.bidirectional_confidence_threshold,
+            vote_ratio_threshold=self.tracking_config.evidence_ratio_threshold,
+            batch_size=self.tracking_config.bidirectional_buffer_size,
+            batch_timeout_seconds=self.tracking_config.bidirectional_inactivity_timeout_ms / 1000.0
         )
         
         # Recording
         if self.enable_recording:
             self._segment_writer = SegmentWriter(
-                output_dir=self.tracking_config.spool_dir,
-                segment_duration_seconds=self.tracking_config.segment_duration,
-                fps=self.tracking_config.recording_fps
+                spool_dir=self.tracking_config.spool_dir,
+                segment_duration=self.tracking_config.spool_segment_duration,
+                max_segment_duration=self.tracking_config.spool_max_segment_duration
             )
             
             retention_config = RetentionConfig(
-                max_age_hours=self.tracking_config.retention_days * 24,
-                max_storage_bytes=self.tracking_config.max_storage_gb * 1024 * 1024 * 1024
+                max_age_hours=self.tracking_config.spool_retention_seconds / 3600.0
             )
             self._retention_policy = RetentionPolicy(
                 spool_dir=self.tracking_config.spool_dir,
@@ -212,8 +211,8 @@ class ConveyorCounterApp:
             self._retention_policy.start()
         
         # Database
-        self._db = DatabaseManager(self.app_config.database_path)
-        
+        self._db = DatabaseManager(self.app_config.db_path)
+
         logger.info("[ConveyorCounterApp] Components initialized")
     
     def _process_frame(self, frame: np.ndarray) -> np.ndarray:
@@ -256,17 +255,14 @@ class ConveyorCounterApp:
         
         for event in completed_events:
             self._handle_track_completed(event, frame)
-        
-        # 5. Recording
-        if self.enable_recording and self._segment_writer is not None:
-            self._segment_writer.write_frame(frame)
-        
+
+
         # Update metrics
         total_time = (time.perf_counter() - frame_start) * 1000
-        self._metrics.detection.add_sample(detect_time, len(detections))
-        self._metrics.tracking.add_sample(track_time, len(active_tracks))
-        self._metrics.classification.add_sample(classify_time, 0)
-        
+        self._metrics.record_detection(len(detections), detect_time)
+        # Note: tracking and classification metrics are recorded elsewhere
+        # when tracks complete and classifications occur
+
         self.state.active_tracks = len(active_tracks)
         self.state.processing_time_ms = total_time
         
@@ -295,12 +291,12 @@ class ConveyorCounterApp:
         class_name, confidence, vote_ratio, best_roi, candidates = result
         
         # Log structured event
-        self._structured_logger.log_classification_result(
+        self._structured_logger.classification_result(
             track_id=track_id,
-            class_name=class_name,
+            label=class_name,
             confidence=confidence,
-            vote_ratio=vote_ratio,
-            candidates_count=len(candidates)
+            candidates_count=len(candidates),
+            metadata={'vote_ratio': vote_ratio}
         )
         
         # Add to smoother
@@ -352,6 +348,7 @@ class ConveyorCounterApp:
                 )
                 cv2.imwrite(image_path, roi)
             
+            import json
             self._db.log_event(
                 track_id=record.track_id,
                 bag_type=record.class_name,
@@ -359,11 +356,11 @@ class ConveyorCounterApp:
                 phash="",  # Could compute if needed
                 image_path=image_path,
                 candidates_count=1,
-                metadata={
+                metadata=json.dumps({
                     'vote_ratio': record.vote_ratio,
                     'smoothed': record.smoothed,
                     'original_class': record.original_class
-                }
+                })
             )
         
         # Callback
@@ -393,7 +390,7 @@ class ConveyorCounterApp:
         # Draw tracks (green boxes with ID)
         for track in tracks:
             x1, y1, x2, y2 = track.bbox
-            color = (0, 255, 0) if track.hits >= self.tracking_config.min_hits else (0, 255, 255)
+            color = (0, 255, 0) if track.hits >= self.tracking_config.min_track_duration_frames else (0, 255, 255)
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
             
             # Track ID and confidence
@@ -494,9 +491,9 @@ class ConveyorCounterApp:
         if self._segment_writer is not None:
             self._segment_writer.close()
         
-        if self._retention_manager is not None:
-            self._retention_manager.stop()
-        
+        if self._retention_policy is not None:
+            self._retention_policy.stop()
+
         # Release components
         if self._frame_source is not None:
             self._frame_source.cleanup()

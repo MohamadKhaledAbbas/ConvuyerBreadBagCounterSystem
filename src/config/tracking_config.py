@@ -12,7 +12,6 @@ This allows for simpler tracking logic without complex state machines.
 
 import os
 from dataclasses import dataclass
-from typing import Optional
 
 from src.utils.platform import IS_RDK, IS_WINDOWS
 

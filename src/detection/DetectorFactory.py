@@ -36,7 +36,7 @@ class DetectorFactory:
             config = AppConfig()
         
         if model_path is None:
-            model_path = config.detection_model_path
+            model_path = config.detection_model
         
         if IS_RDK:
             logger.info("[DetectorFactory] Creating BPU detector for RDK platform")

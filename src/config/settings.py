@@ -46,18 +46,18 @@ class AppConfig:
     APP_VERSION: str = "2.0.0"
     
     # Video source for testing
-    video_path: str = os.getenv("VIDEO_PATH", "data/test_video.mp4")
+    video_path: str = os.getenv("VIDEO_PATH", "D:\\Recordings\\New_Recordings\\Wheatberry_Green_08_09.mp4")
     
     # Platform-specific model paths
     detection_model: str = os.getenv(
         "DETECTION_MODEL",
-        "data/model/detect_conveyer_640x640_nv12.bin" if IS_RDK
-        else "data/model/detect_conveyer.pt"
+        "data/model/detect_yolo_small_v9_bayese_640x640_nv12.bin" if IS_RDK
+        else "data/model/detect_yolo_small_v9.pt"
     )
     classification_model: str = os.getenv(
         "CLASS_MODEL",
-        "data/model/classify_bread_224x224_nv12.bin" if IS_RDK
-        else "data/model/classify_bread.pt"
+        "data/model/classify_yolo_small_v11_bayese_224x224_nv12.bin" if IS_RDK
+        else "data/model/classify_yolo_small_v11.pt"
     )
     
     # Database path

@@ -36,7 +36,7 @@ class ClassifierFactory:
             config = AppConfig()
         
         if model_path is None:
-            model_path = config.classifier_model_path
+            model_path = config.classification_model
         
         if classes is None:
             classes = config.classifier_classes
