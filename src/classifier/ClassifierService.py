@@ -1,12 +1,18 @@
 """
 Classification service that coordinates detection ROIs with classification
 and accumulates evidence over a track's lifetime.
+
+Production Features:
+- Quality-based ROI filtering
+- Evidence accumulation with voting
+- Reject label filtering
+- Memory-efficient state management
+- Configurable thresholds
 """
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Set
 import numpy as np
-import cv2
 import time
 
 from src.classifier.BaseClassifier import BaseClassifier, ClassificationResult, EvidenceAccumulator
@@ -34,8 +40,10 @@ class TrackClassificationState:
     best_roi: Optional[np.ndarray] = None
     best_roi_quality: float = 0.0
     roi_count: int = 0
+    rejected_count: int = 0  # Track rejected ROIs for debugging
     created_at: float = field(default_factory=time.time)
-    
+    last_updated: float = field(default_factory=time.time)
+
     def add_roi(
         self,
         roi: np.ndarray,
@@ -44,6 +52,7 @@ class TrackClassificationState:
     ):
         """Add a classified ROI to the track's evidence."""
         self.roi_count += 1
+        self.last_updated = time.time()
         self.evidence.add_evidence(classification.class_name, classification.confidence)
         
         # Keep the best quality ROI
@@ -61,15 +70,25 @@ class ClassifierService:
     2. Filter by quality (sharpness, brightness, size)
     3. Classify qualifying ROIs
     4. Accumulate evidence to determine final class
+
+    Production considerations:
+    - Reject labels are filtered from voting
+    - Memory is bounded by max_tracks
+    - Stale tracks are cleaned up automatically
     """
-    
+
+    # Maximum tracked states to prevent memory issues
+    MAX_TRACK_STATES = 100
+    STALE_TRACK_TIMEOUT_SECONDS = 60.0
+
     def __init__(
         self,
         classifier: BaseClassifier,
         quality_config: Optional[ROIQualityConfig] = None,
         min_evidence_samples: int = 3,
         min_vote_ratio: float = 0.5,
-        min_confidence: float = 0.5
+        min_confidence: float = 0.5,
+        reject_labels: Optional[Set[str]] = None
     ):
         """
         Initialize classifier service.
@@ -80,21 +99,60 @@ class ClassifierService:
             min_evidence_samples: Minimum samples before final decision
             min_vote_ratio: Minimum vote ratio for confident decision
             min_confidence: Minimum confidence for final decision
+            reject_labels: Set of labels to filter from voting (e.g., {"Rejected", "Unknown"})
         """
         self.classifier = classifier
         self.quality_config = quality_config or ROIQualityConfig()
         self.min_evidence_samples = min_evidence_samples
         self.min_vote_ratio = min_vote_ratio
         self.min_confidence = min_confidence
-        
+        self.reject_labels = reject_labels or {"Rejected", "Unknown"}
+
         # Track ID -> ClassificationState mapping
         self.track_states: Dict[int, TrackClassificationState] = {}
         
+        # Statistics
+        self._total_classifications = 0
+        self._rejected_rois = 0
+        self._last_cleanup_time = time.time()
+
         logger.info(
             f"[ClassifierService] Initialized with min_evidence={min_evidence_samples}, "
-            f"min_vote_ratio={min_vote_ratio}, min_confidence={min_confidence}"
+            f"min_vote_ratio={min_vote_ratio}, min_confidence={min_confidence}, "
+            f"reject_labels={self.reject_labels}"
         )
-    
+
+    def _maybe_cleanup_stale_tracks(self):
+        """Remove stale tracks to prevent memory leaks."""
+        now = time.time()
+
+        # Only check periodically
+        if now - self._last_cleanup_time < 30.0:
+            return
+
+        self._last_cleanup_time = now
+
+        stale_ids = [
+            track_id for track_id, state in self.track_states.items()
+            if now - state.last_updated > self.STALE_TRACK_TIMEOUT_SECONDS
+        ]
+
+        for track_id in stale_ids:
+            logger.warning(f"[ClassifierService] Removing stale track {track_id}")
+            del self.track_states[track_id]
+
+        # Also limit total tracks
+        if len(self.track_states) > self.MAX_TRACK_STATES:
+            # Remove oldest tracks
+            sorted_tracks = sorted(
+                self.track_states.items(),
+                key=lambda x: x[1].created_at
+            )
+            to_remove = len(self.track_states) - self.MAX_TRACK_STATES
+            for track_id, _ in sorted_tracks[:to_remove]:
+                logger.warning(f"[ClassifierService] Removing old track {track_id} due to memory limit")
+                del self.track_states[track_id]
+
     def _compute_roi_quality(self, roi: np.ndarray) -> Tuple[float, bool, str]:
         """
         Compute quality score for an ROI.
@@ -155,6 +213,9 @@ class ClassifierService:
         Returns:
             ClassificationResult if ROI was classified, None if rejected
         """
+        # Periodic cleanup
+        self._maybe_cleanup_stale_tracks()
+
         # Get or create track state
         if track_id not in self.track_states:
             self.track_states[track_id] = TrackClassificationState(track_id=track_id)
@@ -180,13 +241,33 @@ class ClassifierService:
         quality, is_valid, reason = self._compute_roi_quality(roi)
         
         if not is_valid:
+            state.rejected_count += 1
+            self._rejected_rois += 1
             logger.debug(f"[ClassifierService] Track {track_id} ROI rejected: {reason}")
             return None
         
         # Classify the ROI
-        classification = self.classifier.classify(roi)
-        
-        # Add to evidence
+        try:
+            classification = self.classifier.classify(roi)
+        except Exception as e:
+            logger.error(f"[ClassifierService] Classification error for track {track_id}: {e}")
+            return None
+
+        self._total_classifications += 1
+
+        # Skip reject labels for evidence accumulation (but still track them)
+        if classification.class_name in self.reject_labels:
+            logger.debug(
+                f"[ClassifierService] Track {track_id} classified as reject label: "
+                f"{classification.class_name}"
+            )
+            # Still keep best ROI even for rejected classifications
+            if quality > state.best_roi_quality:
+                state.best_roi = roi.copy()
+                state.best_roi_quality = quality
+            return classification
+
+        # Add to evidence (only non-reject labels)
         state.add_roi(roi, classification, quality)
         
         logger.debug(
@@ -277,8 +358,26 @@ class ClassifierService:
         """Get current state for a track."""
         return self.track_states.get(track_id)
     
+    def get_statistics(self) -> Dict[str, any]:
+        """Get service statistics."""
+        return {
+            'total_classifications': self._total_classifications,
+            'rejected_rois': self._rejected_rois,
+            'active_tracks': len(self.track_states),
+            'reject_rate': (
+                self._rejected_rois / (self._total_classifications + self._rejected_rois)
+                if (self._total_classifications + self._rejected_rois) > 0 else 0.0
+            )
+        }
+
     def cleanup(self):
         """Clean up resources."""
+        stats = self.get_statistics()
+        logger.info(
+            f"[ClassifierService] Cleanup - Total classifications: {stats['total_classifications']}, "
+            f"Rejected ROIs: {stats['rejected_rois']}, "
+            f"Reject rate: {stats['reject_rate']:.2%}"
+        )
         self.track_states.clear()
         self.classifier.cleanup()
         logger.info("[ClassifierService] Cleanup complete")

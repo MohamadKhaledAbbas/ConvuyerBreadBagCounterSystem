@@ -1,6 +1,6 @@
 # Conveyor Bread Bag Counter System v2
 
-A simplified bread bag counting system optimized for conveyor belt environments.
+A simplified, production-ready bread bag counting system optimized for conveyor belt environments.
 
 ## Overview
 
@@ -14,11 +14,12 @@ This is **v2** of the BreadBagCounterSystem, redesigned for simpler conveyor bel
 
 | Feature | v1 (Original) | v2 (Conveyor) |
 |---------|---------------|---------------|
-| **Tracking** | EventCentricTracker with ByteTrack | Simple IoU-based linear tracker |
-| **State Machine** | open/closing/closed states | None (single bread-bag class) |
-| **Association** | Complex centroid + appearance | IoU with velocity prediction |
+| **Tracking** | EventCentricTracker (~3300 lines) | ConveyorTracker (~500 lines) |
+| **State Machine** | open/closing/closed states | None (track → classify → count) |
+| **Association** | Parallel IoU + centroid | IoU with velocity prediction |
 | **Classification** | During track lifetime | After track completes |
 | **Movement** | Chaotic (table/worker) | Linear (conveyor belt) |
+| **Complexity** | ~2300 lines (BagCounterApp) | ~600 lines (ConveyorCounterApp) |
 
 ### Preserved from v1
 
@@ -28,6 +29,7 @@ This is **v2** of the BreadBagCounterSystem, redesigned for simpler conveyor bel
 - ✅ Evidence accumulation for classification
 - ✅ BPU acceleration on RDK hardware
 - ✅ SQLite event logging
+- ✅ Reject label filtering
 
 ## Architecture
 
@@ -66,7 +68,7 @@ This is **v2** of the BreadBagCounterSystem, redesigned for simpler conveyor bel
 
 ```bash
 # Clone repository
-git clone https://github.com/your-org/ConvuyerBreadBagCounterSystem.git
+git clone <your-repo-url>
 cd ConvuyerBreadBagCounterSystem
 
 # Create virtual environment
@@ -80,14 +82,14 @@ pip install -r requirements.txt
 
 ### Model Files
 
-Place your model files in the `models/` directory:
+Place your model files in the `data/model/` directory:
 
 ```
-models/
-├── detector.pt          # Ultralytics YOLO detection model
-├── classifier.pt        # Ultralytics classification model
-├── detector.bin         # BPU-optimized detection (RDK)
-└── classifier.bin       # BPU-optimized classifier (RDK)
+data/model/
+├── detect_yolo_small_v9.pt                    # Ultralytics detection (Windows)
+├── classify_yolo_small_v11.pt                 # Ultralytics classifier (Windows)
+├── detect_yolo_small_v9_bayese_640x640_nv12.bin   # BPU detection (RDK)
+└── classify_yolo_small_v11_bayese_224x224_nv12.bin # BPU classifier (RDK)
 ```
 
 ## Usage
@@ -256,6 +258,7 @@ For low-confidence classifications, batch-level smoothing corrects outliers:
 - Accumulate classifications into batches
 - Find dominant class in batch
 - Low-confidence outliers matching only once → override to dominant class
+
 
 ## Database Schema
 

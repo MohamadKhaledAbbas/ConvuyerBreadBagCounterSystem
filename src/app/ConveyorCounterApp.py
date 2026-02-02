@@ -8,14 +8,22 @@ This is the central orchestrator that:
 4. Classifies completed tracks
 5. Applies bidirectional smoothing
 6. Records video and logs events
+
+Production Notes:
+- Graceful shutdown handling
+- Robust error recovery
+- Thread-safe state management
+- Memory-efficient frame processing
 """
 
 import time
 import cv2
 import signal
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 from typing import Optional, Dict, List, Callable
 import numpy as np
+import threading
 
 from src.config.settings import AppConfig
 from src.config.tracking_config import TrackingConfig
@@ -42,16 +50,33 @@ from src.spool.retention import RetentionPolicy, RetentionConfig
 
 @dataclass
 class CounterState:
-    """Real-time state of the counter."""
+    """Real-time state of the counter (thread-safe)."""
     total_counted: int = 0
-    counts_by_class: Dict[str, int] = None
+    counts_by_class: Dict[str, int] = field(default_factory=dict)
     active_tracks: int = 0
     fps: float = 0.0
     processing_time_ms: float = 0.0
-    
+    last_count_time: float = 0.0
+
     def __post_init__(self):
         if self.counts_by_class is None:
             self.counts_by_class = {}
+        self._lock = threading.Lock()
+
+    def increment_count(self, class_name: str) -> int:
+        """Thread-safe count increment."""
+        with self._lock:
+            self.total_counted += 1
+            if class_name not in self.counts_by_class:
+                self.counts_by_class[class_name] = 0
+            self.counts_by_class[class_name] += 1
+            self.last_count_time = time.time()
+            return self.total_counted
+
+    def get_counts_snapshot(self) -> Dict[str, int]:
+        """Get thread-safe copy of counts."""
+        with self._lock:
+            return self.counts_by_class.copy()
 
 
 class ConveyorCounterApp:
@@ -327,54 +352,55 @@ class ConveyorCounterApp:
     
     def _record_count(self, record: ClassificationRecord, roi: Optional[np.ndarray]):
         """Record a counted item."""
-        # Update counts
-        self.state.total_counted += 1
-        
-        if record.class_name not in self.state.counts_by_class:
-            self.state.counts_by_class[record.class_name] = 0
-        self.state.counts_by_class[record.class_name] += 1
-        
+        # Update counts (thread-safe)
+        new_total = self.state.increment_count(record.class_name)
+
         # Log to database
         if self._db is not None:
-            # Save ROI image if available
-            image_path = None
-            if roi is not None and self.enable_recording:
-                import os
-                roi_dir = os.path.join(self.tracking_config.spool_dir, "rois")
-                os.makedirs(roi_dir, exist_ok=True)
-                image_path = os.path.join(
-                    roi_dir,
-                    f"track_{record.track_id}_{int(time.time() * 1000)}.jpg"
+            try:
+                # Save ROI image if available
+                image_path = None
+                if roi is not None and self.enable_recording:
+                    roi_dir = os.path.join(self.tracking_config.spool_dir, "rois")
+                    os.makedirs(roi_dir, exist_ok=True)
+                    image_path = os.path.join(
+                        roi_dir,
+                        f"track_{record.track_id}_{int(time.time() * 1000)}.jpg"
+                    )
+                    cv2.imwrite(image_path, roi)
+
+                import json
+                self._db.log_event(
+                    track_id=record.track_id,
+                    bag_type=record.class_name,
+                    confidence=record.confidence,
+                    phash="",  # Could compute if needed
+                    image_path=image_path,
+                    candidates_count=1,
+                    metadata=json.dumps({
+                        'vote_ratio': record.vote_ratio,
+                        'smoothed': record.smoothed,
+                        'original_class': record.original_class
+                    })
                 )
-                cv2.imwrite(image_path, roi)
-            
-            import json
-            self._db.log_event(
-                track_id=record.track_id,
-                bag_type=record.class_name,
-                confidence=record.confidence,
-                phash="",  # Could compute if needed
-                image_path=image_path,
-                candidates_count=1,
-                metadata=json.dumps({
-                    'vote_ratio': record.vote_ratio,
-                    'smoothed': record.smoothed,
-                    'original_class': record.original_class
-                })
-            )
-        
+            except Exception as e:
+                logger.error(f"[ConveyorCounterApp] Failed to log event to database: {e}")
+
         # Callback
         if self._on_count_callback is not None:
-            self._on_count_callback(record)
-        
+            try:
+                self._on_count_callback(record)
+            except Exception as e:
+                logger.error(f"[ConveyorCounterApp] Count callback error: {e}")
+
         # Log
         smoothed_str = f" (smoothed from {record.original_class})" if record.smoothed else ""
         logger.info(
             f"[ConveyorCounterApp] COUNT: {record.class_name} "
             f"(conf={record.confidence:.2f}, track={record.track_id}){smoothed_str}"
         )
-        logger.info(f"[ConveyorCounterApp] Total: {self.state.total_counted}, By class: {self.state.counts_by_class}")
-    
+        logger.info(f"[ConveyorCounterApp] Total: {new_total}, By class: {self.state.get_counts_snapshot()}")
+
     def _draw_annotations(
         self,
         frame: np.ndarray,

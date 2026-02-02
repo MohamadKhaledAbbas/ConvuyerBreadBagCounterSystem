@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>لوحة تحليلات البيانات</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="/static/css/analytics.css?v=5" rel="stylesheet">
+</head>
+
+<body>
+
+<main>
+    <header class="stats-header">
+        <h1 class="stats-title">لوحة رؤى البيانات</h1>
+        <h3 class="stats-request-time">{{ meta.request_time }} آخر تحديث</h3>
+    </header>
+
+    {% if meta and meta.start and meta.end %}
+    <section class="time-stage-container">
+        <div class="time-stage">
+            <div class="time-label">
+                <i class="fa-regular fa-calendar-check"></i> نطاق التحليل
+            </div>
+
+            <div class="time-display">
+                <span>{{ meta.start.strftime('%Y-%m-%d %H:%M') }}</span>
+                <span class="time-divider">&mdash;</span>
+                <span>{{ meta.end.strftime('%Y-%m-%d %H:%M') }}</span>
+            </div>
+
+            <a href="/analytics" class="edit-time-btn" title="تعديل الفترة">
+                <i class="fa-solid fa-pen-to-square"></i>
+            </a>
+        </div>
+    </section>
+    {% endif %}
+
+    <section class="hero-section">
+        <div class="hero-card">
+            <div class="hero-metric primary">
+                <div class="hero-label">عدد الربطات الإجمالي</div>
+                <div class="hero-value">{{ total.count or 0 }}</div>
+                <div class="hero-breakdown">
+                    <span class="tier-badge high-tier">دقة عالية: {{ total.high_count or 0 }}</span>
+                    <span class="tier-badge low-tier">دقة منخفضة: {{ total.low_count or 0 }}</span>
+                </div>
+            </div>
+
+            <div class="hero-metric">
+                <div class="hero-label">الوزن الكلي</div>
+                <div class="hero-value">
+                    {{ total.weight or 0 }}<span style="font-size: 1.5rem; opacity: 0.7; margin-left: 5px;">كغ</span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+
+    <section class="grid-container">
+        {% for c in classifications %}
+            <div class="stat-card" data-class-id="{{ c.id }}">
+                <div class="card-header stacked">
+                    <div class="card-title">{{ c.arabic_name }}</div>
+                    <div class="thumb-container">
+                        <img src="{{ c.thumb }}" alt="{{ c.name }}" onerror="this.src='https://placehold.co/100x100/1e293b/FFF?text={{c.name[:1]}}'">
+                    </div>
+                </div>
+
+                <div class="card-metric-large">{{ c.count }}</div>
+                
+                <div class="confidence-breakdown">
+                    <div class="conf-item high">
+                        <span class="conf-label">دقة عالية</span>
+                        <span class="conf-value">{{ c.high_count or 0 }}</span>
+                    </div>
+                    <div class="conf-item low">
+                        <span class="conf-label">دقة منخفضة</span>
+                        <span class="conf-value">{{ c.low_count or 0 }}</span>
+                    </div>
+                </div>
+
+                <div class="card-footer">
+                    <span>الوزن</span>
+                    <span class="weight-tag">{{ (c.weight * c.count) or 0 }} كغ</span>
+                </div>
+
+                {% if timeline and timeline.per_class_windows and c.id in timeline.per_class_windows %}
+                    {% set class_timeline = timeline.per_class_windows[c.id] %}
+                    {% set class_runs = [] %}
+                    {% if timeline.runs %}
+                        {% set class_runs = timeline.runs | selectattr('bag_type_id', 'equalto', c.id) | list %}
+                    {% endif %}
+                    <button class="expand-btn" onclick="toggleExpansion({{ c.id }})">
+                        <i class="fa-solid fa-chevron-down"></i> عرض التفاصيل
+                    </button>
+
+                    <div class="card-expansion" id="expansion-{{ c.id }}">
+                        <div class="expansion-summary">
+                            <div class="summary-item">
+                                <span class="summary-label">البداية</span>
+                                <span class="summary-value">{{ class_timeline.first_seen[11:16] }}</span>
+                            </div>
+                            <div class="summary-item">
+                                <span class="summary-label">النهاية</span>
+                                <span class="summary-value">{{ class_timeline.last_seen[11:16] }}</span>
+                            </div>
+                            <div class="summary-item">
+                                <span class="summary-label">الربطات</span>
+                                <span class="summary-value">{{ class_timeline.event_count }}</span>
+                            </div>
+                        </div>
+
+                        {% if class_runs and class_runs|length > 0 %}
+                        <div class="runs-list">
+                            <div class="runs-title">
+                                <i class="fa-solid fa-layer-group"></i> التسلسلات المتتابعة
+                            </div>
+                            {% for run in class_runs %}
+                                <div class="run-row">
+                                    <span class="run-time">{{ run.start[11:16] }} &rarr; {{ run.end[11:16] }}</span>
+                                    <span class="run-count"> {{ run.count }} <br>  ربطة</span>
+                                    <span class="run-weight">{{ (run.weight * run.count) | round(2) }} كغ</span>
+                                </div>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                    </div>
+                {% endif %}
+            </div>
+        {% endfor %}
+    </section>
+
+
+    <!-- Global Timeline Section (consecutive runs) -->
+    {% if timeline and timeline.runs %}
+    <section class="timeline-section">
+        <div class="timeline-header">
+            <h2 class="timeline-title">
+                <i class="fa-solid fa-clock-rotate-left"></i> الخط الزمني المتتابع
+            </h2>
+        </div>
+
+        <div class="timeline-container">
+            {% for run in timeline.runs %}
+                <div class="timeline-group-card">
+                    <div class="group-header">
+                        <div class="group-thumb">
+                            <img src="{{ run.thumb }}" alt="{{ run.class_name }}" onerror="this.src='https://placehold.co/60x60/1e293b/FFF?text={{ run.class_name[:1] }}'">
+                        </div>
+                        <div class="group-info">
+                            <div class="group-name">{{ run.arabic_name or run.class_name }}</div>
+                            <div class="group-meta">
+                                <span class="group-time-window">
+                                    <i class="fa-regular fa-clock"></i>
+                                    {{ run.end[11:16] }} &rarr; {{ run.start[11:16] }}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="group-summary">
+                        <div class="summary-stat">
+                            <span class="stat-label">الربطات</span>
+                            <span class="stat-value">{{ run.count }}</span>
+                        </div>
+                        <div class="summary-stat">
+                            <span class="stat-label">الوزن الكلي</span>
+                            <span class="stat-value weight">{{ (run.weight * run.count) | round(2) }} كغ</span>
+                        </div>
+                    </div>
+                </div>
+            {% endfor %}
+        </div>
+    </section>
+    {% elif timeline %}
+    <section class="timeline-section">
+        <div class="empty-timeline">
+            <i class="fa-solid fa-inbox"></i>
+            <p>لا توجد ربطات في هذه الفترة</p>
+        </div>
+    </section>
+    {% endif %}
+
+</main>
+
+<script>
+// Toggle card expansion
+function toggleExpansion(classId) {
+    const expansion = document.getElementById('expansion-' + classId);
+    const btn = expansion.previousElementSibling;
+    const icon = btn.querySelector('i');
+
+    if (expansion.classList.contains('expanded')) {
+        expansion.classList.remove('expanded');
+        icon.classList.remove('fa-chevron-up');
+        icon.classList.add('fa-chevron-down');
+        btn.innerHTML = '<i class="fa-solid fa-chevron-down"></i> عرض التفاصيل';
+    } else {
+        expansion.classList.add('expanded');
+        icon.classList.remove('fa-chevron-down');
+        icon.classList.add('fa-chevron-up');
+        btn.innerHTML = '<i class="fa-solid fa-chevron-up"></i> إخفاء التفاصيل';
+    }
+}
+</script>
+
+</body>
+</html>

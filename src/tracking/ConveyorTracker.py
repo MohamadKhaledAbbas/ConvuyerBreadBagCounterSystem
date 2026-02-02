@@ -10,10 +10,17 @@ Conveyor assumptions:
 2. Objects appear on one side, move across, disappear on the other side
 3. No complex worker interactions or occlusions
 4. No need for open/closing/closed state detection
+
+Production Features:
+- Velocity-based prediction for better matching
+- Configurable exit zones
+- Minimum track duration filtering
+- Memory-efficient history management
 """
 
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Set
+from enum import Enum
 import time
 import numpy as np
 
@@ -31,6 +38,15 @@ except ImportError:
     HAS_SCIPY = False
 
 
+class ExitDirection(Enum):
+    """Direction objects exit the frame."""
+    ANY = "any"
+    LEFT = "left"
+    RIGHT = "right"
+    TOP = "top"
+    BOTTOM = "bottom"
+
+
 @dataclass
 class TrackedObject:
     """
@@ -44,7 +60,7 @@ class TrackedObject:
     confidence: float
     
     # Tracking state
-    age: int = 0  # Frames since creation
+    age: int = 0  # Total frames since creation
     hits: int = 1  # Consecutive detections
     time_since_update: int = 0  # Frames since last detection
     
@@ -139,6 +155,22 @@ class TrackEvent:
     total_frames: int
     created_at: float
     ended_at: float
+    avg_confidence: float = 0.0
+    exit_direction: str = "unknown"
+
+    @property
+    def duration_seconds(self) -> float:
+        """Track duration in seconds."""
+        return self.ended_at - self.created_at
+
+    @property
+    def distance_traveled(self) -> float:
+        """Euclidean distance traveled by track."""
+        if len(self.position_history) < 2:
+            return 0.0
+        start = self.position_history[0]
+        end = self.position_history[-1]
+        return np.sqrt((end[0] - start[0])**2 + (end[1] - start[1])**2)
 
 
 class ConveyorTracker:
@@ -265,6 +297,33 @@ class ConveyorTracker:
         
         return (matches, unmatched_tracks, unmatched_dets)
     
+    def _get_exit_direction(self, track: TrackedObject) -> Optional[str]:
+        """
+        Determine which direction track is exiting.
+
+        Args:
+            track: Tracked object
+
+        Returns:
+            Exit direction string or None if not exiting
+        """
+        if self.frame_width is None or self.frame_height is None:
+            return None
+
+        cx, cy = track.center
+        margin = getattr(self.config, 'exit_margin_pixels', 20)
+
+        if cx < margin:
+            return "left"
+        if cx > self.frame_width - margin:
+            return "right"
+        if cy < margin:
+            return "top"
+        if cy > self.frame_height - margin:
+            return "bottom"
+
+        return None
+
     def _is_exiting_frame(self, track: TrackedObject) -> bool:
         """
         Check if track is exiting the frame.
@@ -275,19 +334,8 @@ class ConveyorTracker:
         Returns:
             True if track center is near frame edge
         """
-        if self.frame_width is None or self.frame_height is None:
-            return False
-        
-        cx, cy = track.center
-        margin = 20  # Pixel margin from edge to consider as exiting
+        return self._get_exit_direction(track) is not None
 
-        return (
-            cx < margin or
-            cx > self.frame_width - margin or
-            cy < margin or
-            cy > self.frame_height - margin
-        )
-    
     def update(
         self,
         detections: List[Detection],
@@ -390,6 +438,12 @@ class ConveyorTracker:
                 event_type = 'track_completed'
             
             if should_complete:
+                # Calculate average confidence
+                avg_conf = track.confidence  # Use last confidence for now
+
+                # Get exit direction
+                exit_dir = self._get_exit_direction(track) or "timeout"
+
                 # Emit completion event
                 event = TrackEvent(
                     track_id=track_id,
@@ -398,14 +452,17 @@ class ConveyorTracker:
                     position_history=track.position_history.copy(),
                     total_frames=track.age + track.hits,
                     created_at=track.created_at,
-                    ended_at=time.time()
+                    ended_at=time.time(),
+                    avg_confidence=avg_conf,
+                    exit_direction=exit_dir
                 )
                 self.completed_tracks.append(event)
                 tracks_to_remove.append(track_id)
                 
                 logger.info(
                     f"[ConveyorTracker] Track {track_id} {event_type}: "
-                    f"{track.hits} hits, {track.time_since_update} missed"
+                    f"{track.hits} hits, {track.time_since_update} missed, "
+                    f"exit={exit_dir}, duration={event.duration_seconds:.2f}s"
                 )
         
         # Remove completed tracks

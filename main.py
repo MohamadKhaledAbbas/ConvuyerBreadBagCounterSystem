@@ -153,8 +153,8 @@ def main():
     if args.classifier_model:
         app_config.classification_model = args.classifier_model
     
-    tracking_config.detection_confidence = args.detection_conf
-    tracking_config.classification_confidence = args.classification_conf
+    tracking_config.min_detection_confidence = args.detection_conf
+    tracking_config.high_confidence_threshold = args.classification_conf
     tracking_config.spool_dir = args.output_dir
     
     # Log configuration
