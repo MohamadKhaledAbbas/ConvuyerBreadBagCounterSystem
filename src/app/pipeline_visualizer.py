@@ -34,7 +34,7 @@ class PipelineVisualizer:
         self,
         tracking_config: TrackingConfig,
         window_name: str = "Conveyor Counter",
-        display_size: tuple = (960, 540)
+        display_size: tuple = (1280, 720)
     ):
         """
         Initialize visualizer.

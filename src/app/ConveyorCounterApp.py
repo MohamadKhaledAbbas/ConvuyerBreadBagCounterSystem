@@ -232,7 +232,7 @@ class ConveyorCounterApp:
             self._pipeline_visualizer = PipelineVisualizer(
                 tracking_config=self.tracking_config,
                 window_name="Conveyor Counter",
-                display_size=(960, 540)
+                display_size=(1280, 720)
             )
 
         # Bidirectional smoother
