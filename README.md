@@ -97,7 +97,72 @@ data/model/
 ### Basic Usage
 
 ```bash
-# Process video file
+# Run the counter application (config read from database)
+python main.py
+```
+
+### Configuration
+
+All runtime configuration is stored in the database (`data/db/bag_events.db`) in the `config` table.
+
+#### View Current Configuration
+
+```bash
+sqlite3 data/db/bag_events.db "SELECT * FROM config ORDER BY key;"
+```
+
+#### Enable Display
+
+```bash
+sqlite3 data/db/bag_events.db "UPDATE config SET value='1' WHERE key='enable_display';"
+```
+
+#### Enable RTSP Recording
+
+```bash
+# Enable recording
+sqlite3 data/db/bag_events.db "UPDATE config SET value='1' WHERE key='enable_recording';"
+
+# Configure RTSP camera
+sqlite3 data/db/bag_events.db "UPDATE config SET value='192.168.1.100' WHERE key='rtsp_host';"
+sqlite3 data/db/bag_events.db "UPDATE config SET value='admin' WHERE key='rtsp_username';"
+sqlite3 data/db/bag_events.db "UPDATE config SET value='password' WHERE key='rtsp_password';"
+
+# Run recorder (separate process)
+python rtsp_h264_recorder.py
+```
+
+#### Configuration Keys
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `enable_display` | `0` | Enable/disable OpenCV display window (1=on, 0=off) |
+| `enable_recording` | `0` | Enable/disable RTSP recording (1=on, 0=off) |
+| `rtsp_host` | `192.168.2.108` | RTSP camera IP address |
+| `rtsp_port` | `554` | RTSP port |
+| `rtsp_username` | `admin` | RTSP username |
+| `rtsp_password` | `a1234567` | RTSP password |
+| `show_ui_screen` | `0` | Legacy UI flag |
+| `is_development` | `0` | Development mode flag |
+| `is_profiler_enabled` | `0` | Enable profiling |
+
+### RTSP Recording
+
+Recording is handled by a separate process (`rtsp_h264_recorder.py`) that:
+- Reads configuration from database
+- Records H.264 stream directly (no transcoding)
+- Supports automatic file rotation
+- Supports retention policies
+
+```bash
+# Run with database config
+python rtsp_h264_recorder.py
+
+# Or override with command line
+python rtsp_h264_recorder.py --url rtsp://192.168.1.100:554/stream
+```
+
+### Process video file
 python main.py --source video.mp4
 
 # Use webcam

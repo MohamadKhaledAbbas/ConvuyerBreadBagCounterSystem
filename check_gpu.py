@@ -8,7 +8,6 @@ Checks:
 4. Recommendations for optimization
 """
 
-import sys
 import time
 import numpy as np
 
@@ -37,7 +36,7 @@ def check_cuda():
             x = torch.randn(1000, 1000, device=device)
             start = time.perf_counter()
             for _ in range(100):
-                y = torch.matmul(x, x)
+                _ = torch.matmul(x, x)
             torch.cuda.synchronize()
             gpu_time = (time.perf_counter() - start) * 1000
             print(f"  GPU computation time: {gpu_time:.1f}ms")
@@ -47,7 +46,7 @@ def check_cuda():
             x_cpu = torch.randn(1000, 1000)
             start = time.perf_counter()
             for _ in range(100):
-                y_cpu = torch.matmul(x_cpu, x_cpu)
+                _ = torch.matmul(x_cpu, x_cpu)
             cpu_time = (time.perf_counter() - start) * 1000
             print(f"  CPU computation time: {cpu_time:.1f}ms")
             print(f"  GPU speedup: {cpu_time / gpu_time:.1f}x")

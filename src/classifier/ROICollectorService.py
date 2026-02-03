@@ -217,7 +217,7 @@ class ROICollectorService(IROICollector):
         if collection.best_roi is None:
             return None
 
-        return (collection.best_roi, collection.best_roi_quality)
+        return collection.best_roi, collection.best_roi_quality
 
     def get_all_rois(self, track_id: int) -> Optional[List[Tuple[np.ndarray, float]]]:
         """
@@ -272,19 +272,19 @@ class ROICollectorService(IROICollector):
         """
         # Check size
         if min(roi.shape[:2]) < self.quality_config.min_size:
-            return (0.0, False, f"too_small ({roi.shape})")
+            return 0.0, False, f"too_small ({roi.shape})"
 
         # Compute sharpness
         sharpness = compute_sharpness(roi)
         if sharpness < self.quality_config.min_sharpness:
-            return (sharpness, False, f"blurry (sharpness={sharpness:.1f})")
+            return sharpness, False, f"blurry (sharpness={sharpness:.1f})"
 
         # Compute brightness
         brightness = compute_brightness(roi)
         if brightness < self.quality_config.min_brightness:
-            return (sharpness, False, f"too_dark (brightness={brightness:.1f})")
+            return sharpness, False, f"too_dark (brightness={brightness:.1f})"
         if brightness > self.quality_config.max_brightness:
-            return (sharpness, False, f"too_bright (brightness={brightness:.1f})")
+            return sharpness, False, f"too_bright (brightness={brightness:.1f})"
 
         # Quality score (using sharpness as primary metric)
         quality = sharpness

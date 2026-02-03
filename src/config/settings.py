@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 import hashlib
 
-from src.utils.platform import IS_RDK, IS_WINDOWS
+from src.utils.platform import IS_RDK
 
 
 def _parse_bool_env(key: str, default: bool) -> bool:

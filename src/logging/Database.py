@@ -114,7 +114,9 @@ class DatabaseManager:
             rtsp_password,
             rtsp_host,
             rtsp_port,
-            is_profiler_enabled
+            is_profiler_enabled,
+            enable_display_key,
+            enable_recording_key
         )
         
         # Default values for config keys
@@ -125,7 +127,9 @@ class DatabaseManager:
             rtsp_password: 'a1234567',
             rtsp_host: '192.168.2.108',
             rtsp_port: '554',
-            is_profiler_enabled: '0'
+            is_profiler_enabled: '0',
+            enable_display_key: '0',
+            enable_recording_key: '0'
         }
         
         with self._cursor() as cursor:

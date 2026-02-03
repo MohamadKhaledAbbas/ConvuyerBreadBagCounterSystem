@@ -4,26 +4,12 @@ Conveyor Bread Bag Counter System - v2
 Main entry point for the application.
 
 Usage:
-    python main.py [options]
+    python main.py
 
-Examples:
-    # Run with video file
-    python main.py --source video.mp4
-
-    # Run with webcam
-    python main.py --source 0
-
-    # Run with RTSP stream
-    python main.py --source "rtsp://user:pass@ip:port/stream"
-
-    # Testing mode (process all frames, no drops)
-    python main.py --source video.mp4 --testing
-
-    # Headless mode (no display)
-    python main.py --source video.mp4 --no-display
+Configuration is read from database (data/db/bag_events.db).
+To configure, update the config table in the database.
 """
 
-import argparse
 import sys
 import os
 
@@ -36,103 +22,8 @@ from src.app.ConveyorCounterApp import ConveyorCounterApp
 from src.utils.AppLogging import logger
 
 
-def parse_args():
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(
-        description="Conveyor Bread Bag Counter System v2",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python main.py --source video.mp4
-  python main.py --source 0 --no-recording
-  python main.py --source rtsp://ip:port/stream --headless
-        """
-    )
-    
-    # Input source
-    parser.add_argument(
-        '--source', '-s',
-        default='0',
-        help='Video source: file path, camera index (0), or RTSP URL'
-    )
-    
-    # Mode options
-    parser.add_argument(
-        '--testing', '-t',
-        action='store_true',
-        help='Testing mode: process all frames (no frame drops)'
-    )
-    
-    parser.add_argument(
-        '--no-display',
-        action='store_true',
-        help='Disable visualization window (headless mode)'
-    )
-    
-    parser.add_argument(
-        '--no-recording',
-        action='store_true',
-        help='Disable video spool recording'
-    )
-    
-    # Model paths (override config)
-    parser.add_argument(
-        '--detector-model',
-        type=str,
-        help='Path to detection model file'
-    )
-    
-    parser.add_argument(
-        '--classifier-model',
-        type=str,
-        help='Path to classification model file'
-    )
-    
-    # Thresholds
-    parser.add_argument(
-        '--detection-conf',
-        type=float,
-        default=0.5,
-        help='Detection confidence threshold (default: 0.5)'
-    )
-    
-    parser.add_argument(
-        '--classification-conf',
-        type=float,
-        default=0.5,
-        help='Classification confidence threshold (default: 0.5)'
-    )
-    
-    # Output
-    parser.add_argument(
-        '--output-dir',
-        type=str,
-        default='./output',
-        help='Output directory for recordings and logs'
-    )
-    
-    parser.add_argument(
-        '--database',
-        type=str,
-        default='./bread_counter.db',
-        help='Path to SQLite database file'
-    )
-    
-    # Limits
-    parser.add_argument(
-        '--max-frames',
-        type=int,
-        default=None,
-        help='Maximum frames to process (for testing)'
-    )
-    
-    return parser.parse_args()
-
-
 def main():
     """Main entry point."""
-    args = parse_args()
-    
     logger.info("=" * 60)
     logger.info("Conveyor Bread Bag Counter System v2")
     logger.info("=" * 60)
@@ -141,43 +32,21 @@ def main():
     app_config = AppConfig()
     tracking_config = TrackingConfig()
     
-    # Apply command line overrides
-    if args.source.isdigit():
-        video_source = int(args.source)
-    else:
-        video_source = args.source
-    
-    if args.detector_model:
-        app_config.detection_model = args.detector_model
-    
-    if args.classifier_model:
-        app_config.classification_model = args.classifier_model
-    
-    tracking_config.min_detection_confidence = args.detection_conf
-    tracking_config.high_confidence_threshold = args.classification_conf
-    tracking_config.spool_dir = args.output_dir
-    
     # Log configuration
-    logger.info(f"Source: {video_source}")
-    logger.info(f"Testing mode: {args.testing}")
-    logger.info(f"Display: {not args.no_display}")
-    logger.info(f"Recording: {not args.no_recording}")
     logger.info(f"Detection model: {app_config.detection_model}")
     logger.info(f"Classifier model: {app_config.classification_model}")
     logger.info(f"Output dir: {tracking_config.spool_dir}")
-    
-    # Create and run application
+    logger.info(f"Database: {app_config.db_path}")
+    logger.info("Display and other settings: Read from database config")
+
+    # Create and run application (config read from DB)
     app = ConveyorCounterApp(
         app_config=app_config,
-        tracking_config=tracking_config,
-        video_source=video_source,
-        enable_display=not args.no_display,
-        enable_recording=not args.no_recording,
-        testing_mode=args.testing
+        tracking_config=tracking_config
     )
     
     try:
-        app.run(max_frames=args.max_frames)
+        app.run()
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
     except Exception as e:

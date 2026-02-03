@@ -10,6 +10,8 @@ rtsp_password = "rtsp_password"
 rtsp_host = "rtsp_host"
 rtsp_port = "rtsp_port"
 is_profiler_enabled = "is_profiler_enabled"
+enable_display_key = "enable_display"
+enable_recording_key = "enable_recording"
 
 CONFIG_KEYS = [
     show_ui_screen_key,
@@ -19,4 +21,6 @@ CONFIG_KEYS = [
     rtsp_host,
     rtsp_port,
     is_profiler_enabled,
+    enable_display_key,
+    enable_recording_key,
 ]

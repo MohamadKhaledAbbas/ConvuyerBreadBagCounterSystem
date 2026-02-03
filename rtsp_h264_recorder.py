@@ -22,21 +22,20 @@ This recorder:
 
 Usage:
 ======
-    # Record to MP4 file
+    # Run with database config
+    python rtsp_h264_recorder.py
+
+    # Or override with command line
     python rtsp_h264_recorder.py --url rtsp://camera_ip:554/stream --output video.mp4
 
-    # Record with rotation every hour
-    python rtsp_h264_recorder.py \\
-        --url rtsp://camera_ip:554/stream \\
-        --output-dir /path/to/recordings \\
-        --rotate-hours 1
-
-    # Record with retention
-    python rtsp_h264_recorder.py \\
-        --url rtsp://camera_ip:554/stream \\
-        --output-dir /path/to/recordings \\
-        --rotate-hours 1 \\
-        --retention-hours 48
+Configuration:
+==============
+Reads from database config table:
+- enable_recording: '1' to enable, '0' to disable
+- rtsp_host: Camera IP address
+- rtsp_port: RTSP port (default 554)
+- rtsp_username: RTSP username
+- rtsp_password: RTSP password
 
 Why FFmpeg:
 ===========
@@ -57,7 +56,12 @@ import threading
 from pathlib import Path
 from datetime import datetime
 
+# Add project root to path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from src.utils.AppLogging import logger
+from src.logging.Database import DatabaseManager
+from src.constants import enable_recording_key, rtsp_host, rtsp_port, rtsp_username, rtsp_password
 
 
 class RtspH264Recorder:
@@ -348,28 +352,24 @@ class RtspH264Recorder:
 
 
 def parse_args():
-    """Parse command line arguments."""
+    """Parse command line arguments (optional overrides for DB config)."""
     parser = argparse.ArgumentParser(
-        description="RTSP H.264 Stream Recorder using FFmpeg",
+        description="RTSP H.264 Stream Recorder using FFmpeg (reads config from DB)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Record to single file
+  # Use database config
+  python rtsp_h264_recorder.py
+  
+  # Override with command line
   python rtsp_h264_recorder.py --url rtsp://192.168.1.100:554/stream --output video.mp4
-  
-  # Record with hourly rotation
-  python rtsp_h264_recorder.py --url rtsp://192.168.1.100:554/stream --output-dir ./recordings --rotate-hours 1
-  
-  # Record with rotation and 48h retention
-  python rtsp_h264_recorder.py --url rtsp://192.168.1.100:554/stream --output-dir ./recordings --rotate-hours 1 --retention-hours 48
         """
     )
 
     parser.add_argument(
         "--url",
         type=str,
-        required=True,
-        help="RTSP stream URL (e.g., rtsp://192.168.1.100:554/stream)"
+        help="RTSP stream URL (overrides DB config)"
     )
 
     parser.add_argument(
@@ -381,19 +381,22 @@ Examples:
     parser.add_argument(
         "--output-dir",
         type=str,
-        help="Output directory (for rotated recordings)"
+        default="./recordings",
+        help="Output directory (default: ./recordings)"
     )
 
     parser.add_argument(
         "--rotate-hours",
         type=float,
-        help="Rotate file every N hours (requires --output-dir)"
+        default=1.0,
+        help="Rotate file every N hours (default: 1.0)"
     )
 
     parser.add_argument(
         "--retention-hours",
         type=float,
-        help="Delete recordings older than N hours (requires --output-dir)"
+        default=48.0,
+        help="Delete recordings older than N hours (default: 48.0)"
     )
 
     parser.add_argument(
@@ -404,6 +407,13 @@ Examples:
         help="Container format (default: mp4)"
     )
 
+    parser.add_argument(
+        "--db-path",
+        type=str,
+        default="./data/db/bag_events.db",
+        help="Path to database (default: ./data/db/bag_events.db)"
+    )
+
     return parser.parse_args()
 
 
@@ -411,46 +421,64 @@ def main():
     """Main entry point."""
     args = parse_args()
 
-    # Validate arguments
-    if not args.output and not args.output_dir:
-        logger.error("Must specify either --output or --output-dir")
-        return 1
-
-    if args.output and args.output_dir:
-        logger.error("Cannot specify both --output and --output-dir")
-        return 1
-
-    if args.rotate_hours and not args.output_dir:
-        logger.error("--rotate-hours requires --output-dir")
-        return 1
-
     logger.info("=" * 60)
     logger.info("RTSP H.264 Stream Recorder (FFmpeg)")
     logger.info("=" * 60)
-    logger.info(f"RTSP URL: {args.url}")
+
+    # Initialize database and read config
+    db = DatabaseManager(args.db_path)
+
+    # Check if recording is enabled
+    recording_enabled = db.get_config(enable_recording_key, default='0')
+    if recording_enabled != '1' and not args.url:
+        logger.info("Recording is disabled in database config (enable_recording=0)")
+        logger.info("To enable, run: ")
+        logger.info(f"  sqlite3 {args.db_path} \"UPDATE config SET value='1' WHERE key='{enable_recording_key}';\"")
+        db.close()
+        return 0
+
+    # Build RTSP URL from database config or command line
+    if args.url:
+        rtsp_url = args.url
+        logger.info("Using RTSP URL from command line")
+    else:
+        # Read from database
+        host = db.get_config(rtsp_host, default='192.168.2.108')
+        port = db.get_config(rtsp_port, default='554')
+        username = db.get_config(rtsp_username, default='admin')
+        password = db.get_config(rtsp_password, default='a1234567')
+
+        rtsp_url = f"rtsp://{username}:{password}@{host}:{port}/stream"
+        logger.info("Using RTSP URL from database config")
+
+    db.close()
+
+    # Validate arguments
+    if args.output and args.output_dir and not args.output:
+        pass  # output_dir is default
+
+    logger.info(f"RTSP URL: {rtsp_url}")
     if args.output:
         logger.info(f"Output file: {args.output}")
-    if args.output_dir:
+    else:
         logger.info(f"Output directory: {args.output_dir}")
-    if args.rotate_hours:
         logger.info(f"Rotation: Every {args.rotate_hours} hours")
-    if args.retention_hours:
         logger.info(f"Retention: {args.retention_hours} hours")
     logger.info(f"Container: {args.container}")
     logger.info("=" * 60)
 
     # Create recorder
     recorder = RtspH264Recorder(
-        rtsp_url=args.url,
+        rtsp_url=rtsp_url,
         output_file=args.output,
-        output_dir=args.output_dir,
-        rotate_hours=args.rotate_hours,
-        retention_hours=args.retention_hours,
+        output_dir=args.output_dir if not args.output else None,
+        rotate_hours=args.rotate_hours if not args.output else None,
+        retention_hours=args.retention_hours if not args.output else None,
         container=args.container
     )
 
     # Setup signal handlers
-    def signal_handler(sig, frame):
+    def signal_handler(_sig, _frame):
         logger.info("[Main] Received signal, stopping...")
         recorder.stop()
         sys.exit(0)

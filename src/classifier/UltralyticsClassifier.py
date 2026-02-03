@@ -4,7 +4,6 @@ Ultralytics-based classifier for Windows/development platforms.
 
 from typing import List, Tuple, Optional
 import numpy as np
-import cv2
 
 from src.classifier.BaseClassifier import BaseClassifier, ClassificationResult
 from src.utils.AppLogging import logger

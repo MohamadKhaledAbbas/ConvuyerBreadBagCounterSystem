@@ -13,7 +13,7 @@ This allows for simpler tracking logic without complex state machines.
 import os
 from dataclasses import dataclass
 
-from src.utils.platform import IS_RDK, IS_WINDOWS
+from src.utils.platform import IS_RDK
 
 
 def _parse_bool_env(key: str, default: bool) -> bool:

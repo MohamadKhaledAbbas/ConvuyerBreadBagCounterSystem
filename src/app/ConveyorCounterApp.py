@@ -22,7 +22,7 @@ import signal
 import os
 from datetime import datetime
 from dataclasses import dataclass, field
-from typing import Optional, Dict, List, Callable
+from typing import Optional, Dict, Callable
 import numpy as np
 import threading
 
@@ -33,7 +33,7 @@ from src.utils.AppLogging import logger
 from src.frame_source.FrameSourceFactory import FrameSourceFactory
 from src.frame_source.FrameSource import FrameSource
 
-from src.detection.BaseDetection import BaseDetector, Detection
+from src.detection.BaseDetection import BaseDetector
 from src.detection.DetectorFactory import DetectorFactory
 
 from src.classifier.BaseClassifier import BaseClassifier
@@ -41,7 +41,7 @@ from src.classifier.ROICollectorService import ROICollectorService, ROIQualityCo
 from src.classifier.ClassificationWorker import ClassificationWorker
 from src.classifier.ClassifierFactory import ClassifierFactory
 
-from src.tracking.ConveyorTracker import ConveyorTracker, TrackedObject, TrackEvent
+from src.tracking.ConveyorTracker import ConveyorTracker
 from src.tracking.BidirectionalSmoother import BidirectionalSmoother, ClassificationRecord
 
 # Import modular pipeline components
@@ -103,8 +103,6 @@ class ConveyorCounterApp:
         frame_source: Optional[FrameSource] = None,
         detector: Optional[BaseDetector] = None,
         classifier: Optional[BaseClassifier] = None,
-        enable_recording: bool = True,
-        enable_display: bool = True,
         enable_ros2_publish: bool = False,
         testing_mode: bool = False
     ):
@@ -118,17 +116,18 @@ class ConveyorCounterApp:
             frame_source: Optional pre-configured frame source
             detector: Optional pre-configured detector
             classifier: Optional pre-configured classifier
-            enable_recording: Enable video spool recording
-            enable_display: Enable visualization window
             enable_ros2_publish: Enable ROS2 count publishing
             testing_mode: Enable testing mode (no frame drops)
+
+        Note:
+            enable_display is read from database config table (key: 'enable_display')
+            Recording should be done separately via rtsp_h264_recorder.py
         """
         self.app_config = app_config or AppConfig()
         self.tracking_config = tracking_config or TrackingConfig()
         self.video_source = video_source
         self.testing_mode = testing_mode
-        self.enable_display = enable_display
-        self.enable_recording = enable_recording
+        self.enable_display = False  # Will be loaded from DB
         self.enable_ros2 = enable_ros2_publish
         
         # Pipeline components (modular architecture)
@@ -162,13 +161,22 @@ class ConveyorCounterApp:
         
         logger.info("[ConveyorCounterApp] Initialized")
     
-    def _signal_handler(self, signum, frame):
+    def _signal_handler(self, signum, _frame):
         """Handle shutdown signals."""
         logger.info(f"[ConveyorCounterApp] Received signal {signum}, shutting down...")
         self._running = False
     
     def _init_components(self):
         """Initialize pipeline components with new modular architecture."""
+        # Initialize database first to read config
+        self._db = DatabaseManager(self.app_config.db_path)
+
+        # Load enable_display from database config
+        from src.constants import enable_display_key
+        enable_display_str = self._db.get_config(enable_display_key, default='0')
+        self.enable_display = enable_display_str == '1'
+        logger.info(f"[ConveyorCounterApp] Display enabled: {self.enable_display} (from DB config)")
+
         # Frame source
         if self._frame_source is None:
             source_type = 'opencv'  # Default to OpenCV
@@ -239,9 +247,6 @@ class ConveyorCounterApp:
             batch_size=self.tracking_config.bidirectional_buffer_size,
             batch_timeout_seconds=self.tracking_config.bidirectional_inactivity_timeout_ms / 1000.0
         )
-        
-        # Database
-        self._db = DatabaseManager(self.app_config.db_path)
 
         logger.info("[ConveyorCounterApp] Components initialized with modular architecture")
 
@@ -324,8 +329,8 @@ class ConveyorCounterApp:
         # Log to database
         if self._db is not None:
             try:
-                # Optionally save ROI image for debugging (but not stored in DB)
-                if roi is not None and self.enable_recording:
+                # Optionally save ROI image for debugging
+                if roi is not None:
                     roi_dir = os.path.join(self.tracking_config.spool_dir, "rois")
                     os.makedirs(roi_dir, exist_ok=True)
                     image_filename = f"track_{record.track_id}_{int(time.time() * 1000)}.jpg"

@@ -26,7 +26,7 @@ from src.utils.AppLogging import logger
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(_app: FastAPI):
     """
     Application lifespan handler for startup/shutdown.
 

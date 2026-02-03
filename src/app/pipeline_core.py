@@ -6,7 +6,6 @@ Follows Single Responsibility Principle.
 """
 
 from typing import List, Optional
-import time
 import numpy as np
 
 from src.detection.BaseDetection import BaseDetector, Detection
