@@ -64,6 +64,9 @@ class DatabaseManager:
         else:
             logger.warning("[DatabaseManager] schema.sql not found, using fallback")
             self._create_fallback_schema()
+        
+        # Initialize default config values
+        self._initialize_default_config()
     def _create_fallback_schema(self):
         with self._get_connection() as conn:
             conn.execute("PRAGMA foreign_keys = ON")
@@ -101,6 +104,45 @@ class DatabaseManager:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_bag_types_name ON bag_types(name)")
             conn.commit()
             logger.info("[DatabaseManager] Fallback schema created")
+    
+    def _initialize_default_config(self):
+        """Initialize default configuration values if they don't exist."""
+        from src.constants import (
+            show_ui_screen_key,
+            is_development_key,
+            rtsp_username,
+            rtsp_password,
+            rtsp_host,
+            rtsp_port,
+            is_profiler_enabled
+        )
+        
+        # Default values for config keys
+        default_config = {
+            show_ui_screen_key: '0',
+            is_development_key: '0',
+            rtsp_username: 'admin',
+            rtsp_password: 'a1234567',
+            rtsp_host: '192.168.2.108',
+            rtsp_port: '554',
+            is_profiler_enabled: '0'
+        }
+        
+        with self._cursor() as cursor:
+            for key, default_value in default_config.items():
+                # Check if key exists
+                cursor.execute("SELECT value FROM config WHERE key = ?", (key,))
+                result = cursor.fetchone()
+                
+                if result is None:
+                    # Insert default value
+                    cursor.execute(
+                        "INSERT INTO config (key, value) VALUES (?, ?)",
+                        (key, default_value)
+                    )
+                    logger.info(f"[DatabaseManager] Initialized config: {key} = {default_value}")
+        
+        logger.info("[DatabaseManager] Default config values initialized")
     def get_or_create_bag_type(self, name: str, arabic_name: Optional[str] = None,
                                weight: float = 0, thumb: Optional[str] = None) -> int:
         with self._cursor() as cursor:
