@@ -15,6 +15,7 @@ import time
 
 from src.utils.AppLogging import logger
 from src.utils.Utils import compute_sharpness, compute_brightness
+from src.classifier.IClassificationComponents import IROICollector
 
 
 @dataclass
@@ -87,7 +88,7 @@ class TrackROICollection:
             )
 
 
-class ROICollectorService:
+class ROICollectorService(IROICollector):
     """
     Service that ONLY collects ROIs during tracking.
 

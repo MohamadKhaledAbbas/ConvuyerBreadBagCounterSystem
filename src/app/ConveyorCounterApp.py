@@ -20,6 +20,7 @@ import time
 import cv2
 import signal
 import os
+from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Optional, Dict, List, Callable
 import numpy as np
@@ -27,8 +28,7 @@ import threading
 
 from src.config.settings import AppConfig
 from src.config.tracking_config import TrackingConfig
-from src.utils.AppLogging import logger, StructuredLogger
-from src.utils.PipelineMetrics import PipelineMetrics
+from src.utils.AppLogging import logger
 
 from src.frame_source.FrameSourceFactory import FrameSourceFactory
 from src.frame_source.FrameSource import FrameSource
@@ -44,9 +44,11 @@ from src.classifier.ClassifierFactory import ClassifierFactory
 from src.tracking.ConveyorTracker import ConveyorTracker, TrackedObject, TrackEvent
 from src.tracking.BidirectionalSmoother import BidirectionalSmoother, ClassificationRecord
 
+# Import modular pipeline components
+from src.app.pipeline_core import PipelineCore
+from src.app.pipeline_visualizer import PipelineVisualizer
+
 from src.logging.Database import DatabaseManager
-from src.spool.segment_io import SegmentWriter
-from src.spool.retention import RetentionPolicy, RetentionConfig
 
 
 @dataclass
@@ -129,27 +131,21 @@ class ConveyorCounterApp:
         self.enable_recording = enable_recording
         self.enable_ros2 = enable_ros2_publish
         
-        # Pipeline components (lazy init)
+        # Pipeline components (modular architecture)
         self._frame_source = frame_source
         self._detector = detector
         self._classifier = classifier
-        self._roi_collector: Optional[ROICollectorService] = None  # Collects ROIs only
-        self._classification_worker: Optional[ClassificationWorker] = None  # Async classification
         self._tracker: Optional[ConveyorTracker] = None
+        self._roi_collector: Optional[ROICollectorService] = None
+        self._classification_worker: Optional[ClassificationWorker] = None
+
+        # Modular pipeline components
+        self._pipeline_core: Optional[PipelineCore] = None
+        self._pipeline_visualizer: Optional[PipelineVisualizer] = None
+
+        # Smoothing and database
         self._smoother: Optional[BidirectionalSmoother] = None
-        
-        # Recording components
-        self._segment_writer: Optional[SegmentWriter] = None
-        self._retention_policy: Optional[RetentionPolicy] = None
-        
-        # Database
         self._db: Optional[DatabaseManager] = None
-        
-        # Structured logging
-        self._structured_logger = StructuredLogger(logger)
-        
-        # Metrics
-        self._metrics = PipelineMetrics()
         
         # State
         self.state = CounterState()
@@ -172,7 +168,7 @@ class ConveyorCounterApp:
         self._running = False
     
     def _init_components(self):
-        """Initialize pipeline components."""
+        """Initialize pipeline components with new modular architecture."""
         # Frame source
         if self._frame_source is None:
             source_type = 'opencv'  # Default to OpenCV
@@ -194,19 +190,21 @@ class ConveyorCounterApp:
         if self._classifier is None:
             self._classifier = ClassifierFactory.create(config=self.app_config)
         
-        # ROI Collector (collects ROIs during tracking, doesn't classify)
+        # Tracker
+        self._tracker = ConveyorTracker(config=self.tracking_config)
+
+        # ROI Collector
         quality_config = ROIQualityConfig(
             min_sharpness=self.tracking_config.min_sharpness,
             min_brightness=self.tracking_config.min_mean_brightness,
             max_brightness=self.tracking_config.max_mean_brightness
         )
-        
         self._roi_collector = ROICollectorService(
             quality_config=quality_config,
             max_rois_per_track=10
         )
 
-        # Classification Worker (async classification in background thread)
+        # Classification Worker
         self._classification_worker = ClassificationWorker(
             classifier=self._classifier,
             max_queue_size=100,
@@ -214,9 +212,26 @@ class ConveyorCounterApp:
         )
         self._classification_worker.start()
 
-        # Tracker
-        self._tracker = ConveyorTracker(config=self.tracking_config)
-        
+        # === NEW MODULAR COMPONENTS ===
+
+        # Core Pipeline (handles detection, tracking, classification)
+        self._pipeline_core = PipelineCore(
+            detector=self._detector,
+            tracker=self._tracker,
+            roi_collector=self._roi_collector,
+            classification_worker=self._classification_worker
+        )
+        # Set callback for classification completion
+        self._pipeline_core.on_track_completed = self._on_classification_completed
+
+        # Visualizer (handles display)
+        if self.enable_display:
+            self._pipeline_visualizer = PipelineVisualizer(
+                tracking_config=self.tracking_config,
+                window_name="Conveyor Counter",
+                display_size=(960, 540)
+            )
+
         # Bidirectional smoother
         self._smoother = BidirectionalSmoother(
             confidence_threshold=self.tracking_config.bidirectional_confidence_threshold,
@@ -225,32 +240,15 @@ class ConveyorCounterApp:
             batch_timeout_seconds=self.tracking_config.bidirectional_inactivity_timeout_ms / 1000.0
         )
         
-        # Recording
-        if self.enable_recording:
-            self._segment_writer = SegmentWriter(
-                spool_dir=self.tracking_config.spool_dir,
-                segment_duration=self.tracking_config.spool_segment_duration,
-                max_segment_duration=self.tracking_config.spool_max_segment_duration
-            )
-            
-            retention_config = RetentionConfig(
-                max_age_hours=self.tracking_config.spool_retention_seconds / 3600.0
-            )
-            self._retention_policy = RetentionPolicy(
-                spool_dir=self.tracking_config.spool_dir,
-                config=retention_config
-            )
-            self._retention_policy.start()
-        
         # Database
         self._db = DatabaseManager(self.app_config.db_path)
 
-        logger.info("[ConveyorCounterApp] Components initialized")
-    
+        logger.info("[ConveyorCounterApp] Components initialized with modular architecture")
+
     def _process_frame(self, frame: np.ndarray) -> np.ndarray:
         """
-        Process a single frame through the pipeline.
-        
+        Process a single frame through the modular pipeline.
+
         Args:
             frame: Input BGR frame
             
@@ -259,49 +257,12 @@ class ConveyorCounterApp:
         """
         frame_start = time.perf_counter()
         
-        # 1. Detection
-        detect_start = time.perf_counter()
-        detections = self._detector.detect(frame)
-        detect_time = (time.perf_counter() - detect_start) * 1000
-        
-        # 2. Tracking
-        track_start = time.perf_counter()
-        active_tracks = self._tracker.update(
-            detections,
-            frame_shape=frame.shape[:2]
-        )
-        track_time = (time.perf_counter() - track_start) * 1000
-        
-        # 3. Collect ROIs for confirmed tracks (don't classify yet!)
-        collect_start = time.perf_counter()
-        rois_collected = 0
+        # Use PipelineCore for all processing
+        detections, active_tracks, rois_collected = self._pipeline_core.process_frame(frame)
 
-        for track in self._tracker.get_confirmed_tracks():
-            # Only collect ROI (quality check + storage)
-            # NO classification here - that happens after track completes
-            if self._roi_collector.collect_roi(
-                track_id=track.track_id,
-                frame=frame,
-                bbox=track.bbox
-            ):
-                rois_collected += 1
-
-        collect_time = (time.perf_counter() - collect_start) * 1000
-
-        # 4. Handle completed tracks
-        completed_events = self._tracker.get_completed_events()
-        
-        for event in completed_events:
-            self._handle_track_completed(event, frame)
-
-
-        # Update metrics
-        total_time = (time.perf_counter() - frame_start) * 1000
-        self._metrics.record_detection(len(detections), detect_time)
-        # Note: tracking and classification metrics are recorded elsewhere
-        # when tracks complete and classifications occur
-
+        # Update state
         self.state.active_tracks = len(active_tracks)
+        total_time = (time.perf_counter() - frame_start) * 1000
         self.state.processing_time_ms = total_time
         
         # Calculate FPS
@@ -309,80 +270,51 @@ class ConveyorCounterApp:
             elapsed = time.perf_counter() - self._start_time
             self.state.fps = self._frame_count / elapsed if elapsed > 0 else 0
         
-        # 6. Visualization
-        if self.enable_display:
-            frame = self._draw_annotations(frame, active_tracks, detections)
-        
-        return frame
-    
-    def _handle_track_completed(self, event: TrackEvent, frame: np.ndarray):
-        """
-        Handle a completed track - submit for async classification.
-
-        NEW LOGIC: Don't classify here! Submit best ROI to worker thread.
-        """
-        track_id = event.track_id
-        
-        # Get best ROI from collector
-        best_roi_data = self._roi_collector.get_best_roi(track_id)
-
-        if best_roi_data is None:
-            logger.warning(f"[ConveyorCounterApp] Track {track_id} completed without ROIs")
-            self._roi_collector.remove_track(track_id)
-            return
-        
-        best_roi, quality = best_roi_data
-
-        logger.info(
-            f"[ConveyorCounterApp] Track {track_id} completed, submitting ROI "
-            f"(quality={quality:.1f}) for async classification"
-        )
-
-        # Submit to async classification worker (non-blocking!)
-        def classification_callback(track_id: int, class_name: str, confidence: float):
-            """Callback when classification completes."""
-            # This runs in worker thread - keep it fast!
-            logger.info(
-                f"[ConveyorCounterApp] Track {track_id} classified as {class_name} "
-                f"({confidence:.2f})"
+        # Visualization (if enabled)
+        if self.enable_display and self._pipeline_visualizer:
+            frame = self._pipeline_visualizer.annotate_frame(
+                frame=frame,
+                detections=detections,
+                tracks=active_tracks,
+                fps=self.state.fps,
+                active_tracks=self.state.active_tracks,
+                total_counted=self.state.total_counted,
+                counts_by_class=self.state.get_counts_snapshot()
             )
 
-            # Add to smoother (thread-safe)
-            smoothed_batch = self._smoother.add_classification(
+        return frame
+    
+    def _on_classification_completed(self, track_id: int, class_name: str, confidence: float):
+        """
+        Callback when classification completes (called by PipelineCore from worker thread).
+
+        Args:
+            track_id: Track identifier
+            class_name: Classified class
+            confidence: Classification confidence
+        """
+        # Add to smoother (thread-safe)
+        smoothed_batch = self._smoother.add_classification(
+            track_id=track_id,
+            class_name=class_name,
+            confidence=confidence,
+            vote_ratio=1.0  # Single classification, full confidence
+        )
+
+        # Process any finalized batch
+        if smoothed_batch:
+            for record in smoothed_batch:
+                self._record_count(record, None)  # ROI already handled
+        else:
+            # Record immediately
+            record = ClassificationRecord(
                 track_id=track_id,
                 class_name=class_name,
                 confidence=confidence,
-                vote_ratio=1.0  # Single classification, full confidence
+                vote_ratio=1.0,
+                timestamp=time.time()
             )
-
-            # Process any finalized batch
-            if smoothed_batch:
-                for record in smoothed_batch:
-                    self._record_count(record, best_roi)
-            else:
-                # Record immediately
-                record = ClassificationRecord(
-                    track_id=track_id,
-                    class_name=class_name,
-                    confidence=confidence,
-                    vote_ratio=1.0,
-                    timestamp=time.time()
-                )
-                self._record_count(record, best_roi)
-
-        # Submit job to worker (returns immediately)
-        submitted = self._classification_worker.submit_job(
-            track_id=track_id,
-            roi=best_roi,
-            bbox_history=event.bbox_history,
-            callback=classification_callback
-        )
-
-        if not submitted:
-            logger.error(f"[ConveyorCounterApp] Failed to submit track {track_id} (queue full)")
-
-        # Clean up ROI collection
-        self._roi_collector.remove_track(track_id)
+            self._record_count(record, None)
 
     def _record_count(self, record: ClassificationRecord, roi: Optional[np.ndarray]):
         """Record a counted item."""
@@ -392,25 +324,21 @@ class ConveyorCounterApp:
         # Log to database
         if self._db is not None:
             try:
-                # Save ROI image if available
-                image_path = None
+                # Optionally save ROI image for debugging (but not stored in DB)
                 if roi is not None and self.enable_recording:
                     roi_dir = os.path.join(self.tracking_config.spool_dir, "rois")
                     os.makedirs(roi_dir, exist_ok=True)
-                    image_path = os.path.join(
-                        roi_dir,
-                        f"track_{record.track_id}_{int(time.time() * 1000)}.jpg"
-                    )
+                    image_filename = f"track_{record.track_id}_{int(time.time() * 1000)}.jpg"
+                    image_path = os.path.join(roi_dir, image_filename)
                     cv2.imwrite(image_path, roi)
+                    logger.debug(f"[ConveyorCounterApp] Saved ROI for debugging: {image_path}")
 
                 import json
-                self._db.log_event(
-                    track_id=record.track_id,
-                    bag_type=record.class_name,
+                self._db.add_event(
+                    timestamp=datetime.fromtimestamp(record.timestamp).isoformat(),
+                    bag_type_name=record.class_name,
                     confidence=record.confidence,
-                    phash="",  # Could compute if needed
-                    image_path=image_path,
-                    candidates_count=1,
+                    track_id=record.track_id,
                     metadata=json.dumps({
                         'vote_ratio': record.vote_ratio,
                         'smoothed': record.smoothed,
@@ -435,70 +363,15 @@ class ConveyorCounterApp:
         )
         logger.info(f"[ConveyorCounterApp] Total: {new_total}, By class: {self.state.get_counts_snapshot()}")
 
-    def _draw_annotations(
-        self,
-        frame: np.ndarray,
-        tracks: List[TrackedObject],
-        detections: List[Detection]
-    ) -> np.ndarray:
-        """Draw tracking and detection visualizations."""
-        # Draw detections (blue boxes)
-        for det in detections:
-            x1, y1, x2, y2 = det.bbox
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 1)
-        
-        # Draw tracks (green boxes with ID)
-        for track in tracks:
-            x1, y1, x2, y2 = track.bbox
-            color = (0, 255, 0) if track.hits >= self.tracking_config.min_track_duration_frames else (0, 255, 255)
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-            
-            # Track ID and confidence
-            label = f"ID:{track.track_id} ({track.confidence:.2f})"
-            cv2.putText(
-                frame, label,
-                (x1, y1 - 5),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5, color, 1
-            )
-            
-            # Draw track history (trajectory)
-            if len(track.position_history) > 1:
-                pts = np.array(track.position_history, dtype=np.int32)
-                cv2.polylines(frame, [pts], False, color, 1)
-        
-        # Draw status overlay
-        status_lines = [
-            f"FPS: {self.state.fps:.1f}",
-            f"Tracks: {self.state.active_tracks}",
-            f"Counted: {self.state.total_counted}",
-        ]
-        
-        # Add class counts
-        for cls, count in sorted(self.state.counts_by_class.items()):
-            status_lines.append(f"  {cls}: {count}")
-        
-        y = 30
-        for line in status_lines:
-            cv2.putText(
-                frame, line,
-                (10, y),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6, (0, 255, 0), 2
-            )
-            y += 25
-        
-        return frame
-    
     def run(self, max_frames: Optional[int] = None):
         """
-        Run the counter application.
-        
+        Run the counter application with modular architecture.
+
         Args:
             max_frames: Optional maximum frames to process (for testing)
         """
-        logger.info("[ConveyorCounterApp] Starting...")
-        
+        logger.info("[ConveyorCounterApp] Starting with modular pipeline...")
+
         # Initialize components
         self._init_components()
         
@@ -516,16 +389,13 @@ class ConveyorCounterApp:
                 
                 self._frame_count += 1
                 
-                # Process frame
+                # Process frame through modular pipeline
                 annotated = self._process_frame(frame)
                 
-                # Display
-                if self.enable_display:
-                    # Resize for faster display (720p -> 960x540)
-                    display_frame = cv2.resize(annotated, (960, 540))
-                    cv2.imshow("Conveyor Counter", display_frame)
-                    key = cv2.waitKey(1) & 0xFF
-                    if key == ord('q'):
+                # Display (delegated to PipelineVisualizer)
+                if self.enable_display and self._pipeline_visualizer:
+                    should_continue = self._pipeline_visualizer.show(annotated)
+                    if not should_continue:
                         self._running = False
                 
                 # Log progress periodically
@@ -539,48 +409,28 @@ class ConveyorCounterApp:
             self._cleanup()
     
     def _cleanup(self):
-        """Clean up all resources."""
+        """Clean up all resources with modular architecture."""
         logger.info("[ConveyorCounterApp] Cleaning up...")
         
-        # Finalize any pending classifications
+        # Finalize any pending smoothing
         if self._smoother is not None:
             remaining = self._smoother.finalize_batch()
             for record in remaining:
                 self._record_count(record, None)
             self._smoother.cleanup()
         
-        # Stop recording
-        if self._segment_writer is not None:
-            self._segment_writer.close()
-        
-        if self._retention_policy is not None:
-            self._retention_policy.stop()
+        # Clean up modular pipeline components
+        if self._pipeline_core is not None:
+            self._pipeline_core.cleanup()
 
-        # Release components
+        if self._pipeline_visualizer is not None:
+            self._pipeline_visualizer.cleanup()
+
+        # Release frame source
         if self._frame_source is not None:
             self._frame_source.cleanup()
         
-        if self._detector is not None:
-            self._detector.cleanup()
-        
-        # Stop classification worker and wait for pending jobs
-        if self._classification_worker is not None:
-            logger.info("[ConveyorCounterApp] Stopping classification worker...")
-            stats = self._classification_worker.get_statistics()
-            logger.info(f"  Worker stats: {stats}")
-            self._classification_worker.stop(timeout=10.0)
-
-        # Clean up ROI collector
-        if self._roi_collector is not None:
-            self._roi_collector.cleanup()
-
-        # Clean up classifier
-        if self._classifier is not None:
-            self._classifier.cleanup()
-
-        if self._tracker is not None:
-            logger.info(f"[ConveyorCounterApp] Tracked objects: {len(self._tracker.tracks)}")
-
+        # Close database
         if self._db is not None:
             self._db.close()
         

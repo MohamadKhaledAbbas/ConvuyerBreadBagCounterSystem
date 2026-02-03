@@ -83,7 +83,6 @@ class DatabaseManager:
                     timestamp TEXT NOT NULL,
                     bag_type_id INTEGER NOT NULL,
                     confidence REAL NOT NULL CHECK (confidence BETWEEN 0 AND 1),
-                    image_path TEXT NOT NULL,
                     track_id INTEGER,
                     metadata TEXT,
                     FOREIGN KEY (bag_type_id) REFERENCES bag_types(id) ON DELETE CASCADE
@@ -128,8 +127,22 @@ class DatabaseManager:
             row = cursor.fetchone()
             return dict(row) if row else None
     def add_event(self, timestamp: str, bag_type_name: str, confidence: float,
-                 image_path: str, track_id: Optional[int] = None,
+                 track_id: Optional[int] = None,
                  metadata: Optional[str] = None, **bag_type_metadata) -> int:
+        """
+        Add a counting event to the database.
+
+        Args:
+            timestamp: ISO 8601 timestamp
+            bag_type_name: Name of the bag type
+            confidence: Classification confidence [0.0-1.0]
+            track_id: Optional track ID for debugging
+            metadata: Optional JSON metadata
+            **bag_type_metadata: Optional bag type metadata (arabic_name, weight, thumb)
+
+        Returns:
+            Event ID
+        """
         bag_type_id = self.get_or_create_bag_type(
             name=bag_type_name,
             arabic_name=bag_type_metadata.get('arabic_name'),
@@ -138,16 +151,27 @@ class DatabaseManager:
         )
         with self._cursor() as cursor:
             cursor.execute(
-                "INSERT INTO events (timestamp, bag_type_id, confidence, image_path, track_id, metadata) VALUES (?, ?, ?, ?, ?, ?)",
-                (timestamp, bag_type_id, confidence, image_path, track_id, metadata)
+                "INSERT INTO events (timestamp, bag_type_id, confidence, track_id, metadata) VALUES (?, ?, ?, ?, ?)",
+                (timestamp, bag_type_id, confidence, track_id, metadata)
             )
             event_id = cursor.lastrowid
         logger.debug(f"[DatabaseManager] Event added: id={event_id}, bag_type={bag_type_name}")
         return event_id
     def get_events_with_bag_types(self, start_date: Optional[str] = None,
                                   end_date: Optional[str] = None, limit: int = 1000) -> List[Dict[str, Any]]:
+        """
+        Get events joined with bag_types data.
+
+        Args:
+            start_date: Optional start date filter (ISO 8601)
+            end_date: Optional end date filter (ISO 8601)
+            limit: Maximum number of events to return
+
+        Returns:
+            List of event dictionaries with bag_type metadata
+        """
         query = """
-            SELECT e.id, e.timestamp, e.confidence, e.image_path, e.track_id, e.metadata,
+            SELECT e.id, e.timestamp, e.confidence, e.track_id, e.metadata,
                    bt.id as bag_type_id, bt.name as bag_type, bt.arabic_name, bt.weight, bt.thumb
             FROM events e JOIN bag_types bt ON e.bag_type_id = bt.id
         """

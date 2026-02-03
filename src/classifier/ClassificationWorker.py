@@ -23,6 +23,7 @@ import numpy as np
 
 from src.classifier.BaseClassifier import BaseClassifier, ClassificationResult
 from src.utils.AppLogging import logger
+from src.classifier.IClassificationComponents import IClassificationWorker
 
 
 @dataclass
@@ -34,7 +35,7 @@ class ClassificationJob:
     callback: Optional[Callable] = None  # Callback(track_id, class_name, confidence)
 
 
-class ClassificationWorker:
+class ClassificationWorker(IClassificationWorker):
     """
     Background worker for async classification.
 

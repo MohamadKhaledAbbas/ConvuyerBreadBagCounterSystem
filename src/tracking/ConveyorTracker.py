@@ -29,6 +29,7 @@ from src.detection.BaseDetection import Detection
 from src.utils.Utils import compute_iou
 from src.config.tracking_config import TrackingConfig
 from src.utils.AppLogging import logger
+from src.tracking.ITracker import ITracker
 
 # Try to import scipy for optimal linear assignment
 try:
@@ -180,7 +181,7 @@ class TrackEvent:
         return np.sqrt((end[0] - start[0])**2 + (end[1] - start[1])**2)
 
 
-class ConveyorTracker:
+class ConveyorTracker(ITracker):
     """
     Simple IoU-based tracker optimized for conveyor belt movement.
     

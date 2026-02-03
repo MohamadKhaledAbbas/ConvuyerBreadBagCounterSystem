@@ -93,16 +93,32 @@ class AnalyticsService:
             merged.append({"bag_type_id": "NOISE", "class_name": "Noise", "arabic_name": "تصنيفات مفلترة غير دقيقة", "thumb": "", "weight": 0, "start": noise_start, "end": noise_end, "count": noise_count})
         return merged
     def normalize_image_paths(self, data: Dict[str, Any]) -> None:
+        """
+        Normalize image paths for web serving.
+
+        Converts filesystem paths (data/classes/...) to web paths (known_classes/...)
+        Only needed for thumb images from bag_types table.
+        """
         def fix_path(path: str) -> str:
             if not path:
                 return ""
-            return (path.replace(self.config.known_classes_dir + "/", self.config.web_known_classes_path + "/").replace(self.config.unknown_classes_dir + "/", self.config.web_unknown_classes_path + "/"))
+            # Convert filesystem paths to web-accessible paths
+            return (path
+                    .replace(self.config.known_classes_dir + "/", self.config.web_known_classes_path + "/")
+                    .replace(self.config.unknown_classes_dir + "/", self.config.web_unknown_classes_path + "/"))
+
+        # Fix thumb paths in classifications (from bag_types)
         for cls in data.get("data", {}).get("classifications", []):
             cls["thumb"] = fix_path(cls.get("thumb", ""))
+
+        # Fix thumb paths in events (from bag_types via JOIN)
         for event in data.get("timeline", {}).get("ordered_events", []):
             event["thumb"] = fix_path(event.get("thumb", ""))
-            event["image_path"] = fix_path(event.get("image_path", ""))
+
+        # Fix thumb paths in per_class_windows (from bag_types)
         for window in data.get("timeline", {}).get("per_class_windows", {}).values():
             window["thumb"] = fix_path(window.get("thumb", ""))
+
+        # Fix thumb paths in runs (from bag_types)
         for run in data.get("timeline", {}).get("runs", []):
             run["thumb"] = fix_path(run.get("thumb", ""))
