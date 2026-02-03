@@ -61,8 +61,8 @@ class EvidenceAccumulator:
         confidences = self.class_confidences[top_class]
         avg_confidence = sum(confidences) / len(confidences)
         
-        return (top_class, avg_confidence, vote_ratio)
-    
+        return top_class, avg_confidence, vote_ratio
+
     def get_all_candidates(self) -> List[Tuple[str, int, float]]:
         """
         Get all candidate classes ranked by vote count.

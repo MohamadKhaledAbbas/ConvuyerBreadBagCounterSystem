@@ -259,10 +259,11 @@ class DatabaseManager:
         with self._cursor() as cursor:
             cursor.execute(query, params)
             rows = [dict(row) for row in cursor.fetchall()]
-        total_count = sum(r['count'] for r in rows)
-        total_high = sum(r['high_count'] for r in rows)
-        total_low = sum(r['low_count'] for r in rows)
-        total_weight = sum(r['count'] * r['weight'] for r in rows)
+        # Explicit type conversions for aggregation
+        total_count = sum(int(r['count']) for r in rows)
+        total_high = sum(int(r['high_count']) for r in rows)
+        total_low = sum(int(r['low_count']) for r in rows)
+        total_weight = sum(int(r['count']) * float(r['weight']) for r in rows)
         by_type = {row['bag_type_id']: row for row in rows}
         return {
             'total': {'count': total_count, 'high_count': total_high, 'low_count': total_low, 'weight': total_weight},

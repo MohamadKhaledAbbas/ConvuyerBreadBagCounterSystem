@@ -5,7 +5,7 @@ This module handles the main processing pipeline without UI or recording concern
 Follows Single Responsibility Principle.
 """
 
-from typing import List, Optional
+from typing import List, Optional, Callable, Tuple
 import numpy as np
 
 from src.detection.BaseDetection import BaseDetector, Detection
@@ -53,14 +53,15 @@ class PipelineCore:
         self.classification_worker = classification_worker
 
         # Callbacks (set by orchestrator)
-        self.on_track_completed: Optional[callable] = None
+        # NOTE: Callback is invoked from worker thread - must be thread-safe!
+        self.on_track_completed: Optional[Callable[[int, str, float], None]] = None
 
         logger.info("[PipelineCore] Initialized")
 
     def process_frame(
         self,
         frame: np.ndarray
-    ) -> tuple[List[Detection], List[TrackedObject], int]:
+    ) -> Tuple[List[Detection], List[TrackedObject], int]:
         """
         Process a single frame through the pipeline.
 
@@ -73,10 +74,11 @@ class PipelineCore:
         # 1. Detection
         detections = self.detector.detect(frame)
 
-        # 2. Tracking
+        # 2. Tracking - cast frame shape to proper type
+        frame_h, frame_w = frame.shape[:2]
         active_tracks = self.tracker.update(
             detections,
-            frame_shape=frame.shape[:2]
+            frame_shape=(int(frame_h), int(frame_w))
         )
 
         # 3. Collect ROIs for confirmed tracks (non-blocking)
@@ -142,13 +144,20 @@ class PipelineCore:
             track_id: Track identifier
             class_name: Classified class
             confidence: Classification confidence
+
+        Warning:
+            This method runs in the classification worker thread. The orchestrator's
+            on_track_completed callback MUST be thread-safe. If the callback accesses
+            shared state (e.g., counters, collections), it must use proper synchronization
+            (locks, thread-safe data structures, etc.) to prevent race conditions.
         """
         logger.info(
             f"[PipelineCore] Track {track_id} classified: {class_name} ({confidence:.2f})"
         )
 
-        # Delegate to orchestrator callback (thread-safe)
-        if self.on_track_completed:
+        # Delegate to orchestrator callback
+        # IMPORTANT: Callback must be thread-safe!
+        if self.on_track_completed is not None:
             self.on_track_completed(track_id, class_name, confidence)
 
     def cleanup(self):

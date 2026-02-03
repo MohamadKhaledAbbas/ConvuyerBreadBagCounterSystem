@@ -28,11 +28,11 @@ from src.spool.spool_utils import format_structured_log
 # ROS2 imports (conditional)
 if is_rdk_platform():
     import rclpy
-    from rclpy.node import Node
-    from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+    from rclpy.node import Node # type: ignore
+    from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy # type: ignore
 
     try:
-        from hobot_cv_msgs.msg import H26XFrame
+        from hobot_cv_msgs.msg import H26XFrame # type: ignore
         HAS_H26X_MSG = True
     except ImportError:
         HAS_H26X_MSG = False

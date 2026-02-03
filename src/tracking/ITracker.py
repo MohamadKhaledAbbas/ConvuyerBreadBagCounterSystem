@@ -5,22 +5,79 @@ Defines contracts for tracker implementations to ensure loose coupling.
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Optional, Tuple
-from dataclasses import dataclass
+from typing import List, Optional, Tuple, Protocol
+from collections import deque
 
 from src.detection.BaseDetection import Detection
 
 
-@dataclass
-class TrackedObject:
-    """Represents a tracked object (defined in implementation)."""
-    pass
+class TrackedObject(Protocol):
+    """
+    Protocol for tracked object implementations.
+
+    Defines the expected interface for tracked objects across different tracker implementations.
+    Implementations should provide these attributes and methods.
+    """
+    track_id: int
+    bbox: Tuple[int, int, int, int]  # (x1, y1, x2, y2)
+    confidence: float
+    age: int
+    hits: int
+    time_since_update: int
+    position_history: deque
+    bbox_history: deque
+    created_at: float
+    last_seen_at: float
+    classified: bool
+
+    @property
+    def center(self) -> Tuple[int, int]:
+        """Return center point of current bbox."""
+        ...
+
+    @property
+    def velocity(self) -> Optional[Tuple[float, float]]:
+        """Return estimated velocity (vx, vy) or None."""
+        ...
+
+    def update(self, detection: Detection) -> None:
+        """Update track with new detection."""
+        ...
+
+    def predict(self) -> Tuple[int, int, int, int]:
+        """Predict next position based on velocity."""
+        ...
+
+    def mark_missed(self) -> None:
+        """Mark frame without detection."""
+        ...
 
 
-@dataclass
-class TrackEvent:
-    """Event emitted when a track completes (defined in implementation)."""
-    pass
+class TrackEvent(Protocol):
+    """
+    Protocol for track completion event implementations.
+
+    Emitted when a track completes (exits frame or is lost).
+    """
+    track_id: int
+    event_type: str  # 'track_completed', 'track_lost'
+    bbox_history: List[Tuple[int, int, int, int]]
+    position_history: List[Tuple[int, int]]
+    total_frames: int
+    created_at: float
+    ended_at: float
+    avg_confidence: float
+    exit_direction: str
+
+    @property
+    def duration_seconds(self) -> float:
+        """Track duration in seconds."""
+        ...
+
+    @property
+    def distance_traveled(self) -> float:
+        """Euclidean distance traveled by track."""
+        ...
 
 
 class ITracker(ABC):

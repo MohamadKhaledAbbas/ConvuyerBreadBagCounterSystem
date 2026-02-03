@@ -12,14 +12,14 @@ This is **v2** of the BreadBagCounterSystem, redesigned for simpler conveyor bel
 
 ### Key Differences from v1
 
-| Feature | v1 (Original) | v2 (Conveyor) |
-|---------|---------------|---------------|
-| **Tracking** | EventCentricTracker (~3300 lines) | ConveyorTracker (~500 lines) |
-| **State Machine** | open/closing/closed states | None (track → classify → count) |
-| **Association** | Parallel IoU + centroid | IoU with velocity prediction |
-| **Classification** | During track lifetime | After track completes |
-| **Movement** | Chaotic (table/worker) | Linear (conveyor belt) |
-| **Complexity** | ~2300 lines (BagCounterApp) | ~600 lines (ConveyorCounterApp) |
+| Feature            | v1 (Original)                     | v2 (Conveyor)                   |
+|--------------------|-----------------------------------|---------------------------------|
+| **Tracking**       | EventCentricTracker (~3300 lines) | ConveyorTracker (~500 lines)    |
+| **State Machine**  | open/closing/closed states        | None (track → classify → count) |
+| **Association**    | Parallel IoU + centroid           | IoU with velocity prediction    |
+| **Classification** | During track lifetime             | After track completes           |
+| **Movement**       | Chaotic (table/worker)            | Linear (conveyor belt)          |
+| **Complexity**     | ~2300 lines (BagCounterApp)       | ~600 lines (ConveyorCounterApp) |
 
 ### Preserved from v1
 
@@ -134,17 +134,17 @@ python rtsp_h264_recorder.py
 
 #### Configuration Keys
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `enable_display` | `0` | Enable/disable OpenCV display window (1=on, 0=off) |
-| `enable_recording` | `0` | Enable/disable RTSP recording (1=on, 0=off) |
-| `rtsp_host` | `192.168.2.108` | RTSP camera IP address |
-| `rtsp_port` | `554` | RTSP port |
-| `rtsp_username` | `admin` | RTSP username |
-| `rtsp_password` | `a1234567` | RTSP password |
-| `show_ui_screen` | `0` | Legacy UI flag |
-| `is_development` | `0` | Development mode flag |
-| `is_profiler_enabled` | `0` | Enable profiling |
+| Key                   | Default         | Description                                        |
+|-----------------------|-----------------|----------------------------------------------------|
+| `enable_display`      | `0`             | Enable/disable OpenCV display window (1=on, 0=off) |
+| `enable_recording`    | `0`             | Enable/disable RTSP recording (1=on, 0=off)        |
+| `rtsp_host`           | `192.168.2.108` | RTSP camera IP address                             |
+| `rtsp_port`           | `554`           | RTSP port                                          |
+| `rtsp_username`       | `admin`         | RTSP username                                      |
+| `rtsp_password`       | `a1234567`      | RTSP password                                      |
+| `show_ui_screen`      | `0`             | Legacy UI flag                                     |
+| `is_development`      | `0`             | Development mode flag                              |
+| `is_profiler_enabled` | `0`             | Enable profiling                                   |
 
 ### RTSP Recording
 

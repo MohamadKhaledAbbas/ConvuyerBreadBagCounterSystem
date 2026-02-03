@@ -143,8 +143,8 @@ class BpuDetector(BaseDetector):
                 indices = indices.flatten() if hasattr(indices, 'flatten') else indices
                 for i in indices:
                     detections.append(Detection(
-                        bbox=tuple(boxes[i]),
-                        confidence=confidences[i],
+                        bbox=tuple(int(x) for x in boxes[i]),
+                        confidence=float(confidences[i]),
                         class_id=0,
                         class_name="bread-bag"
                     ))

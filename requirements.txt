@@ -7,10 +7,10 @@
 # Please use the appropriate requirements file:
 
 # For Windows/Development (with NVIDIA GPU):
-#   pip install -r requirements-windows.txt
+#   pip install -r requirements.windows.txt
 
 # For RDK X5 Platform (with BPU acceleration):
-#   pip3 install -r requirements-rdk.txt --break-system-packages
+#   pip3 install -r requirements.rdk.txt --break-system-packages
 
 # ============================================================================
 # Quick Install
@@ -18,12 +18,12 @@
 
 # Windows with GPU:
 #   1. Install NVIDIA drivers and CUDA
-#   2. pip install -r requirements-windows.txt
+#   2. pip install -r requirements.windows.txt
 #   3. python check_gpu.py  # Verify GPU is detected
 #   4. python main.py --source video.mp4
 
 # RDK X5:
-#   1. pip3 install -r requirements-rdk.txt --break-system-packages
+#   1. pip3 install -r requirements.rdk.txt --break-system-packages
 #   2. python3 -c "from hobot_dnn import pyeasy_dnn; print('BPU OK')"
 #   3. python3 main.py --source 0
 

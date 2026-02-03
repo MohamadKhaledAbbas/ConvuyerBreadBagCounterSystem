@@ -112,8 +112,8 @@ class TrackedObject:
         dx = last_pos[0] - first_pos[0]
         dy = last_pos[1] - first_pos[1]
 
-        return (dx / (n - 1), dy / (n - 1))
-    
+        return dx / (n - 1), dy / (n - 1)
+
     def update(self, detection: Detection):
         """Update track with new detection."""
         self.bbox = detection.bbox
@@ -303,8 +303,8 @@ class ConveyorTracker(ITracker):
                 unmatched_tracks.discard(i)
                 unmatched_dets.discard(j)
         
-        return (matches, unmatched_tracks, unmatched_dets)
-    
+        return matches, unmatched_tracks, unmatched_dets
+
     def _get_exit_direction(self, track: TrackedObject) -> Optional[str]:
         """
         Determine which direction track is exiting.

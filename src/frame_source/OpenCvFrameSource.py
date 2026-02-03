@@ -154,8 +154,8 @@ class OpenCVFrameSource(FrameSource):
             else:
                 logger.info(f"[OpenCVFrameSource] Processed {self._frame_count} frames")
         
-        return (frame, inter_frame_ms)
-    
+        return frame, inter_frame_ms
+
     def frames(self) -> Iterator[Tuple[np.ndarray, float]]:
         """
         Yield frames from the video source.

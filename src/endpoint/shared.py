@@ -1,11 +1,13 @@
 ﻿"""Shared Resources - Updated for V2."""
 from pathlib import Path
+from typing import Optional
 from fastapi.templating import Jinja2Templates
 from src.logging.Database import DatabaseManager
 from src.config.config_manager import get_config
 from src.utils.AppLogging import logger
-_db_instance = None
-_templates_instance = None
+
+_db_instance: Optional[DatabaseManager] = None
+_templates_instance: Optional[Jinja2Templates] = None
 def init_shared_resources():
     global _db_instance, _templates_instance
     config = get_config()

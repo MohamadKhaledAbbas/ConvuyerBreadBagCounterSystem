@@ -60,10 +60,11 @@ class AnalyticsService:
             bag_type_id = ev["bag_type_id"]
             if current is None or bag_type_id != current["bag_type_id"]:
                 if current:
-                    if current["count"] >= self.config.noise_threshold:
+                    current_count = current.get("count", 0)
+                    if current_count >= self.config.noise_threshold:
                         runs.append(current)
                     else:
-                        noise_count += current["count"]
+                        noise_count += current_count
                         if noise_start is None or current["start"] < noise_start:
                             noise_start = current["start"]
                         if noise_end is None or current["end"] > noise_end:
@@ -71,12 +72,13 @@ class AnalyticsService:
                 current = {"bag_type_id": bag_type_id, "class_name": ev["bag_type"], "arabic_name": ev["arabic_name"], "thumb": ev["thumb"], "weight": ev["weight"], "start": ev["timestamp"], "end": ev["timestamp"], "count": 1}
             else:
                 current["end"] = ev["timestamp"]
-                current["count"] += 1
+                current["count"] = current.get("count", 0) + 1
         if current:
-            if current["count"] >= self.config.noise_threshold:
+            current_count = current.get("count", 0)
+            if current_count >= self.config.noise_threshold:
                 runs.append(current)
             else:
-                noise_count += current["count"]
+                noise_count += current_count
         merged = []
         last = None
         for run in runs:

@@ -28,9 +28,9 @@ from src.utils.platform import IS_RDK
 
 # Only import ROS2 dependencies on RDK platform
 if IS_RDK:
-    from launch import LaunchDescription
-    from launch.actions import SetEnvironmentVariable
-    from launch_ros.actions import Node
+    from launch import LaunchDescription # type: ignore
+    from launch.actions import SetEnvironmentVariable # type: ignore
+    from launch_ros.actions import Node # type: ignore
 
     from src.logging.Database import DatabaseManager
     from src import constants
@@ -48,10 +48,10 @@ def get_rtsp_config() -> dict:
         db = DatabaseManager(db_path)
 
         config = {
-            'username': db.get_config_value(constants.rtsp_username, 'admin'),
-            'password': db.get_config_value(constants.rtsp_password, ''),
-            'host': db.get_config_value(constants.rtsp_host, '192.168.1.100'),
-            'port': db.get_config_value(constants.rtsp_port, '554'),
+            'username': db.get_config(constants.rtsp_username, 'admin'),
+            'password': db.get_config(constants.rtsp_password, ''),
+            'host': db.get_config(constants.rtsp_host, '192.168.1.100'),
+            'port': db.get_config(constants.rtsp_port, '554'),
         }
 
         db.close()

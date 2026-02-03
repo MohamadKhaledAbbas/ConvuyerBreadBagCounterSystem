@@ -289,7 +289,7 @@ class ROICollectorService(IROICollector):
         # Quality score (using sharpness as primary metric)
         quality = sharpness
 
-        return (quality, True, "ok")
+        return quality, True, "ok"
 
     def _maybe_cleanup(self):
         """Periodic cleanup of stale collections."""

@@ -12,7 +12,7 @@ Based on V1 logic with enhanced code quality and maintainability.
 """
 
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from typing import Dict, Any
 
@@ -75,7 +75,7 @@ async def health() -> Dict[str, Any]:
     """
     return {
         "status": "healthy",
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
 

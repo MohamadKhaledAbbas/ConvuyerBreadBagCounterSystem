@@ -20,8 +20,8 @@ class Detection:
     def center(self) -> Tuple[int, int]:
         """Return center point of bbox."""
         x1, y1, x2, y2 = self.bbox
-        return ((x1 + x2) // 2, (y1 + y2) // 2)
-    
+        return (x1 + x2) // 2, (y1 + y2) // 2
+
     @property
     def area(self) -> int:
         """Return area of bbox."""

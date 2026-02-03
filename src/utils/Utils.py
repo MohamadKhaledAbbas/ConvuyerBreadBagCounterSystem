@@ -87,7 +87,7 @@ def compute_centroid(box: Tuple[float, float, float, float]) -> Tuple[float, flo
     Returns:
         (cx, cy) centroid coordinates
     """
-    return ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
+    return (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
 
 
 def compute_sharpness(image: np.ndarray) -> float:

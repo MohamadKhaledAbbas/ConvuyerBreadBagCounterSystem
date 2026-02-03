@@ -31,6 +31,7 @@ def main():
         import uvicorn
     except ImportError:
         print("ERROR: uvicorn not installed. Run: pip install uvicorn")
+        uvicorn = None
         sys.exit(1)
 
     print("=" * 60)

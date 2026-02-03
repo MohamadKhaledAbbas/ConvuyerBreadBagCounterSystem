@@ -46,7 +46,7 @@ class AppConfig:
     APP_VERSION: str = "2.0.0"
     
     # Video source for testing
-    video_path: str = os.getenv("VIDEO_PATH", "D:\\Recordings\\New_Recordings\\Wheatberry_Green_08_09.mp4")
+    video_path: str = os.getenv("VIDEO_PATH", "D:\\Recordings\\New_Recordings\\Conveyor.mp4")
     
     # Platform-specific model paths
     detection_model: str = os.getenv(
