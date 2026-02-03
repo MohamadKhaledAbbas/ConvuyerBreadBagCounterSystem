@@ -53,7 +53,19 @@ class UltralyticsDetector(BaseDetector):
             self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         
         logger.info(f"[UltralyticsDetector] Model loaded, device: {self.device}")
-    
+
+        # Suppress YOLO verbose logging
+        import logging as log
+        log.getLogger('ultralytics').setLevel(log.WARNING)
+
+        # GPU warmup for optimal performance
+        if self.device == 'cuda':
+            logger.info("[UltralyticsDetector] Warming up GPU...")
+            dummy_frame = np.zeros((640, 640, 3), dtype=np.uint8)
+            for _ in range(3):
+                self.model(dummy_frame, device=self.device, verbose=False)
+            logger.info("[UltralyticsDetector] GPU warmup complete")
+
     def detect(self, frame: np.ndarray) -> List[Detection]:
         """
         Detect bread bags in a frame using Ultralytics YOLO.

@@ -1,0 +1,89 @@
+# Requirements for RDK X5 Platform
+# Conveyor Bread Bag Counter System v2
+# Platform: Horizon RDK X5 with BPU acceleration
+
+# ============================================================================
+# Core Dependencies
+# ============================================================================
+
+# Computer Vision
+opencv-python>=4.8.0,<5.0.0
+numpy>=1.24.0,<2.0.0
+
+# Scientific Computing (for Hungarian algorithm in tracking)
+scipy>=1.10.0,<2.0.0
+
+# ============================================================================
+# Web API - Analytics Endpoint
+# ============================================================================
+
+# FastAPI Framework
+fastapi>=0.100.0,<1.0.0
+uvicorn[standard]>=0.23.0,<1.0.0
+
+# Templating Engine
+jinja2>=3.1.0,<4.0.0
+
+# Data Validation
+pydantic>=2.0.0,<3.0.0
+
+# File Upload Support
+python-multipart>=0.0.6
+
+# ============================================================================
+# Database
+# ============================================================================
+
+# SQLite3 - Built into Python, no installation needed
+
+# ============================================================================
+# RDK-Specific Dependencies (Pre-installed on RDK)
+# ============================================================================
+
+# These are typically pre-installed on RDK X5, DO NOT pip install:
+# - hobot_dnn (BPU inference engine) - SYSTEM PACKAGE
+# - rclpy (ROS2 Python client) - SYSTEM PACKAGE
+# - launch, launch_ros (ROS2 launch system) - SYSTEM PACKAGES
+
+# To verify RDK packages:
+# python3 -c "from hobot_dnn import pyeasy_dnn; print('BPU OK')"
+# python3 -c "import rclpy; print('ROS2 OK')"
+
+# ============================================================================
+# RDK Installation Notes
+# ============================================================================
+
+# 1. Install system dependencies first:
+#    sudo apt-get update
+#    sudo apt-get install python3-pip
+
+# 2. Install Python packages:
+#    pip3 install -r requirements-rdk.txt --break-system-packages
+
+# 3. Verify BPU models exist:
+#    ls data/model/*.bin
+
+# 4. Verify hobot_dnn is available:
+#    python3 -c "from hobot_dnn import pyeasy_dnn as dnn; print('BPU:', dnn)"
+
+# ============================================================================
+# Performance Notes
+# ============================================================================
+
+# RDK X5 BPU Performance:
+# - Detection: 30-40ms (BPU accelerated)
+# - Classification: 8-10ms (BPU accelerated)
+# - Expected FPS: 17-21 FPS
+
+# If using ROS2:
+# - Frame source: /image topic subscriber
+# - Count publisher: /bag_count topic
+
+# ============================================================================
+# NOT NEEDED on RDK (Windows only)
+# ============================================================================
+
+# torch - Not used on RDK (uses BPU instead)
+# torchvision - Not used on RDK
+# ultralytics - Not used on RDK (uses .bin models)
+# Pillow - Not needed

@@ -1,0 +1,81 @@
+# Requirements for Windows/Development Environment
+# Conveyor Bread Bag Counter System v2
+# Platform: Windows with NVIDIA GPU (CUDA)
+
+# ============================================================================
+# Core Dependencies
+# ============================================================================
+
+# Computer Vision
+opencv-python>=4.8.0,<5.0.0
+numpy>=1.24.0,<2.0.0
+
+# ============================================================================
+# Machine Learning - Ultralytics YOLO
+# ============================================================================
+
+# YOLO Framework
+ultralytics>=8.0.0,<9.0.0
+
+# PyTorch with CUDA Support (CRITICAL for GPU performance)
+# Install with: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+torch>=2.0.0,<3.0.0
+torchvision>=0.15.0,<1.0.0
+
+# Scientific Computing (for Hungarian algorithm in tracking)
+scipy>=1.10.0,<2.0.0
+
+# ============================================================================
+# Web API - Analytics Endpoint
+# ============================================================================
+
+# FastAPI Framework
+fastapi>=0.100.0,<1.0.0
+uvicorn[standard]>=0.23.0,<1.0.0
+
+# Templating Engine
+jinja2>=3.1.0,<4.0.0
+
+# Data Validation
+pydantic>=2.0.0,<3.0.0
+
+# File Upload Support
+python-multipart>=0.0.6
+
+# ============================================================================
+# Database
+# ============================================================================
+
+# SQLite3 - Built into Python, no installation needed
+
+# ============================================================================
+# Optional: Image Processing
+# ============================================================================
+
+# Pillow (for image handling, if needed)
+# Pillow>=9.0.0,<11.0.0
+
+# ============================================================================
+# Development Tools (Optional)
+# ============================================================================
+
+# pytest>=7.0.0  # For testing
+# black>=23.0.0  # Code formatting
+# flake8>=6.0.0  # Linting
+
+# ============================================================================
+# Notes
+# ============================================================================
+
+# CUDA Setup:
+# 1. Install NVIDIA GPU drivers
+# 2. Verify CUDA: python -c "import torch; print(torch.cuda.is_available())"
+# 3. If False, reinstall PyTorch with CUDA:
+#    pip uninstall torch torchvision
+#    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+
+# Installation:
+# pip install -r requirements-windows.txt
+
+# Verify:
+# python check_gpu.py

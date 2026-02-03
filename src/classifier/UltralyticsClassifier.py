@@ -54,7 +54,19 @@ class UltralyticsClassifier(BaseClassifier):
             self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         
         logger.info(f"[UltralyticsClassifier] Model loaded, device: {self.device}")
-    
+
+        # Suppress YOLO verbose logging
+        import logging as log
+        log.getLogger('ultralytics').setLevel(log.WARNING)
+
+        # GPU warmup for optimal performance
+        if self.device == 'cuda':
+            logger.info("[UltralyticsClassifier] Warming up GPU...")
+            dummy_roi = np.zeros((224, 224, 3), dtype=np.uint8)
+            for _ in range(3):
+                self.model(dummy_roi, device=self.device, verbose=False)
+            logger.info("[UltralyticsClassifier] GPU warmup complete")
+
     def classify(self, roi: np.ndarray) -> ClassificationResult:
         """
         Classify a single ROI image.

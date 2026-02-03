@@ -1,33 +1,59 @@
-# Core dependencies
-opencv-python>=4.8.0
-numpy>=1.24.0
+# Conveyor Bread Bag Counter System v2 - Requirements
+# ============================================================================
+# Platform-Specific Installation
+# ============================================================================
 
-# Ultralytics YOLO (for Windows/development)
-ultralytics>=8.0.0
+# This project has different dependencies for different platforms.
+# Please use the appropriate requirements file:
 
-# PyTorch (required by ultralytics)
-torch>=2.0.0
-torchvision>=0.15.0
+# For Windows/Development (with NVIDIA GPU):
+#   pip install -r requirements-windows.txt
 
-# Scientific computing
-scipy>=1.10.0
+# For RDK X5 Platform (with BPU acceleration):
+#   pip3 install -r requirements-rdk.txt --break-system-packages
 
-# Web API (FastAPI endpoint)
-fastapi>=0.100.0
-uvicorn>=0.23.0
-jinja2>=3.1.0
-pydantic>=2.0.0
-python-multipart>=0.0.6
+# ============================================================================
+# Quick Install
+# ============================================================================
 
-# Database
-# sqlite3 is built into Python
+# Windows with GPU:
+#   1. Install NVIDIA drivers and CUDA
+#   2. pip install -r requirements-windows.txt
+#   3. python check_gpu.py  # Verify GPU is detected
+#   4. python main.py --source video.mp4
 
-# Utilities
-Pillow>=9.0.0
+# RDK X5:
+#   1. pip3 install -r requirements-rdk.txt --break-system-packages
+#   2. python3 -c "from hobot_dnn import pyeasy_dnn; print('BPU OK')"
+#   3. python3 main.py --source 0
 
-# Optional: ROS2 dependencies (install separately on RDK)
-# rclpy
-# hbmem_msgs
+# ============================================================================
+# Key Differences
+# ============================================================================
 
-# Optional: BPU support (RDK only)
-# hobot_dnn (pre-installed on RDK)
+# Windows:
+#   - Uses Ultralytics YOLO (.pt models)
+#   - Requires PyTorch with CUDA
+#   - GPU inference (CUDA)
+#   - OpenCV camera/video
+#   - Expected FPS: 15-18
+
+# RDK X5:
+#   - Uses BPU inference (.bin models)
+#   - No PyTorch needed (uses hobot_dnn)
+#   - BPU inference (dedicated AI chip)
+#   - ROS2 image topics
+#   - Expected FPS: 17-21
+
+# ============================================================================
+# Troubleshooting
+# ============================================================================
+
+# Windows GPU not detected:
+#   pip uninstall torch torchvision
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+
+# RDK BPU not available:
+#   Check if hobot_dnn is installed (system package)
+#   python3 -c "from hobot_dnn import pyeasy_dnn"
+

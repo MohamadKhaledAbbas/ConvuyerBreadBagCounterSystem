@@ -37,7 +37,8 @@ from src.detection.BaseDetection import BaseDetector, Detection
 from src.detection.DetectorFactory import DetectorFactory
 
 from src.classifier.BaseClassifier import BaseClassifier
-from src.classifier.ClassifierService import ClassifierService, ROIQualityConfig
+from src.classifier.ROICollectorService import ROICollectorService, ROIQualityConfig
+from src.classifier.ClassificationWorker import ClassificationWorker
 from src.classifier.ClassifierFactory import ClassifierFactory
 
 from src.tracking.ConveyorTracker import ConveyorTracker, TrackedObject, TrackEvent
@@ -132,7 +133,8 @@ class ConveyorCounterApp:
         self._frame_source = frame_source
         self._detector = detector
         self._classifier = classifier
-        self._classifier_service: Optional[ClassifierService] = None
+        self._roi_collector: Optional[ROICollectorService] = None  # Collects ROIs only
+        self._classification_worker: Optional[ClassificationWorker] = None  # Async classification
         self._tracker: Optional[ConveyorTracker] = None
         self._smoother: Optional[BidirectionalSmoother] = None
         
@@ -192,21 +194,26 @@ class ConveyorCounterApp:
         if self._classifier is None:
             self._classifier = ClassifierFactory.create(config=self.app_config)
         
-        # Classifier service
+        # ROI Collector (collects ROIs during tracking, doesn't classify)
         quality_config = ROIQualityConfig(
             min_sharpness=self.tracking_config.min_sharpness,
             min_brightness=self.tracking_config.min_mean_brightness,
             max_brightness=self.tracking_config.max_mean_brightness
         )
         
-        self._classifier_service = ClassifierService(
-            classifier=self._classifier,
+        self._roi_collector = ROICollectorService(
             quality_config=quality_config,
-            min_evidence_samples=self.tracking_config.min_candidates_for_classification,
-            min_vote_ratio=self.tracking_config.evidence_ratio_threshold,
-            min_confidence=self.tracking_config.high_confidence_threshold
+            max_rois_per_track=10
         )
-        
+
+        # Classification Worker (async classification in background thread)
+        self._classification_worker = ClassificationWorker(
+            classifier=self._classifier,
+            max_queue_size=100,
+            name="ClassificationWorker"
+        )
+        self._classification_worker.start()
+
         # Tracker
         self._tracker = ConveyorTracker(config=self.tracking_config)
         
@@ -265,16 +272,22 @@ class ConveyorCounterApp:
         )
         track_time = (time.perf_counter() - track_start) * 1000
         
-        # 3. Process detections for classification
-        classify_start = time.perf_counter()
+        # 3. Collect ROIs for confirmed tracks (don't classify yet!)
+        collect_start = time.perf_counter()
+        rois_collected = 0
+
         for track in self._tracker.get_confirmed_tracks():
-            self._classifier_service.process_detection(
+            # Only collect ROI (quality check + storage)
+            # NO classification here - that happens after track completes
+            if self._roi_collector.collect_roi(
                 track_id=track.track_id,
                 frame=frame,
                 bbox=track.bbox
-            )
-        classify_time = (time.perf_counter() - classify_start) * 1000
-        
+            ):
+                rois_collected += 1
+
+        collect_time = (time.perf_counter() - collect_start) * 1000
+
         # 4. Handle completed tracks
         completed_events = self._tracker.get_completed_events()
         
@@ -303,53 +316,74 @@ class ConveyorCounterApp:
         return frame
     
     def _handle_track_completed(self, event: TrackEvent, frame: np.ndarray):
-        """Handle a completed track - classify and count."""
+        """
+        Handle a completed track - submit for async classification.
+
+        NEW LOGIC: Don't classify here! Submit best ROI to worker thread.
+        """
         track_id = event.track_id
         
-        # Get final classification
-        result = self._classifier_service.get_final_classification(track_id)
-        
-        if result is None:
-            logger.warning(f"[ConveyorCounterApp] Track {track_id} completed without classification")
+        # Get best ROI from collector
+        best_roi_data = self._roi_collector.get_best_roi(track_id)
+
+        if best_roi_data is None:
+            logger.warning(f"[ConveyorCounterApp] Track {track_id} completed without ROIs")
+            self._roi_collector.remove_track(track_id)
             return
         
-        class_name, confidence, vote_ratio, best_roi, candidates = result
-        
-        # Log structured event
-        self._structured_logger.classification_result(
-            track_id=track_id,
-            label=class_name,
-            confidence=confidence,
-            candidates_count=len(candidates),
-            metadata={'vote_ratio': vote_ratio}
+        best_roi, quality = best_roi_data
+
+        logger.info(
+            f"[ConveyorCounterApp] Track {track_id} completed, submitting ROI "
+            f"(quality={quality:.1f}) for async classification"
         )
-        
-        # Add to smoother
-        smoothed_batch = self._smoother.add_classification(
-            track_id=track_id,
-            class_name=class_name,
-            confidence=confidence,
-            vote_ratio=vote_ratio
-        )
-        
-        # If batch was finalized, process smoothed results
-        if smoothed_batch:
-            for record in smoothed_batch:
-                self._record_count(record, best_roi)
-        else:
-            # Record immediately for now (will be retroactively smoothed)
-            record = ClassificationRecord(
+
+        # Submit to async classification worker (non-blocking!)
+        def classification_callback(track_id: int, class_name: str, confidence: float):
+            """Callback when classification completes."""
+            # This runs in worker thread - keep it fast!
+            logger.info(
+                f"[ConveyorCounterApp] Track {track_id} classified as {class_name} "
+                f"({confidence:.2f})"
+            )
+
+            # Add to smoother (thread-safe)
+            smoothed_batch = self._smoother.add_classification(
                 track_id=track_id,
                 class_name=class_name,
                 confidence=confidence,
-                vote_ratio=vote_ratio,
-                timestamp=time.time()
+                vote_ratio=1.0  # Single classification, full confidence
             )
-            self._record_count(record, best_roi)
-        
-        # Clean up classifier service state
-        self._classifier_service.remove_track(track_id)
-    
+
+            # Process any finalized batch
+            if smoothed_batch:
+                for record in smoothed_batch:
+                    self._record_count(record, best_roi)
+            else:
+                # Record immediately
+                record = ClassificationRecord(
+                    track_id=track_id,
+                    class_name=class_name,
+                    confidence=confidence,
+                    vote_ratio=1.0,
+                    timestamp=time.time()
+                )
+                self._record_count(record, best_roi)
+
+        # Submit job to worker (returns immediately)
+        submitted = self._classification_worker.submit_job(
+            track_id=track_id,
+            roi=best_roi,
+            bbox_history=event.bbox_history,
+            callback=classification_callback
+        )
+
+        if not submitted:
+            logger.error(f"[ConveyorCounterApp] Failed to submit track {track_id} (queue full)")
+
+        # Clean up ROI collection
+        self._roi_collector.remove_track(track_id)
+
     def _record_count(self, record: ClassificationRecord, roi: Optional[np.ndarray]):
         """Record a counted item."""
         # Update counts (thread-safe)
@@ -487,7 +521,9 @@ class ConveyorCounterApp:
                 
                 # Display
                 if self.enable_display:
-                    cv2.imshow("Conveyor Counter", annotated)
+                    # Resize for faster display (720p -> 960x540)
+                    display_frame = cv2.resize(annotated, (960, 540))
+                    cv2.imshow("Conveyor Counter", display_frame)
                     key = cv2.waitKey(1) & 0xFF
                     if key == ord('q'):
                         self._running = False
@@ -527,12 +563,24 @@ class ConveyorCounterApp:
         if self._detector is not None:
             self._detector.cleanup()
         
-        if self._classifier_service is not None:
-            self._classifier_service.cleanup()
-        
+        # Stop classification worker and wait for pending jobs
+        if self._classification_worker is not None:
+            logger.info("[ConveyorCounterApp] Stopping classification worker...")
+            stats = self._classification_worker.get_statistics()
+            logger.info(f"  Worker stats: {stats}")
+            self._classification_worker.stop(timeout=10.0)
+
+        # Clean up ROI collector
+        if self._roi_collector is not None:
+            self._roi_collector.cleanup()
+
+        # Clean up classifier
+        if self._classifier is not None:
+            self._classifier.cleanup()
+
         if self._tracker is not None:
-            self._tracker.cleanup()
-        
+            logger.info(f"[ConveyorCounterApp] Tracked objects: {len(self._tracker.tracks)}")
+
         if self._db is not None:
             self._db.close()
         

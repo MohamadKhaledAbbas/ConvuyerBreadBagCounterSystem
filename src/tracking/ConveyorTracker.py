@@ -20,6 +20,7 @@ Production Features:
 
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Set
+from collections import deque
 from enum import Enum
 import time
 import numpy as np
@@ -64,10 +65,10 @@ class TrackedObject:
     hits: int = 1  # Consecutive detections
     time_since_update: int = 0  # Frames since last detection
     
-    # Position history for motion estimation
-    position_history: List[Tuple[int, int]] = field(default_factory=list)
-    bbox_history: List[Tuple[int, int, int, int]] = field(default_factory=list)
-    
+    # Position history for motion estimation (using deque for efficient memory management)
+    position_history: deque = field(default_factory=lambda: deque(maxlen=30))
+    bbox_history: deque = field(default_factory=lambda: deque(maxlen=30))
+
     # Timestamps
     created_at: float = field(default_factory=time.time)
     last_seen_at: float = field(default_factory=time.time)
@@ -94,11 +95,22 @@ class TrackedObject:
         
         # Use last few positions for smoothed velocity
         n = min(5, len(self.position_history))
-        recent = self.position_history[-n:]
-        
-        dx = recent[-1][0] - recent[0][0]
-        dy = recent[-1][1] - recent[0][1]
-        
+
+        # Convert deque to list for slicing, or access elements directly
+        # More efficient: access first and last of recent n elements
+        if n == len(self.position_history):
+            # Use all elements
+            first_pos = self.position_history[0]
+            last_pos = self.position_history[-1]
+        else:
+            # Get last n elements by converting to list
+            recent = list(self.position_history)[-n:]
+            first_pos = recent[0]
+            last_pos = recent[-1]
+
+        dx = last_pos[0] - first_pos[0]
+        dy = last_pos[1] - first_pos[1]
+
         return (dx / (n - 1), dy / (n - 1))
     
     def update(self, detection: Detection):
@@ -109,15 +121,10 @@ class TrackedObject:
         self.time_since_update = 0
         self.last_seen_at = time.time()
         
-        # Update history
+        # Update history (deque automatically maintains maxlen)
         self.position_history.append(self.center)
         self.bbox_history.append(self.bbox)
-        
-        # Limit history size
-        if len(self.position_history) > 30:
-            self.position_history = self.position_history[-30:]
-            self.bbox_history = self.bbox_history[-30:]
-    
+
     def predict(self) -> Tuple[int, int, int, int]:
         """
         Predict next position based on velocity.
@@ -448,8 +455,8 @@ class ConveyorTracker:
                 event = TrackEvent(
                     track_id=track_id,
                     event_type=event_type,
-                    bbox_history=track.bbox_history.copy(),
-                    position_history=track.position_history.copy(),
+                    bbox_history=list(track.bbox_history),  # Convert deque to list
+                    position_history=list(track.position_history),  # Convert deque to list
                     total_frames=track.age + track.hits,
                     created_at=track.created_at,
                     ended_at=time.time(),
