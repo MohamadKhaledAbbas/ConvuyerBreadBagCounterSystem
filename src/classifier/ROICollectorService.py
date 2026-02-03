@@ -8,14 +8,15 @@ NEW ARCHITECTURE:
 This allows main loop to run at full speed without blocking on classification.
 """
 
+import time
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple
-import numpy as np
-import time
 
+import numpy as np
+
+from src.classifier.IClassificationComponents import IROICollector
 from src.utils.AppLogging import logger
 from src.utils.Utils import compute_sharpness, compute_brightness
-from src.classifier.IClassificationComponents import IROICollector
 
 
 @dataclass

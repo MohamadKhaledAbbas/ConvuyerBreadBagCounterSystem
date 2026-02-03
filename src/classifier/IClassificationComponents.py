@@ -6,6 +6,7 @@ Defines contracts for ROI collection and async classification workers.
 
 from abc import ABC, abstractmethod
 from typing import Optional, Tuple, List, Callable, Dict
+
 import numpy as np
 
 

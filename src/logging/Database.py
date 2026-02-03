@@ -9,13 +9,14 @@ Production-quality database layer with:
 - Comprehensive error handling
 """
 import sqlite3
-import os
-from pathlib import Path
-from datetime import datetime
-from typing import Optional, List, Dict, Any
-from contextlib import contextmanager
 import threading
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Optional, List, Dict, Any
+
 from src.utils.AppLogging import logger
+
+
 class DatabaseManager:
     """Enhanced database manager with V2 schema support."""
     def __init__(self, db_path: str):
@@ -108,7 +109,6 @@ class DatabaseManager:
     def _initialize_default_config(self):
         """Initialize default configuration values if they don't exist."""
         from src.constants import (
-            show_ui_screen_key,
             is_development_key,
             rtsp_username,
             rtsp_password,
@@ -121,7 +121,6 @@ class DatabaseManager:
         
         # Default values for config keys
         default_config = {
-            show_ui_screen_key: '0',
             is_development_key: '0',
             rtsp_username: 'admin',
             rtsp_password: 'a1234567',

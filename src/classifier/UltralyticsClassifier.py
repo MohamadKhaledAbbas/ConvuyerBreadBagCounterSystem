@@ -3,6 +3,7 @@ Ultralytics-based classifier for Windows/development platforms.
 """
 
 from typing import List, Tuple, Optional
+
 import numpy as np
 
 from src.classifier.BaseClassifier import BaseClassifier, ClassificationResult

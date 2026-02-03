@@ -3,12 +3,12 @@ BPU-accelerated classifier for RDK platform.
 """
 
 from typing import List, Tuple
-import numpy as np
+
 import cv2
+import numpy as np
 
 from src.classifier.BaseClassifier import BaseClassifier, ClassificationResult
 from src.utils.AppLogging import logger
-
 
 try:
     from hobot_dnn import pyeasy_dnn as dnn

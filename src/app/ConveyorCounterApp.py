@@ -16,39 +16,34 @@ Production Notes:
 - Memory-efficient frame processing
 """
 
-import time
-import cv2
-import signal
 import os
-from datetime import datetime
-from dataclasses import dataclass, field
-from typing import Optional, Dict, Callable
-import numpy as np
+import signal
 import threading
+import time
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Optional, Dict, Callable
 
-from src.config.settings import AppConfig
-from src.config.tracking_config import TrackingConfig
-from src.utils.AppLogging import logger
-
-from src.frame_source.FrameSourceFactory import FrameSourceFactory
-from src.frame_source.FrameSource import FrameSource
-
-from src.detection.BaseDetection import BaseDetector
-from src.detection.DetectorFactory import DetectorFactory
-
-from src.classifier.BaseClassifier import BaseClassifier
-from src.classifier.ROICollectorService import ROICollectorService, ROIQualityConfig
-from src.classifier.ClassificationWorker import ClassificationWorker
-from src.classifier.ClassifierFactory import ClassifierFactory
-
-from src.tracking.ConveyorTracker import ConveyorTracker
-from src.tracking.BidirectionalSmoother import BidirectionalSmoother, ClassificationRecord
+import cv2
+import numpy as np
 
 # Import modular pipeline components
 from src.app.pipeline_core import PipelineCore
 from src.app.pipeline_visualizer import PipelineVisualizer
-
+from src.classifier.BaseClassifier import BaseClassifier
+from src.classifier.ClassificationWorker import ClassificationWorker
+from src.classifier.ClassifierFactory import ClassifierFactory
+from src.classifier.ROICollectorService import ROICollectorService, ROIQualityConfig
+from src.config.settings import AppConfig
+from src.config.tracking_config import TrackingConfig
+from src.detection.BaseDetection import BaseDetector
+from src.detection.DetectorFactory import DetectorFactory
+from src.frame_source.FrameSource import FrameSource
+from src.frame_source.FrameSourceFactory import FrameSourceFactory
 from src.logging.Database import DatabaseManager
+from src.tracking.BidirectionalSmoother import BidirectionalSmoother, ClassificationRecord
+from src.tracking.ConveyorTracker import ConveyorTracker
+from src.utils.AppLogging import logger
 
 
 @dataclass

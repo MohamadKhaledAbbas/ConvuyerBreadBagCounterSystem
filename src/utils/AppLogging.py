@@ -4,13 +4,13 @@ Centralized logging configuration for ConveyerBreadBagCounterSystem.
 Provides both standard logging and structured logging for metrics.
 """
 
-import os
-import sys
 import json
 import logging
+import os
+import sys
 from datetime import datetime
-from typing import Dict, Any, Optional, List
 from pathlib import Path
+from typing import Dict, Optional, List
 
 
 def setup_logging(log_dir: str = "data/logs") -> logging.Logger:

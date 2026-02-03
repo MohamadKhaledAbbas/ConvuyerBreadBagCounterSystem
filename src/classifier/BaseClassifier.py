@@ -5,6 +5,7 @@ Base classifier interface for bread bag type classification.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple
+
 import numpy as np
 
 

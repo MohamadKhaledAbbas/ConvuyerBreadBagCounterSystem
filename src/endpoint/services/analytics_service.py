@@ -1,10 +1,14 @@
 ﻿"""Analytics Service - Refactored with Repository Pattern."""
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
+
 from fastapi import HTTPException
-from src.endpoint.repositories.analytics_repository import AnalyticsRepository
+
 from src.config.config_manager import get_config
+from src.endpoint.repositories.analytics_repository import AnalyticsRepository
 from src.utils.AppLogging import logger
+
+
 class AnalyticsService:
     def __init__(self, repository: AnalyticsRepository):
         self.repo = repository

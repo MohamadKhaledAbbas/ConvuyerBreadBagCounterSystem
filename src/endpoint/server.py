@@ -12,13 +12,13 @@ Based on V1 logic with enhanced code quality and maintainability.
 """
 
 import os
-from datetime import datetime, timezone
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Dict, Any
 
 from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from src.endpoint.routes import analytics
 from src.endpoint.shared import init_shared_resources, cleanup_shared_resources

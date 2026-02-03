@@ -16,8 +16,8 @@ Production Notes:
 - Support for both main stream and substream
 """
 
-import sys
 import os
+import sys
 
 # Add project root to path for imports
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

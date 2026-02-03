@@ -9,11 +9,11 @@ Manages automatic cleanup of processed segment files based on:
 """
 
 import os
-import time
 import threading
+import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, List, Set
-from dataclasses import dataclass, field
 
 from src.utils.AppLogging import logger
 

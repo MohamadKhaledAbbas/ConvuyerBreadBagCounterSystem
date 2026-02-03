@@ -6,11 +6,12 @@ Follows Single Responsibility Principle.
 """
 
 from typing import List, Optional, Callable, Tuple
+
 import numpy as np
 
+from src.classifier.IClassificationComponents import IROICollector, IClassificationWorker
 from src.detection.BaseDetection import BaseDetector, Detection
 from src.tracking.ITracker import ITracker, TrackedObject, TrackEvent
-from src.classifier.IClassificationComponents import IROICollector, IClassificationWorker
 from src.utils.AppLogging import logger
 
 

@@ -3,11 +3,11 @@ BPU-accelerated detector for RDK platform using Horizon .bin models.
 """
 
 from typing import List, Tuple
+
 import numpy as np
 
 from src.detection.BaseDetection import BaseDetector, Detection
 from src.utils.AppLogging import logger
-
 
 try:
     from hobot_dnn import pyeasy_dnn as dnn

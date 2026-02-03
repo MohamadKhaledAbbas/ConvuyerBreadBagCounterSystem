@@ -5,6 +5,7 @@ Base detector interface for bread bag detection.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import List, Tuple
+
 import numpy as np
 
 

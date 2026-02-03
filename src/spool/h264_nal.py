@@ -18,9 +18,9 @@ Key NAL unit types for our purposes:
 - 8: PPS (picture parameter set)
 """
 
+from dataclasses import dataclass
 from enum import IntEnum
 from typing import List, Tuple, Optional
-from dataclasses import dataclass
 
 
 class NALUnitType(IntEnum):

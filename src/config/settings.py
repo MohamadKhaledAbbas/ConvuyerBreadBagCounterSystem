@@ -4,11 +4,11 @@ Application settings for ConveyerBreadBagCounterSystem.
 Platform-aware configuration with model paths and runtime settings.
 """
 
+import hashlib
 import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, Any, Optional
-import hashlib
 
 from src.utils.platform import IS_RDK
 

@@ -14,18 +14,14 @@ Features:
 - Configurable playback modes (realtime, fast-forward, catchup)
 """
 
-import os
-import time
 import threading
-from typing import Optional, Generator
+import time
 from dataclasses import dataclass
 from enum import Enum
-from pathlib import Path
+from typing import Optional
 
-from src.utils.platform import is_rdk_platform
-from src.utils.AppLogging import logger
-from src.spool.segment_io import SegmentReader, FrameRecord
 from src.spool.retention import RetentionPolicy, RetentionConfig
+from src.spool.segment_io import SegmentReader, FrameRecord
 from src.spool.spool_utils import (
     ProcessorState,
     save_processor_state,
@@ -33,6 +29,8 @@ from src.spool.spool_utils import (
     AdaptivePacer,
     format_structured_log
 )
+from src.utils.AppLogging import logger
+from src.utils.platform import is_rdk_platform
 
 # ROS2 imports (conditional)
 if is_rdk_platform():

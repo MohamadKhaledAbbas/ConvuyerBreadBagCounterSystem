@@ -1,9 +1,11 @@
 ﻿"""Shared Resources - Updated for V2."""
 from pathlib import Path
 from typing import Optional
+
 from fastapi.templating import Jinja2Templates
-from src.logging.Database import DatabaseManager
+
 from src.config.config_manager import get_config
+from src.logging.Database import DatabaseManager
 from src.utils.AppLogging import logger
 
 _db_instance: Optional[DatabaseManager] = None

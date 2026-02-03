@@ -15,15 +15,14 @@ Features:
 """
 
 import time
-import threading
-from typing import Optional
 from dataclasses import dataclass
+from typing import Optional
 
-from src.utils.platform import is_rdk_platform
-from src.utils.AppLogging import logger
-from src.spool.segment_io import SegmentWriter, FrameRecord
 from src.spool.h264_nal import extract_sps_pps, is_idr_frame
+from src.spool.segment_io import SegmentWriter, FrameRecord
 from src.spool.spool_utils import format_structured_log
+from src.utils.AppLogging import logger
+from src.utils.platform import is_rdk_platform
 
 # ROS2 imports (conditional)
 if is_rdk_platform():

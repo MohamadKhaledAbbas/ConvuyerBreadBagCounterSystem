@@ -14,16 +14,16 @@ Frame Outputs:
 Only available on RDK platform.
 """
 
+import threading
 import time
+from dataclasses import dataclass
+from typing import Iterator, Tuple, Optional, NamedTuple
+
 import cv2
 import numpy as np
-import threading
-from typing import Iterator, Tuple, Optional, NamedTuple
-from dataclasses import dataclass
 
 from src.frame_source.FrameSource import FrameSource
 from src.utils.AppLogging import logger
-
 
 try:
     import rclpy

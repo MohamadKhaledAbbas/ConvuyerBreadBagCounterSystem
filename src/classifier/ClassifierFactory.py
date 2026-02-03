@@ -5,9 +5,9 @@ Classifier factory for creating platform-appropriate classifiers.
 from typing import List, Optional
 
 from src.classifier.BaseClassifier import BaseClassifier
-from src.utils.platform import IS_RDK
 from src.config.settings import AppConfig
 from src.utils.AppLogging import logger
+from src.utils.platform import IS_RDK
 
 
 class ClassifierFactory:

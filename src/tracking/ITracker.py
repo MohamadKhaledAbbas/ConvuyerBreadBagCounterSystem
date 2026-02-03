@@ -5,8 +5,8 @@ Defines contracts for tracker implementations to ensure loose coupling.
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Optional, Tuple, Protocol
 from collections import deque
+from typing import List, Optional, Tuple, Protocol
 
 from src.detection.BaseDetection import Detection
 

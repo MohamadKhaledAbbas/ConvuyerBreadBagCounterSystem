@@ -5,12 +5,13 @@ Separates visualization concerns from core pipeline logic.
 """
 
 from typing import List, Dict
+
 import cv2
 import numpy as np
 
+from src.config.tracking_config import TrackingConfig
 from src.detection.BaseDetection import Detection
 from src.tracking.ITracker import TrackedObject
-from src.config.tracking_config import TrackingConfig
 
 
 class PipelineVisualizer:

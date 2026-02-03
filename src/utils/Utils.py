@@ -2,9 +2,9 @@
 Utility functions for ConveyerBreadBagCounterSystem.
 """
 
-import hashlib
-import numpy as np
 from typing import Tuple, Optional
+
+import numpy as np
 
 try:
     import cv2

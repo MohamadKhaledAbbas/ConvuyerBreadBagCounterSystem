@@ -10,10 +10,10 @@ When a batch has low confidence classifications, this smoother can:
 3. Apply majority voting within confidence-weighted windows
 """
 
-from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Tuple
-from collections import defaultdict
 import time
+from collections import defaultdict
+from dataclasses import dataclass, field
+from typing import List, Dict, Optional
 
 from src.utils.AppLogging import logger
 

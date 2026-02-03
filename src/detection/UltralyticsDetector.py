@@ -3,6 +3,7 @@ Ultralytics-based detector for Windows/development platforms.
 """
 
 from typing import List, Tuple, Optional
+
 import numpy as np
 
 from src.detection.BaseDetection import BaseDetector, Detection

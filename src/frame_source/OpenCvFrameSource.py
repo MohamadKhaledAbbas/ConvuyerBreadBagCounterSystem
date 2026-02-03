@@ -5,8 +5,9 @@ OpenCV-based frame source for video files, webcams, or RTSP streams.
 import queue
 import threading
 import time
-import cv2
 from typing import Iterator, Tuple, Optional
+
+import cv2
 import numpy as np
 
 from src.frame_source.FrameSource import FrameSource

@@ -2,12 +2,12 @@
 Pipeline metrics for monitoring system performance.
 """
 
-import time
-import threading
-from typing import Dict, Any, List
-from dataclasses import dataclass, field
-from collections import deque
 import statistics
+import threading
+import time
+from collections import deque
+from dataclasses import dataclass, field
+from typing import Dict, Any
 
 from src.utils.AppLogging import logger
 

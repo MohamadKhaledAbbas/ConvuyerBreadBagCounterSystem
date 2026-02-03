@@ -8,16 +8,16 @@ Provides common utilities for spool operations:
 - File system helpers
 """
 
-import os
 import json
-import time
-import zlib
+import os
 import struct
 import threading
-from pathlib import Path
-from typing import Optional, Dict, Any
+import time
+import zlib
 from dataclasses import dataclass, asdict
 from datetime import datetime
+from pathlib import Path
+from typing import Optional, Dict, Any
 
 from src.utils.AppLogging import logger
 
@@ -182,7 +182,7 @@ def verify_segment_integrity(segment_path: str) -> tuple:
     Returns:
         Tuple of (is_valid, frame_count, error_message)
     """
-    from src.spool.segment_io import SEGMENT_MAGIC, SEGMENT_HEADER_SIZE, RECORD_HEADER_SIZE, RECORD_STRUCT
+    from src.spool.segment_io import SEGMENT_MAGIC, SEGMENT_HEADER_SIZE, RECORD_HEADER_SIZE
 
     path = Path(segment_path)
     if not path.exists():

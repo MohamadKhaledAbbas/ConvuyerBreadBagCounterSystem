@@ -18,18 +18,19 @@ Production Features:
 - Memory-efficient history management
 """
 
-from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Tuple, Set
-from collections import deque
-from enum import Enum
 import time
+from collections import deque
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import List, Dict, Optional, Tuple, Set
+
 import numpy as np
 
-from src.detection.BaseDetection import Detection
-from src.utils.Utils import compute_iou
 from src.config.tracking_config import TrackingConfig
-from src.utils.AppLogging import logger
+from src.detection.BaseDetection import Detection
 from src.tracking.ITracker import ITracker
+from src.utils.AppLogging import logger
+from src.utils.Utils import compute_iou
 
 # Try to import scipy for optimal linear assignment
 try:

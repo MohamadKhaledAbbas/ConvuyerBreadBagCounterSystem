@@ -25,7 +25,10 @@ from src.spool.h264_nal import (
     extract_sps_pps,
     is_idr_frame
 )
-
+from src.spool.retention import (
+    RetentionConfig,
+    RetentionPolicy
+)
 from src.spool.segment_io import (
     FrameRecord,
     SegmentMetadata,
@@ -35,12 +38,6 @@ from src.spool.segment_io import (
     SEGMENT_MAGIC,
     SEGMENT_VERSION
 )
-
-from src.spool.retention import (
-    RetentionConfig,
-    RetentionPolicy
-)
-
 from src.spool.spool_utils import (
     format_structured_log,
     ProcessorState,
@@ -53,7 +50,6 @@ from src.spool.spool_utils import (
     RateLimiter,
     AdaptivePacer
 )
-
 # ROS2 nodes are imported conditionally to avoid errors on non-RDK platforms
 from src.utils.platform import is_rdk_platform
 

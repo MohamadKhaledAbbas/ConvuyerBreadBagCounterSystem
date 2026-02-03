@@ -1,11 +1,14 @@
 ﻿"""Analytics Routes - Updated with Repository Pattern."""
 from typing import Optional
+
 from fastapi import APIRouter, Request, HTTPException, Query
 from fastapi.responses import HTMLResponse
-from src.endpoint.services.analytics_service import AnalyticsService
+
 from src.endpoint.repositories.analytics_repository import AnalyticsRepository
+from src.endpoint.services.analytics_service import AnalyticsService
 from src.endpoint.shared import get_db, get_templates
 from src.utils.AppLogging import logger
+
 router = APIRouter()
 def _get_service() -> AnalyticsService:
     db = get_db()

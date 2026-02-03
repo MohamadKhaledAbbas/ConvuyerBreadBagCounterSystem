@@ -4,10 +4,10 @@ Detector factory for creating platform-appropriate detectors.
 
 from typing import Optional
 
-from src.detection.BaseDetection import BaseDetector
-from src.utils.platform import IS_RDK
 from src.config.settings import AppConfig
+from src.detection.BaseDetection import BaseDetector
 from src.utils.AppLogging import logger
+from src.utils.platform import IS_RDK
 
 
 class DetectorFactory:

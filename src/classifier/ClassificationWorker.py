@@ -19,11 +19,12 @@ import threading
 import time
 from dataclasses import dataclass
 from typing import Optional, List, Tuple, Callable
+
 import numpy as np
 
 from src.classifier.BaseClassifier import BaseClassifier, ClassificationResult
-from src.utils.AppLogging import logger
 from src.classifier.IClassificationComponents import IClassificationWorker
+from src.utils.AppLogging import logger
 
 
 @dataclass
