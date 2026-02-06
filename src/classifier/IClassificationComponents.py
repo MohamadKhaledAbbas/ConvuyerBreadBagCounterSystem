@@ -94,16 +94,18 @@ class IClassificationWorker(ABC):
         track_id: int,
         roi: np.ndarray,
         bbox_history: List[Tuple[int, int, int, int]],
-        callback: Optional[Callable] = None
+        callback: Optional[Callable] = None,
+        extra_rois: Optional[List[np.ndarray]] = None
     ) -> bool:
         """
         Submit classification job to worker queue.
 
         Args:
             track_id: Track identifier
-            roi: ROI image to classify
+            roi: Primary ROI image to classify
             bbox_history: Track history for context
             callback: Optional callback(track_id, class_name, confidence)
+            extra_rois: Additional ROIs for voting-based classification
 
         Returns:
             True if job queued, False if queue full

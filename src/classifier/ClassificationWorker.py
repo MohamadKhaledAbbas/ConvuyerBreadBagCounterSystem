@@ -31,9 +31,10 @@ from src.utils.AppLogging import logger
 class ClassificationJob:
     """Job for classification worker."""
     track_id: int
-    roi: np.ndarray  # Best quality ROI
+    roi: np.ndarray  # Best quality ROI (primary)
     bbox_history: List[Tuple[int, int, int, int]]  # Full history for context
     callback: Optional[Callable] = None  # Callback(track_id, class_name, confidence)
+    extra_rois: Optional[List[np.ndarray]] = None  # Additional ROIs for voting
 
 
 class ClassificationWorker(IClassificationWorker):
@@ -120,16 +121,18 @@ class ClassificationWorker(IClassificationWorker):
         track_id: int,
         roi: np.ndarray,
         bbox_history: List[Tuple[int, int, int, int]],
-        callback: Optional[Callable] = None
+        callback: Optional[Callable] = None,
+        extra_rois: Optional[List[np.ndarray]] = None
     ) -> bool:
         """
         Submit classification job to queue.
 
         Args:
             track_id: Track identifier
-            roi: Best quality ROI to classify
+            roi: Best quality ROI to classify (primary)
             bbox_history: Full bbox history for context
             callback: Optional callback(track_id, class_name, confidence)
+            extra_rois: Additional ROIs for voting-based classification
 
         Returns:
             True if job queued, False if queue full (job dropped)
@@ -139,7 +142,8 @@ class ClassificationWorker(IClassificationWorker):
                 track_id=track_id,
                 roi=roi.copy(),  # Copy to avoid race conditions
                 bbox_history=bbox_history.copy(),
-                callback=callback
+                callback=callback,
+                extra_rois=[r.copy() for r in extra_rois] if extra_rois else None
             )
 
             # Non-blocking put with immediate failure if full
@@ -188,7 +192,11 @@ class ClassificationWorker(IClassificationWorker):
 
     def _process_job(self, job: ClassificationJob):
         """
-        Process a single classification job.
+        Process a single classification job with optional multi-ROI voting.
+
+        If extra_rois are provided, classifies all ROIs and uses weighted
+        voting to determine final class. 'Rejected' classifications are
+        excluded from voting as they indicate poor quality ROIs.
 
         Args:
             job: ClassificationJob to process
@@ -196,8 +204,77 @@ class ClassificationWorker(IClassificationWorker):
         start_time = time.perf_counter()
 
         try:
-            # Classify the ROI
-            result: ClassificationResult = self.classifier.classify(job.roi)
+            # Collect all ROIs to classify
+            all_rois = [job.roi]
+            if job.extra_rois:
+                all_rois.extend(job.extra_rois)
+
+            # Classify all ROIs
+            if len(all_rois) == 1:
+                # Single ROI - simple classification
+                result: ClassificationResult = self.classifier.classify(job.roi)
+                final_class = result.class_name
+                final_confidence = result.confidence
+
+                logger.info(
+                    f"[CLASSIFICATION] T{job.track_id} SINGLE_ROI | "
+                    f"result={final_class} conf={final_confidence:.3f}"
+                )
+            else:
+                # Multiple ROIs - voting
+                logger.info(f"[CLASSIFICATION] T{job.track_id} MULTI_ROI_START | total_rois={len(all_rois)}")
+
+                results = self.classifier.classify_batch(all_rois)
+
+                # Log each ROI result
+                for idx, result in enumerate(results):
+                    logger.info(
+                        f"[CLASSIFICATION] T{job.track_id} ROI_{idx+1}/{len(all_rois)} | "
+                        f"result={result.class_name} conf={result.confidence:.3f}"
+                    )
+
+                # Weighted voting (exclude 'Rejected' votes)
+                class_votes: dict = {}  # class_name -> weighted score
+                valid_votes = 0
+
+                for idx, result in enumerate(results):
+                    if result.class_name == 'Rejected':
+                        # Skip rejected - indicates poor quality ROI
+                        logger.info(
+                            f"[CLASSIFICATION] T{job.track_id} ROI_{idx+1} VOTE_EXCLUDED | "
+                            f"reason=Rejected conf={result.confidence:.3f}"
+                        )
+                        continue
+
+                    # Weight by confidence
+                    if result.class_name not in class_votes:
+                        class_votes[result.class_name] = 0.0
+                    class_votes[result.class_name] += result.confidence
+                    valid_votes += 1
+
+                if not class_votes:
+                    # All ROIs classified as Rejected - use primary with low confidence
+                    final_class = results[0].class_name
+                    final_confidence = results[0].confidence
+                    logger.warning(
+                        f"[CLASSIFICATION] T{job.track_id} ALL_REJECTED | "
+                        f"using_primary={final_class} conf={final_confidence:.3f}"
+                    )
+                else:
+                    # Select class with highest weighted score
+                    final_class = max(class_votes, key=class_votes.get)
+                    total_weight = sum(class_votes.values())
+                    final_confidence = class_votes[final_class] / total_weight
+
+                    # Format vote distribution for logging
+                    vote_dist_str = " ".join([f"{cls}:{score:.2f}" for cls, score in sorted(class_votes.items(), key=lambda x: x[1], reverse=True)])
+
+                    logger.info(
+                        f"[CLASSIFICATION] T{job.track_id} VOTING_RESULT | "
+                        f"winner={final_class} conf={final_confidence:.3f} "
+                        f"valid_votes={valid_votes}/{len(all_rois)} "
+                        f"distribution=[{vote_dist_str}]"
+                    )
 
             processing_time = (time.perf_counter() - start_time) * 1000
 
@@ -208,15 +285,16 @@ class ClassificationWorker(IClassificationWorker):
                 / self.total_jobs_processed
             )
 
-            logger.debug(
-                f"[{self.name}] Track {job.track_id}: {result.class_name} "
-                f"({result.confidence:.2f}) in {processing_time:.1f}ms"
+            logger.info(
+                f"[CLASSIFICATION] T{job.track_id} COMPLETE | "
+                f"final={final_class} conf={final_confidence:.3f} "
+                f"non_rejected_rois={valid_votes} time={processing_time:.1f}ms"
             )
 
             # Call callback if provided
             if job.callback:
                 try:
-                    job.callback(job.track_id, result.class_name, result.confidence)
+                    job.callback(job.track_id, final_class, final_confidence, valid_votes)
                 except Exception as e:
                     logger.error(
                         f"[{self.name}] Callback error for track {job.track_id}: {e}",

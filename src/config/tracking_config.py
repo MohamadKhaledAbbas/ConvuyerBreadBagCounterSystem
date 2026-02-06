@@ -74,6 +74,13 @@ class TrackingConfig:
     min_detection_confidence: float = _parse_float_env("MIN_DETECTION_CONFIDENCE", 0.4)
     """Minimum confidence threshold for detections."""
     
+    min_confidence_new_track: float = _parse_float_env("MIN_CONFIDENCE_NEW_TRACK", 0.7)
+    """
+    Minimum confidence required to create a NEW track.
+    This is higher than min_detection_confidence to prevent creating tracks from noise.
+    Existing tracks can still be updated with lower confidence detections.
+    """
+
     # ==========================================================================
     # Tracking Parameters
     # ==========================================================================
@@ -101,6 +108,28 @@ class TrackingConfig:
     Margin from frame edge to consider a track as exiting.
     Objects within this margin are considered to be leaving the frame.
     """
+
+    # ==========================================================================
+    # Enhanced Tracking Parameters (Multi-criteria matching)
+    # ==========================================================================
+
+    use_multi_criteria_matching: bool = _parse_bool_env("USE_MULTI_CRITERIA_MATCHING", True)
+    """Enable multi-criteria cost function (IoU + centroid + motion + size)."""
+
+    use_second_stage_matching: bool = _parse_bool_env("USE_SECOND_STAGE_MATCHING", True)
+    """Enable second-stage centroid-based matching for missed tracks."""
+
+    velocity_smoothing_alpha: float = _parse_float_env("VELOCITY_SMOOTHING_ALPHA", 0.3)
+    """
+    Exponential moving average alpha for velocity smoothing.
+    Higher values (0.5-0.8) = more responsive, lower values (0.1-0.3) = more stable.
+    """
+
+    second_stage_max_distance: float = _parse_float_env("SECOND_STAGE_MAX_DISTANCE", 150.0)
+    """Maximum centroid distance (pixels) for second-stage matching."""
+
+    second_stage_threshold: float = _parse_float_env("SECOND_STAGE_THRESHOLD", 0.8)
+    """Cost threshold for second-stage matching (0-1, lower = stricter)."""
 
     # ==========================================================================
     # ROI Collection Parameters
@@ -163,8 +192,14 @@ class TrackingConfig:
     """Enable bidirectional context-aware smoothing."""
     
     bidirectional_buffer_size: int = _parse_int_env("BIDIRECTIONAL_BUFFER_SIZE", 7)
-    """Buffer size for bidirectional smoothing (should be odd)."""
-    
+    """
+    Buffer size for bidirectional smoothing (should be odd for symmetry).
+    This is the STABILIZER that corrects misclassifications.
+    - Classifications are shown immediately as TENTATIVE
+    - After smoothing, they become CONFIRMED and persisted to DB
+    - UI shows both states clearly
+    """
+
     bidirectional_confidence_threshold: float = _parse_float_env("BIDIRECTIONAL_CONFIDENCE_THRESHOLD", 0.90)
     """Confidence threshold above which smoothing is bypassed."""
     
@@ -177,7 +212,7 @@ class TrackingConfig:
     bidirectional_batch_transition_protection: bool = _parse_bool_env("BIDIRECTIONAL_BATCH_TRANSITION_PROTECTION", True)
     """Protect batch transitions from incorrect smoothing."""
     
-    bidirectional_inactivity_timeout_ms: float = _parse_float_env("BIDIRECTIONAL_INACTIVITY_TIMEOUT_MS", 5000.0)
+    bidirectional_inactivity_timeout_ms: float = _parse_float_env("BIDIRECTIONAL_INACTIVITY_TIMEOUT_MS", 300_000.0)
     """Timeout for flushing buffer on inactivity."""
     
     # ==========================================================================

@@ -161,6 +161,7 @@ class ROICollectorService(IROICollector):
                 track_id=track_id,
                 max_rois=self.max_rois_per_track
             )
+            logger.info(f"[ROI_LIFECYCLE] T{track_id} ROI_COLLECTION_START | max_rois={self.max_rois_per_track}")
 
         collection = self.collections[track_id]
 
@@ -189,12 +190,22 @@ class ROICollectorService(IROICollector):
         if not is_valid:
             collection.rejected_count += 1
             self._total_rejected += 1
-            logger.debug(f"[ROICollector] Track {track_id} ROI rejected: {reason}")
+            logger.debug(
+                f"[ROI_LIFECYCLE] T{track_id} ROI_REJECTED | "
+                f"reason={reason} total_collected={collection.collected_count} "
+                f"total_rejected={collection.rejected_count}"
+            )
             return False
 
         # Collect the ROI
         collection.add_roi(roi, quality)
         self._total_collected += 1
+
+        logger.info(
+            f"[ROI_LIFECYCLE] T{track_id} ROI_COLLECTED | "
+            f"quality={quality:.1f} count={collection.collected_count}/{self.max_rois_per_track} "
+            f"best_quality={collection.best_roi_quality:.1f} size={roi.shape[1]}x{roi.shape[0]}"
+        )
 
         return True
 

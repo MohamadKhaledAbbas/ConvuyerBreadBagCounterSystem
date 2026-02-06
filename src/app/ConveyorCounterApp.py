@@ -48,21 +48,60 @@ from src.utils.AppLogging import logger
 
 @dataclass
 class CounterState:
-    """Real-time state of the counter (thread-safe)."""
+    """Real-time state of the counter (thread-safe) with two-tier counting."""
+    # Confirmed counts (after smoothing, persisted to DB)
     total_counted: int = 0
     counts_by_class: Dict[str, int] = field(default_factory=dict)
+
+    # Tentative counts (immediate, before smoothing)
+    tentative_total: int = 0
+    tentative_counts: Dict[str, int] = field(default_factory=dict)
+
+    # Active tracking
     active_tracks: int = 0
     fps: float = 0.0
     processing_time_ms: float = 0.0
     last_count_time: float = 0.0
 
+    # Debug state for visualization
+    pending_classifications: int = 0  # Tracks waiting for classification
+    pending_smoothing: int = 0  # Items in smoother batch
+    last_classification: Optional[str] = None  # Last classified item info
+    recent_events: list = field(default_factory=list)  # Recent events log (max 10)
+    rejected_count: int = 0  # Total rejected classifications
+
+    # Smoothing statistics
+    total_smoothed: int = 0  # Total items smoothed (changed)
+
     def __post_init__(self):
         if self.counts_by_class is None:
             self.counts_by_class = {}
+        if self.tentative_counts is None:
+            self.tentative_counts = {}
+        if self.recent_events is None:
+            self.recent_events = []
         self._lock = threading.Lock()
 
+    def add_tentative(self, class_name: str) -> int:
+        """Add tentative count (immediate, before smoothing)."""
+        with self._lock:
+            self.tentative_total += 1
+            if class_name not in self.tentative_counts:
+                self.tentative_counts[class_name] = 0
+            self.tentative_counts[class_name] += 1
+            return self.tentative_total
+
+    def remove_tentative(self, class_name: str) -> int:
+        """Remove tentative count when item is confirmed (after smoothing)."""
+        with self._lock:
+            if self.tentative_total > 0:
+                self.tentative_total -= 1
+            if class_name in self.tentative_counts and self.tentative_counts[class_name] > 0:
+                self.tentative_counts[class_name] -= 1
+            return self.tentative_total
+
     def increment_count(self, class_name: str) -> int:
-        """Thread-safe count increment."""
+        """Thread-safe count increment (confirmed, after smoothing)."""
         with self._lock:
             self.total_counted += 1
             if class_name not in self.counts_by_class:
@@ -71,10 +110,28 @@ class CounterState:
             self.last_count_time = time.time()
             return self.total_counted
 
+    def add_event(self, event: str):
+        """Add event to recent events log (thread-safe)."""
+        with self._lock:
+            self.recent_events.append((time.time(), event))
+            # Keep only last 10 events
+            if len(self.recent_events) > 10:
+                self.recent_events = self.recent_events[-10:]
+
     def get_counts_snapshot(self) -> Dict[str, int]:
-        """Get thread-safe copy of counts."""
+        """Get thread-safe copy of confirmed counts."""
         with self._lock:
             return self.counts_by_class.copy()
+
+    def get_tentative_snapshot(self) -> Dict[str, int]:
+        """Get thread-safe copy of tentative counts."""
+        with self._lock:
+            return self.tentative_counts.copy()
+
+    def get_recent_events(self) -> list:
+        """Get thread-safe copy of recent events."""
+        with self._lock:
+            return self.recent_events.copy()
 
 
 class ConveyorCounterApp:
@@ -226,6 +283,8 @@ class ConveyorCounterApp:
         )
         # Set callback for classification completion
         self._pipeline_core.on_track_completed = self._on_classification_completed
+        # Set callback for track events (for UI debugging)
+        self._pipeline_core.on_track_event = self._on_track_event
 
         # Visualizer (handles display)
         if self.enable_display:
@@ -235,12 +294,12 @@ class ConveyorCounterApp:
                 display_size=(1280, 720)
             )
 
-        # Bidirectional smoother
+        # Bidirectional smoother (uses sliding window approach)
         self._smoother = BidirectionalSmoother(
             confidence_threshold=self.tracking_config.bidirectional_confidence_threshold,
             vote_ratio_threshold=self.tracking_config.evidence_ratio_threshold,
-            batch_size=self.tracking_config.bidirectional_buffer_size,
-            batch_timeout_seconds=self.tracking_config.bidirectional_inactivity_timeout_ms / 1000.0
+            window_size=self.tracking_config.bidirectional_buffer_size,
+            window_timeout_seconds=self.tracking_config.bidirectional_inactivity_timeout_ms / 1000.0
         )
 
         logger.info("[ConveyorCounterApp] Components initialized with modular architecture")
@@ -265,6 +324,10 @@ class ConveyorCounterApp:
         total_time = (time.perf_counter() - frame_start) * 1000
         self.state.processing_time_ms = total_time
         
+        # Update pending classification count from worker queue
+        if self._classification_worker:
+            self.state.pending_classifications = self._classification_worker.get_queue_size()
+
         # Calculate FPS
         if self._start_time is not None:
             elapsed = time.perf_counter() - self._start_time
@@ -272,6 +335,19 @@ class ConveyorCounterApp:
         
         # Visualization (if enabled)
         if self.enable_display and self._pipeline_visualizer:
+            # Build debug info for visualization including tentative counts
+            debug_info = {
+                'pending_classify': self.state.pending_classifications,
+                'pending_smooth': self.state.pending_smoothing,
+                'rejected': self.state.rejected_count,
+                'last_class': self.state.last_classification,
+                'recent_events': self.state.get_recent_events(),
+                'rois_collected': rois_collected,
+                'processing_ms': self.state.processing_time_ms,
+                'tentative_total': self.state.tentative_total,
+                'tentative_counts': self.state.get_tentative_snapshot()
+            }
+
             frame = self._pipeline_visualizer.annotate_frame(
                 frame=frame,
                 detections=detections,
@@ -279,12 +355,22 @@ class ConveyorCounterApp:
                 fps=self.state.fps,
                 active_tracks=self.state.active_tracks,
                 total_counted=self.state.total_counted,
-                counts_by_class=self.state.get_counts_snapshot()
+                counts_by_class=self.state.get_counts_snapshot(),
+                debug_info=debug_info
             )
 
         return frame
     
-    def _on_classification_completed(self, track_id: int, class_name: str, confidence: float):
+    def _on_track_event(self, event: str):
+        """
+        Callback for track-related events (for UI debugging).
+
+        Args:
+            event: Event description string
+        """
+        self.state.add_event(event)
+
+    def _on_classification_completed(self, track_id: int, class_name: str, confidence: float, non_rejected_rois: int = 0):
         """
         Callback when classification completes (called by PipelineCore from worker thread).
 
@@ -292,34 +378,112 @@ class ConveyorCounterApp:
             track_id: Track identifier
             class_name: Classified class
             confidence: Classification confidence
+            non_rejected_rois: Number of non-rejected ROIs (for trustworthiness)
         """
-        # Add to smoother (thread-safe)
-        smoothed_batch = self._smoother.add_classification(
+        # Update debug state
+        self.state.last_classification = f"T{track_id}:{class_name}({confidence:.2f})"
+        self.state.add_event(f"CLASSIFY T{track_id}->{class_name} ({confidence:.2f}) rois={non_rejected_rois}")
+
+        # Check if classification is reliable (needs >= 3 non-rejected ROIs)
+        min_trusted_rois = 3
+        original_class = class_name
+
+        if non_rejected_rois < min_trusted_rois and class_name != 'Rejected':
+            # Too few good ROIs - override to 'Rejected' (unreliable classification)
+            logger.warning(
+                f"[CLASSIFICATION] T{track_id} UNRELIABLE | "
+                f"original={class_name} non_rejected_rois={non_rejected_rois} < {min_trusted_rois} "
+                f"action=override_to_Rejected"
+            )
+            class_name = 'Rejected'
+            confidence = 0.0  # Mark as very low confidence
+            self.state.add_event(f"UNRELIABLE T{track_id}:{original_class}->Rejected (rois={non_rejected_rois})")
+
+        # IMMEDIATE: Add tentative count (shown in UI immediately)
+        # Note: We add ALL classifications (including 'Rejected') to tentative
+        # because they go through smoothing and might be overridden
+        tentative_total = self.state.add_tentative(class_name)
+        self.state.add_event(f"TENTATIVE T{track_id}:{class_name} (pending smoothing)")
+        logger.info(
+            f"[TENTATIVE_COUNT] T{track_id} {class_name} | "
+            f"conf={confidence:.3f} non_rejected_rois={non_rejected_rois} "
+            f"tentative_total={tentative_total} status=awaiting_batch_smoothing"
+        )
+
+        # Add to smoother (thread-safe) - uses sliding window approach
+        # Returns a single confirmed record when window is full, None otherwise
+        # Note: Low confidence items (including 'Rejected') will still be smoothed by window context
+        confirmed_record = self._smoother.add_classification(
             track_id=track_id,
             class_name=class_name,
             confidence=confidence,
-            vote_ratio=1.0  # Single classification, full confidence
+            vote_ratio=1.0,  # Single classification, full confidence
+            non_rejected_rois=non_rejected_rois
         )
 
-        # Process any finalized batch
-        if smoothed_batch:
-            for record in smoothed_batch:
-                self._record_count(record, None)  # ROI already handled
-        else:
-            # Record immediately
-            record = ClassificationRecord(
-                track_id=track_id,
-                class_name=class_name,
-                confidence=confidence,
-                vote_ratio=1.0,
-                timestamp=time.time()
-            )
-            self._record_count(record, None)
+        # Update pending smoothing count
+        self.state.pending_smoothing = len(self._smoother.get_pending_records())
 
-    def _record_count(self, record: ClassificationRecord, roi: Optional[np.ndarray]):
-        """Record a counted item."""
-        # Update counts (thread-safe)
+        # Process if a record was confirmed (sliding window filled)
+        if confirmed_record:
+            self.state.add_event(
+                f"CONFIRMED (window full): T{confirmed_record.track_id}->"
+                f"{confirmed_record.class_name} smoothed={confirmed_record.smoothed}"
+            )
+            self._record_confirmed_count(confirmed_record, None)
+
+    def _record_confirmed_count(self, record: ClassificationRecord, roi: Optional[np.ndarray]):
+        """
+        Record a CONFIRMED count (after smoothing, persisted to DB).
+
+        Note: 'Rejected' class is treated as a quality indicator, not a bag type.
+        However, 'Rejected' items ARE included in the sliding window and can be
+        overridden by smoothing. Only items that remain 'Rejected' after smoothing
+        are excluded from the count.
+        """
+        # Remove from tentative count (use original class if smoothed)
+        tentative_class = record.original_class if record.smoothed else record.class_name
+        remaining_tentative = self.state.remove_tentative(tentative_class)
+
+        # Skip 'Rejected' class only if it wasn't overridden by smoothing
+        if record.class_name == 'Rejected':
+            self.state.rejected_count += 1
+            self.state.add_event(f"REJECTED T{record.track_id} (excluded)")
+            logger.info(
+                f"[CONFIRMED_COUNT] T{record.track_id} REJECTED | "
+                f"conf={record.confidence:.3f} total_rejected={self.state.rejected_count} "
+                f"remaining_tentative={remaining_tentative} status=excluded_from_count"
+            )
+            return
+
+        # Update CONFIRMED counts (thread-safe)
         new_total = self.state.increment_count(record.class_name)
+
+        # Get current class count
+        class_count = self.state.get_counts_snapshot().get(record.class_name, 0)
+
+        # Track if smoothed
+        if record.smoothed:
+            self.state.total_smoothed += 1
+            self.state.add_event(f"CONFIRMED T{record.track_id}:{record.class_name} (was {record.original_class})")
+            smoothed_str = f"smoothed_from={record.original_class}"
+
+            logger.info(
+                f"[CONFIRMED_COUNT] T{record.track_id} SMOOTHED | "
+                f"original={record.original_class} final={record.class_name} conf={record.confidence:.3f} "
+                f"class_total={class_count} system_total={new_total} "
+                f"status=confirmed_and_persisted"
+            )
+        else:
+            self.state.add_event(f"CONFIRMED T{record.track_id}:{record.class_name}")
+            smoothed_str = "smoothed=no"
+
+            logger.info(
+                f"[CONFIRMED_COUNT] T{record.track_id} COUNTED | "
+                f"class={record.class_name} conf={record.confidence:.3f} {smoothed_str} "
+                f"class_total={class_count} system_total={new_total} "
+                f"status=confirmed_and_persisted"
+            )
 
         # Log to database
         if self._db is not None:
@@ -355,13 +519,6 @@ class ConveyorCounterApp:
             except Exception as e:
                 logger.error(f"[ConveyorCounterApp] Count callback error: {e}")
 
-        # Log
-        smoothed_str = f" (smoothed from {record.original_class})" if record.smoothed else ""
-        logger.info(
-            f"[ConveyorCounterApp] COUNT: {record.class_name} "
-            f"(conf={record.confidence:.2f}, track={record.track_id}){smoothed_str}"
-        )
-        logger.info(f"[ConveyorCounterApp] Total: {new_total}, By class: {self.state.get_counts_snapshot()}")
 
     def run(self, max_frames: Optional[int] = None):
         """
@@ -416,7 +573,7 @@ class ConveyorCounterApp:
         if self._smoother is not None:
             remaining = self._smoother.finalize_batch()
             for record in remaining:
-                self._record_count(record, None)
+                self._record_confirmed_count(record, None)
             self._smoother.cleanup()
         
         # Clean up modular pipeline components
