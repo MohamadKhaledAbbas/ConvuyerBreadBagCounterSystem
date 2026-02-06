@@ -27,6 +27,14 @@ from typing import Optional, Dict, Callable
 import cv2
 import numpy as np
 
+# Optional memory monitoring (gracefully degraded if psutil not available)
+try:
+    import psutil
+    HAS_PSUTIL = True
+except ImportError:
+    psutil = None
+    HAS_PSUTIL = False
+
 # Import modular pipeline components
 from src.app.pipeline_core import PipelineCore
 from src.app.pipeline_visualizer import PipelineVisualizer
@@ -204,6 +212,10 @@ class ConveyorCounterApp:
         self._frame_count = 0
         self._start_time: Optional[float] = None
         
+        # Memory monitoring
+        self._last_memory_log_time: float = 0.0
+        self._memory_log_interval: float = 60.0  # Log memory every 60 seconds
+
         # Callbacks
         self._on_count_callback: Optional[Callable] = None
         
@@ -218,6 +230,40 @@ class ConveyorCounterApp:
         logger.info(f"[ConveyorCounterApp] Received signal {signum}, shutting down...")
         self._running = False
     
+    def _maybe_log_memory_usage(self):
+        """Log memory usage periodically for diagnostics."""
+        current_time = time.perf_counter()
+        if current_time - self._last_memory_log_time < self._memory_log_interval:
+            return
+
+        self._last_memory_log_time = current_time
+
+        if HAS_PSUTIL:
+            try:
+                process = psutil.Process()
+                mem_info = process.memory_info()
+                mem_mb = mem_info.rss / (1024 * 1024)
+
+                # Get queue size if available
+                queue_size = 0
+                if hasattr(self._frame_source, 'queue') and self._frame_source.queue is not None:
+                    queue_size = self._frame_source.queue.qsize()
+
+                # Get pending classifications
+                pending_classify = 0
+                if self._classification_worker:
+                    pending_classify = self._classification_worker.get_queue_size()
+
+                logger.info(
+                    f"[MEMORY] RSS={mem_mb:.1f}MB | "
+                    f"frame_queue={queue_size} | "
+                    f"pending_classify={pending_classify} | "
+                    f"active_tracks={self.state.active_tracks} | "
+                    f"frame={self._frame_count}"
+                )
+            except Exception as e:
+                logger.debug(f"[MEMORY] Failed to get memory info: {e}")
+
     def _init_components(self):
         """Initialize pipeline components with new modular architecture."""
         # Initialize database first to read config
@@ -236,7 +282,9 @@ class ConveyorCounterApp:
             self._frame_source = FrameSourceFactory.create(
                 source_type,
                 source=source,
-                testing_mode=self.testing_mode
+                testing_mode=self.testing_mode,
+                queue_size=self.app_config.frame_queue_size,
+                target_fps=self.app_config.frame_target_fps
             )
         
         # Detector
@@ -316,6 +364,11 @@ class ConveyorCounterApp:
         """
         frame_start = time.perf_counter()
         
+        # Resize to standard resolution (done in consumer, not producer thread)
+        # This matches v1 behavior and avoids GIL contention
+        if frame.shape[:2] != (720, 1280):
+            frame = cv2.resize(frame, (1280, 720))
+
         # Use PipelineCore for all processing
         detections, active_tracks, rois_collected = self._pipeline_core.process_frame(frame)
 
@@ -561,7 +614,10 @@ class ConveyorCounterApp:
                         f"[ConveyorCounterApp] Frame {self._frame_count}: "
                         f"FPS={self.state.fps:.1f}, Counted={self.state.total_counted}"
                     )
-        
+
+                # Log memory usage periodically for diagnostics
+                self._maybe_log_memory_usage()
+
         finally:
             self._cleanup()
     

@@ -17,6 +17,9 @@ class UltralyticsDetector(BaseDetector):
     Uses Ultralytics library with .pt model files.
     """
     
+    # Periodic CUDA cache cleanup frequency (every N frames)
+    CUDA_CLEANUP_INTERVAL = 500
+
     def __init__(
         self,
         model_path: str,
@@ -41,7 +44,8 @@ class UltralyticsDetector(BaseDetector):
         self.model_path = model_path
         self.confidence_threshold = confidence_threshold
         self.input_size = input_size
-        
+        self._inference_count = 0  # Track for periodic cleanup
+
         # Load model
         logger.info(f"[UltralyticsDetector] Loading model: {model_path}")
         self.model = YOLO(model_path)
@@ -77,6 +81,16 @@ class UltralyticsDetector(BaseDetector):
         Returns:
             List of Detection objects
         """
+        self._inference_count += 1
+
+        # Periodic CUDA cache cleanup to prevent memory accumulation
+        if self.device == 'cuda' and self._inference_count % self.CUDA_CLEANUP_INTERVAL == 0:
+            try:
+                import torch
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+
         # Run inference
         results = self.model(
             frame,
@@ -119,4 +133,13 @@ class UltralyticsDetector(BaseDetector):
     def cleanup(self):
         """Release model resources."""
         self.model = None
+
+        # Final CUDA cache cleanup
+        if self.device == 'cuda':
+            try:
+                import torch
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+
         logger.info("[UltralyticsDetector] Cleanup complete")

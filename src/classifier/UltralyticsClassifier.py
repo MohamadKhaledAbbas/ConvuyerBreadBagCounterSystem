@@ -17,6 +17,9 @@ class UltralyticsClassifier(BaseClassifier):
     Uses Ultralytics library with .pt classification model.
     """
     
+    # Periodic CUDA cache cleanup frequency (every N classifications)
+    CUDA_CLEANUP_INTERVAL = 200
+
     def __init__(
         self,
         model_path: str,
@@ -41,7 +44,8 @@ class UltralyticsClassifier(BaseClassifier):
         self.model_path = model_path
         self._class_names = classes
         self.input_size = input_size
-        
+        self._inference_count = 0  # Track for periodic cleanup
+
         # Load model
         logger.info(f"[UltralyticsClassifier] Loading model: {model_path}")
         self.model = YOLO(model_path)
@@ -77,6 +81,16 @@ class UltralyticsClassifier(BaseClassifier):
         Returns:
             ClassificationResult
         """
+        self._inference_count += 1
+
+        # Periodic CUDA cache cleanup to prevent memory accumulation
+        if self.device == 'cuda' and self._inference_count % self.CUDA_CLEANUP_INTERVAL == 0:
+            try:
+                import torch
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+
         # Run inference
         results = self.model(
             roi,
@@ -168,6 +182,15 @@ class UltralyticsClassifier(BaseClassifier):
     def cleanup(self):
         """Release model resources."""
         self.model = None
+
+        # Final CUDA cache cleanup
+        if self.device == 'cuda':
+            try:
+                import torch
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+
         logger.info("[UltralyticsClassifier] Cleanup complete")
     
     @property

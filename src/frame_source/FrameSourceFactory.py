@@ -47,8 +47,10 @@ class FrameSourceFactory:
             source = kwargs.get('source', 0)
             target_fps = kwargs.get('target_fps', None)
             testing_mode = kwargs.get('testing_mode', False)
+            queue_size = kwargs.get('queue_size', 30)  # Default to 30 for backpressure
             return OpenCVFrameSource(
                 source,
+                queue_size=queue_size,
                 target_fps=target_fps,
                 testing_mode=testing_mode
             )

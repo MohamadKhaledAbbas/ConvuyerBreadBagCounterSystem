@@ -46,7 +46,7 @@ class AppConfig:
     APP_VERSION: str = "2.0.0"
     
     # Video source for testing
-    video_path: str = os.getenv("VIDEO_PATH", "D:\\Recordings\\2026_02_05\\output_2026-02-06_00-15-50.mp4")
+    video_path: str = os.getenv("VIDEO_PATH", "D:\\Recordings\\2026_02_05\\output_2026-02-05_22-45-50.mp4")
     
     # Platform-specific model paths
     detection_model: str = os.getenv(
@@ -76,6 +76,10 @@ class AppConfig:
     # Testing mode for OpenCV frame source
     opencv_testing_mode: bool = field(default_factory=lambda: _parse_bool_env("OPENCV_TESTING_MODE", False))
     
+    # Frame source configuration for performance tuning
+    frame_queue_size: int = int(os.getenv("FRAME_QUEUE_SIZE", "30"))  # Bounded queue prevents memory overflow
+    frame_target_fps: Optional[float] = None  # None = use source FPS
+
     # Classifier class names - bread bag types
     classifier_classes: Dict[int, str] = None
     
