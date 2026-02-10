@@ -83,6 +83,9 @@ class TrackedObject:
     
     # Classification tracking
     classified: bool = False
+
+    # Travel path validation
+    entry_center_y: Optional[int] = None  # Y position when track was first created
     
     @property
     def center(self) -> Tuple[int, int]:
@@ -205,7 +208,7 @@ class TrackedObject:
 class TrackEvent:
     """Event emitted by tracker for completed tracks."""
     track_id: int
-    event_type: str  # 'track_completed', 'track_lost'
+    event_type: str  # 'track_completed', 'track_lost', 'track_invalid'
     bbox_history: List[Tuple[int, int, int, int]]
     position_history: List[Tuple[int, int]]
     total_frames: int
@@ -584,6 +587,82 @@ class ConveyorTracker(ITracker):
         """
         return self._get_exit_direction(track) is not None
 
+    def _is_in_entry_zone(self, y: int) -> bool:
+        """
+        Check if Y coordinate is in the entry zone (bottom of frame).
+
+        Bread bags appear from the bottom, so the entry zone is the
+        lower portion of the frame.
+
+        Args:
+            y: Y coordinate to check
+
+        Returns:
+            True if in entry zone
+        """
+        if self.frame_height is None:
+            return True  # Can't validate without frame dimensions
+        entry_zone_ratio = getattr(self.config, 'entry_zone_ratio', 0.25)
+        entry_y_threshold = self.frame_height * (1.0 - entry_zone_ratio)
+        return y >= entry_y_threshold
+
+    def _is_in_exit_zone(self, y: int) -> bool:
+        """
+        Check if Y coordinate is in the exit zone (top of frame).
+
+        Bread bags disappear at the top, so the exit zone is the
+        upper portion of the frame.
+
+        Args:
+            y: Y coordinate to check
+
+        Returns:
+            True if in exit zone
+        """
+        if self.frame_height is None:
+            return True  # Can't validate without frame dimensions
+        exit_zone_ratio = getattr(self.config, 'exit_zone_ratio', 0.15)
+        exit_y_threshold = self.frame_height * exit_zone_ratio
+        return y <= exit_y_threshold
+
+    def _has_valid_travel_path(self, track: TrackedObject) -> bool:
+        """
+        Check if track followed a valid bottom-to-top travel path.
+
+        A valid travel path means:
+        1. Track first appeared in the entry zone (bottom of frame)
+        2. Track is currently exiting through the exit zone (top of frame)
+
+        This filters out:
+        - Bags appearing mid-frame (e.g., from occlusion recovery)
+        - Bags that exit from the side or bottom
+        - Bags that don't reach the top of the frame
+
+        Args:
+            track: Tracked object to validate
+
+        Returns:
+            True if the track has a valid bottom-to-top travel path
+        """
+        require_full_travel = getattr(self.config, 'require_full_travel', True)
+        if not require_full_travel:
+            return True
+
+        # Must have a recorded entry position
+        if track.entry_center_y is None:
+            return False
+
+        # Must have entered from the bottom entry zone
+        if not self._is_in_entry_zone(track.entry_center_y):
+            return False
+
+        # Must be exiting from the top exit zone
+        _, cy = track.center
+        if not self._is_in_exit_zone(cy):
+            return False
+
+        return True
+
     def update(
         self,
         detections: List[Detection],
@@ -695,6 +774,7 @@ class ConveyorTracker(ITracker):
         )
         track.position_history.append(track.center)
         track.bbox_history.append(track.bbox)
+        track.entry_center_y = track.center[1]
         
         self.tracks[self._next_id] = track
 
@@ -726,7 +806,11 @@ class ConveyorTracker(ITracker):
                 self._is_exiting_frame(track)
             ):
                 should_complete = True
-                event_type = 'track_completed'
+                # Validate full travel path (bottom → top)
+                if self._has_valid_travel_path(track):
+                    event_type = 'track_completed'
+                else:
+                    event_type = 'track_invalid'
             
             if should_complete:
                 # Calculate average confidence

@@ -106,6 +106,9 @@ class PipelineCore:
         """
         Handle a completed track - submit for async classification.
 
+        Only tracks with event_type='track_completed' (valid full travel path)
+        are submitted for classification. Lost and invalid tracks are skipped.
+
         Uses multiple ROIs with voting for more robust classification.
         'Rejected' class votes are excluded from the voting process.
 
@@ -117,6 +120,30 @@ class PipelineCore:
         # Notify UI of track completion
         if self.on_track_event:
             self.on_track_event(f"TRACK T{track_id} {event.event_type} ({event.exit_direction})")
+
+        # Skip classification for invalid tracks (didn't follow full travel path)
+        if event.event_type == 'track_invalid':
+            logger.info(
+                f"[PIPELINE] T{track_id} INVALID_TRAVEL | "
+                f"exit={event.exit_direction} frames={event.total_frames} "
+                f"reason=did_not_follow_bottom_to_top_path"
+            )
+            if self.on_track_event:
+                self.on_track_event(f"SKIP T{track_id} invalid travel path")
+            self.roi_collector.remove_track(track_id)
+            return
+
+        # Skip classification for lost tracks (didn't reach exit zone)
+        if event.event_type == 'track_lost':
+            logger.info(
+                f"[PIPELINE] T{track_id} LOST | "
+                f"exit={event.exit_direction} frames={event.total_frames} "
+                f"reason=track_lost_before_exit"
+            )
+            if self.on_track_event:
+                self.on_track_event(f"SKIP T{track_id} lost before exit")
+            self.roi_collector.remove_track(track_id)
+            return
 
         # Get all ROIs for voting (not just the best one)
         all_rois = self.roi_collector.get_all_rois(track_id)
