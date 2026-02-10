@@ -209,6 +209,7 @@ class DatabaseManager:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_bag_types_name ON bag_types(name)")
             conn.commit()
             logger.info("[DatabaseManager] Fallback schema created")
+        self._seed_default_bag_types()
     
     def _initialize_default_config(self):
         """Initialize default configuration values if they don't exist."""
@@ -250,6 +251,25 @@ class DatabaseManager:
                     logger.info(f"[DatabaseManager] Initialized config: {key} = {default_value}")
         
         logger.info("[DatabaseManager] Default config values initialized")
+    def _seed_default_bag_types(self):
+        """Seed default bag types if they don't exist (fallback schema path)."""
+        default_bag_types = [
+            (1, 'Brown_Orange_Family', 'Brown_Orange_Family', 0, 'data/classes/Brown_Orange_Family/Brown_Orange_Family.jpg', '2026-02-03 03:31:05'),
+            (2, 'Red_Yellow', 'Red_Yellow', 0, 'data/classes/Red_Yellow/Red_Yellow.jpg', '2026-02-03 03:31:05'),
+            (3, 'Wheatberry', 'Wheatberry', 0, 'data/classes/Wheatberry/Wheatberry.jpg', '2026-02-03 10:52:21'),
+            (4, 'Blue_Yellow', 'Blue_Yellow', 0, 'data/classes/Blue_Yellow/Blue_Yellow.jpg', '2026-02-06 01:39:32'),
+            (5, 'Rejected', 'Rejected', 0, 'data/classes/Rejected/Rejected.jpg', '2026-02-06 01:51:49'),
+            (6, 'Green_Yellow', 'Green_Yellow', 0, 'data/classes/Green_Yellow/Green_Yellow.jpg', '2026-02-06 01:55:36'),
+            (7, 'Bran', 'Bran', 0, 'data/classes/Bran/Bran.jpg', '2026-02-08 18:16:49'),
+            (8, 'Black_Orange', 'Black_Orange', 0, 'data/classes/Black_Orange/Black_Orange.jpg', '2026-02-10 00:00:00'),
+            (9, 'Purple_Yellow', 'Purple_Yellow', 0, 'data/classes/Purple_Yellow/Purple_Yellow.jpg', '2026-02-10 00:00:00'),
+        ]
+        with self._cursor() as cursor:
+            cursor.executemany(
+                "INSERT OR IGNORE INTO bag_types (id, name, arabic_name, weight, thumb, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                default_bag_types
+            )
+        logger.info("[DatabaseManager] Default bag types seeded")
     def get_or_create_bag_type(self, name: str, arabic_name: Optional[str] = None,
                                weight: float = 0, thumb: Optional[str] = None) -> int:
         with self._cursor() as cursor:

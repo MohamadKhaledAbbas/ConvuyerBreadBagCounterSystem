@@ -173,23 +173,22 @@ CREATE TABLE IF NOT EXISTS config (
 CREATE INDEX IF NOT EXISTS idx_config_key ON config(key);
 
 -- ============================================================================
--- Initial Data (Optional)
+-- Initial Data: Default Bag Types
 -- ============================================================================
--- Pre-populate with default bag types if needed.
--- Uncomment and modify as needed for your deployment.
+-- Pre-populated bag types required for the analytics endpoint.
+-- Uses INSERT OR IGNORE to avoid duplicates on re-initialization.
 -- ============================================================================
 
--- Example: Insert default bag types
--- INSERT OR IGNORE INTO bag_types (name, arabic_name, weight, thumb) VALUES
---     ('Wheatberry', 'توت القمح', 500, 'data/classes/Wheatberry/Wheatberry.jpg'),
---     ('Multigrain', 'متعدد الحبوب', 450, 'data/classes/Multigrain/Multigrain.jpg'),
---     ('WholeWheat', 'قمح كامل', 500, 'data/classes/WholeWheat/WholeWheat.jpg');
-
--- Example: Insert default config values
--- INSERT OR IGNORE INTO config (key, value) VALUES
---     ('detection_confidence', '0.5'),
---     ('classification_confidence', '0.7'),
---     ('system_enabled', 'true');
+INSERT OR IGNORE INTO bag_types (id, name, arabic_name, weight, thumb, created_at) VALUES
+    (1, 'Brown_Orange_Family', 'Brown_Orange_Family', 0, 'data/classes/Brown_Orange_Family/Brown_Orange_Family.jpg', '2026-02-03 03:31:05'),
+    (2, 'Red_Yellow', 'Red_Yellow', 0, 'data/classes/Red_Yellow/Red_Yellow.jpg', '2026-02-03 03:31:05'),
+    (3, 'Wheatberry', 'Wheatberry', 0, 'data/classes/Wheatberry/Wheatberry.jpg', '2026-02-03 10:52:21'),
+    (4, 'Blue_Yellow', 'Blue_Yellow', 0, 'data/classes/Blue_Yellow/Blue_Yellow.jpg', '2026-02-06 01:39:32'),
+    (5, 'Rejected', 'Rejected', 0, 'data/classes/Rejected/Rejected.jpg', '2026-02-06 01:51:49'),
+    (6, 'Green_Yellow', 'Green_Yellow', 0, 'data/classes/Green_Yellow/Green_Yellow.jpg', '2026-02-06 01:55:36'),
+    (7, 'Bran', 'Bran', 0, 'data/classes/Bran/Bran.jpg', '2026-02-08 18:16:49'),
+    (8, 'Black_Orange', 'Black_Orange', 0, 'data/classes/Black_Orange/Black_Orange.jpg', '2026-02-10 00:00:00'),
+    (9, 'Purple_Yellow', 'Purple_Yellow', 0, 'data/classes/Purple_Yellow/Purple_Yellow.jpg', '2026-02-10 00:00:00');
 
 -- ============================================================================
 -- Schema Validation Queries
