@@ -328,12 +328,12 @@ class ClassificationWorker(IClassificationWorker):
 
     def _log_roi_classified(self, track_id: int, roi_index: int, class_name: str,
                             confidence: float, is_rejected: bool):
-        """Log individual ROI classification result to database."""
+        """Log individual ROI classification result to database (non-blocking)."""
         if self._db is None:
             return
         try:
             from datetime import datetime
-            self._db.add_track_event_detail(
+            self._db.enqueue_track_event_detail(
                 track_id=track_id,
                 timestamp=datetime.now().isoformat(),
                 step_type='roi_classified',

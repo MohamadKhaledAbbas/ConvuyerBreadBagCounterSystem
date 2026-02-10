@@ -7,12 +7,15 @@ Production-quality database layer with:
 - Schema initialization from schema.sql
 - Thread-safe connections
 - Comprehensive error handling
+- Async write queue for non-blocking hot-path DB writes
 """
+import queue
 import sqlite3
 import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 
 from src.utils.AppLogging import logger
 
@@ -24,7 +27,101 @@ class DatabaseManager:
         self._local = threading.local()
         self._ensure_db_exists()
         self._initialize_schema()
+        # Async write queue for non-blocking hot-path DB writes
+        self._write_queue: queue.Queue[Tuple[str, tuple]] = queue.Queue(maxsize=10000)
+        self._write_thread: Optional[threading.Thread] = None
+        self._write_stop = threading.Event()
+        self._start_write_thread()
         logger.info(f"[DatabaseManager] Initialized with V2 schema: {db_path}")
+    def _start_write_thread(self):
+        """Start background thread for batched async writes."""
+        self._write_stop.clear()
+        self._write_thread = threading.Thread(
+            target=self._write_loop, name="DB-WriteQueue", daemon=True
+        )
+        self._write_thread.start()
+        logger.info("[DatabaseManager] Async write queue started")
+    def _write_loop(self):
+        """Background loop: drain write queue in batches, commit periodically."""
+        conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=30.0)
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA synchronous = NORMAL")
+        batch_size = 50
+        flush_interval = 1.0  # seconds
+        pending = 0
+        while not self._write_stop.is_set():
+            try:
+                sql, params = self._write_queue.get(timeout=flush_interval)
+                try:
+                    conn.execute(sql, params)
+                    pending += 1
+                except Exception as e:
+                    logger.error(f"[DatabaseManager] Async write error: {e}")
+                # Drain remaining items up to batch_size
+                drained = 0
+                while drained < batch_size - 1:
+                    try:
+                        sql2, params2 = self._write_queue.get_nowait()
+                        try:
+                            conn.execute(sql2, params2)
+                            pending += 1
+                        except Exception as e:
+                            logger.error(f"[DatabaseManager] Async write error: {e}")
+                        drained += 1
+                    except queue.Empty:
+                        break
+                # Commit immediately when queue is drained or batch is full
+                if pending > 0:
+                    conn.commit()
+                    pending = 0
+            except queue.Empty:
+                # Timeout: flush any pending writes
+                if pending > 0:
+                    conn.commit()
+                    pending = 0
+        # Final flush on shutdown
+        while not self._write_queue.empty():
+            try:
+                sql, params = self._write_queue.get_nowait()
+                try:
+                    conn.execute(sql, params)
+                    pending += 1
+                except Exception:
+                    pass
+            except queue.Empty:
+                break
+        if pending > 0:
+            try:
+                conn.commit()
+            except Exception:
+                pass
+        conn.close()
+        logger.info("[DatabaseManager] Async write queue stopped")
+    def enqueue_write(self, sql: str, params: tuple = ()):
+        """
+        Enqueue a write operation for async background execution.
+
+        Non-blocking. If queue is full, the write is dropped with a warning.
+        Use this for hot-path analytics writes that should not block the main loop.
+
+        Args:
+            sql: SQL INSERT/UPDATE statement
+            params: Query parameters
+        """
+        try:
+            self._write_queue.put_nowait((sql, params))
+        except queue.Full:
+            logger.warning("[DatabaseManager] Write queue full, dropping write")
+    def flush_write_queue(self, timeout: float = 5.0):
+        """Wait for write queue to drain and commit (for testing/shutdown)."""
+        start = time.monotonic()
+        while not self._write_queue.empty() and time.monotonic() - start < timeout:
+            time.sleep(0.05)
+        # Allow time for the write thread to commit the last batch
+        remaining = timeout - (time.monotonic() - start)
+        if remaining > 0:
+            time.sleep(min(remaining, 0.2))
     def _ensure_db_exists(self):
         db_file = Path(self.db_path)
         db_file.parent.mkdir(parents=True, exist_ok=True)
@@ -38,6 +135,7 @@ class DatabaseManager:
             )
             self._local.connection.row_factory = sqlite3.Row
             self._local.connection.execute("PRAGMA foreign_keys = ON")
+            self._local.connection.execute("PRAGMA journal_mode = WAL")
         return self._local.connection
     @contextmanager
     def _cursor(self):
@@ -519,6 +617,48 @@ class DatabaseManager:
                 )
             )
             return cursor.lastrowid
+    def enqueue_track_event_detail(
+        self,
+        track_id: int,
+        timestamp: str,
+        step_type: str,
+        bbox_x1: Optional[int] = None,
+        bbox_y1: Optional[int] = None,
+        bbox_x2: Optional[int] = None,
+        bbox_y2: Optional[int] = None,
+        quality_score: Optional[float] = None,
+        roi_index: Optional[int] = None,
+        class_name: Optional[str] = None,
+        confidence: Optional[float] = None,
+        is_rejected: int = 0,
+        vote_distribution: Optional[str] = None,
+        total_rois: Optional[int] = None,
+        valid_votes: Optional[int] = None,
+        detail: Optional[str] = None
+    ):
+        """
+        Non-blocking version of add_track_event_detail.
+
+        Enqueues the write to background thread. Use this from hot-path code
+        (per-frame ROI collection, per-ROI classification) to avoid blocking.
+        """
+        sql = """INSERT INTO track_event_details (
+            track_id, timestamp, step_type,
+            bbox_x1, bbox_y1, bbox_x2, bbox_y2,
+            quality_score, roi_index,
+            class_name, confidence, is_rejected,
+            vote_distribution, total_rois, valid_votes,
+            detail
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+        params = (
+            track_id, timestamp, step_type,
+            bbox_x1, bbox_y1, bbox_x2, bbox_y2,
+            quality_score, roi_index,
+            class_name, confidence, is_rejected,
+            vote_distribution, total_rois, valid_votes,
+            detail
+        )
+        self.enqueue_write(sql, params)
     def get_track_event_details(
         self,
         track_id: Optional[int] = None,
@@ -601,6 +741,10 @@ class DatabaseManager:
         )
         return events_deleted
     def close(self):
+        # Stop the write queue thread first
+        if self._write_thread and self._write_thread.is_alive():
+            self._write_stop.set()
+            self._write_thread.join(timeout=5.0)
         if hasattr(self._local, 'connection') and self._local.connection:
             self._local.connection.close()
             self._local.connection = None

@@ -245,29 +245,33 @@ class PipelineCore:
             # total_frames = age + hits in the tracker, but we use total_frames directly
             total_hits = event.total_frames  # Approximate; includes both hit and missed frames
 
-            self._db.add_track_event(
-                track_id=event.track_id,
-                event_type=event.event_type,
-                timestamp=datetime.fromtimestamp(event.ended_at).isoformat(),
-                created_at=datetime.fromtimestamp(event.created_at).isoformat(),
-                entry_x=entry_x,
-                entry_y=entry_y,
-                exit_x=exit_x,
-                exit_y=exit_y,
-                exit_direction=event.exit_direction,
-                distance_pixels=event.distance_traveled,
-                duration_seconds=event.duration_seconds,
-                total_frames=event.total_frames,
-                avg_confidence=event.avg_confidence,
-                total_hits=total_hits,
-                position_history=position_json
+            self._db.enqueue_write(
+                """INSERT INTO track_events (
+                    track_id, event_type, timestamp, created_at,
+                    entry_x, entry_y, exit_x, exit_y,
+                    exit_direction, distance_pixels, duration_seconds, total_frames,
+                    avg_confidence, total_hits,
+                    classification, classification_confidence,
+                    position_history
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    event.track_id, event.event_type,
+                    datetime.fromtimestamp(event.ended_at).isoformat(),
+                    datetime.fromtimestamp(event.created_at).isoformat(),
+                    entry_x, entry_y, exit_x, exit_y,
+                    event.exit_direction, event.distance_traveled,
+                    event.duration_seconds, event.total_frames,
+                    event.avg_confidence, total_hits,
+                    None, None,
+                    position_json
+                )
             )
         except Exception as e:
             logger.error(f"[PipelineCore] Failed to log track event T{event.track_id}: {e}")
 
-        # Also log a detail row for the event type itself
+        # Also log a detail row for the event type itself (non-blocking)
         try:
-            self._db.add_track_event_detail(
+            self._db.enqueue_track_event_detail(
                 track_id=event.track_id,
                 timestamp=datetime.fromtimestamp(event.ended_at).isoformat(),
                 step_type=event.event_type,
@@ -282,7 +286,7 @@ class PipelineCore:
             logger.error(f"[PipelineCore] Failed to log track event detail T{event.track_id}: {e}")
 
     def _log_roi_collected(self, track_id: int, bbox: tuple):
-        """Log an ROI collection event with bounding box coordinates."""
+        """Log an ROI collection event with bounding box coordinates (non-blocking)."""
         if self._db is None:
             return
         try:
@@ -292,7 +296,7 @@ class PipelineCore:
             roi_index = stats['collected'] - 1 if stats else 0
             quality = stats['best_quality'] if stats else 0.0
 
-            self._db.add_track_event_detail(
+            self._db.enqueue_track_event_detail(
                 track_id=track_id,
                 timestamp=datetime.now().isoformat(),
                 step_type='roi_collected',
@@ -326,16 +330,18 @@ class PipelineCore:
             f"non_rejected_rois={non_rejected_rois}"
         )
 
-        # Update track event with classification result
+        # Update track event with classification result (non-blocking)
         if self._db is not None:
             try:
-                self._db.update_track_event_classification(
-                    track_id=track_id,
-                    classification=class_name,
-                    classification_confidence=confidence
+                self._db.enqueue_write(
+                    """UPDATE track_events
+                       SET classification = ?, classification_confidence = ?
+                       WHERE track_id = ? AND classification IS NULL
+                       ORDER BY id DESC LIMIT 1""",
+                    (class_name, confidence, track_id)
                 )
-                # Log voting result detail
-                self._db.add_track_event_detail(
+                # Log voting result detail (non-blocking)
+                self._db.enqueue_track_event_detail(
                     track_id=track_id,
                     timestamp=datetime.now().isoformat(),
                     step_type='voting_result',
