@@ -60,6 +60,51 @@ CREATE INDEX IF NOT EXISTS idx_events_bag_type_id ON events(bag_type_id);
 CREATE INDEX IF NOT EXISTS idx_events_track_id ON events(track_id);
 
 -- ============================================================================
+-- Table: track_events
+-- ============================================================================
+-- Stores every track lifecycle event for analytics and debugging.
+-- Records the full journey of each tracked object through the frame.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS track_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    track_id INTEGER NOT NULL,                 -- Track ID from tracker
+    event_type TEXT NOT NULL,                   -- 'track_completed', 'track_lost', 'track_invalid'
+    timestamp TEXT NOT NULL,                    -- ISO 8601 timestamp when track ended
+    created_at TEXT NOT NULL,                   -- ISO 8601 timestamp when track was first seen
+
+    -- Entry position (where the track first appeared)
+    entry_x INTEGER,                           -- Center X when track was created
+    entry_y INTEGER,                           -- Center Y when track was created
+
+    -- Exit position (where the track was last seen)
+    exit_x INTEGER,                            -- Center X when track ended
+    exit_y INTEGER,                            -- Center Y when track ended
+
+    -- Travel metrics
+    exit_direction TEXT,                        -- 'top', 'bottom', 'left', 'right', 'timeout'
+    distance_pixels REAL,                      -- Total Euclidean distance traveled (pixels)
+    duration_seconds REAL,                     -- Track lifetime in seconds
+    total_frames INTEGER,                      -- Total frames the track existed
+
+    -- Quality metrics
+    avg_confidence REAL,                       -- Average detection confidence
+    total_hits INTEGER,                        -- Frames where track was detected
+
+    -- Classification outcome (NULL if not classified)
+    classification TEXT,                       -- Final class name (NULL if skipped)
+    classification_confidence REAL,            -- Classification confidence (NULL if skipped)
+
+    -- Position history as JSON (for trajectory visualization)
+    position_history TEXT                       -- JSON array of [x,y] points
+);
+
+-- Indexes for analytics queries
+CREATE INDEX IF NOT EXISTS idx_track_events_event_type ON track_events(event_type);
+CREATE INDEX IF NOT EXISTS idx_track_events_timestamp ON track_events(timestamp);
+CREATE INDEX IF NOT EXISTS idx_track_events_track_id ON track_events(track_id);
+
+-- ============================================================================
 -- Table: config
 -- ============================================================================
 -- Stores system configuration as key-value pairs.

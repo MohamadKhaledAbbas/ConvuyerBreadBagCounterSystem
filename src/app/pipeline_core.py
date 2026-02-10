@@ -5,6 +5,8 @@ This module handles the main processing pipeline without UI or recording concern
 Follows Single Responsibility Principle.
 """
 
+import json
+from datetime import datetime
 from typing import List, Optional, Callable, Tuple
 
 import numpy as np
@@ -24,11 +26,11 @@ class PipelineCore:
     - Update tracker with detections
     - Collect ROIs for confirmed tracks
     - Submit completed tracks for classification
+    - Log track events for analytics
 
     Does NOT handle:
     - Visualization
     - Recording
-    - Database
     - Metrics (delegates to callbacks)
     """
 
@@ -37,7 +39,8 @@ class PipelineCore:
         detector: BaseDetector,
         tracker: ITracker,
         roi_collector: IROICollector,
-        classification_worker: IClassificationWorker
+        classification_worker: IClassificationWorker,
+        db=None
     ):
         """
         Initialize core pipeline.
@@ -47,11 +50,13 @@ class PipelineCore:
             tracker: Object tracker
             roi_collector: ROI collection service
             classification_worker: Async classification worker
+            db: Optional DatabaseManager for track event analytics
         """
         self.detector = detector
         self.tracker = tracker
         self.roi_collector = roi_collector
         self.classification_worker = classification_worker
+        self._db = db
 
         # Callbacks (set by orchestrator)
         # NOTE: Callback is invoked from worker thread - must be thread-safe!
@@ -130,6 +135,7 @@ class PipelineCore:
             )
             if self.on_track_event:
                 self.on_track_event(f"SKIP T{track_id} invalid travel path")
+            self._log_track_event(event)
             self.roi_collector.remove_track(track_id)
             return
 
@@ -142,6 +148,7 @@ class PipelineCore:
             )
             if self.on_track_event:
                 self.on_track_event(f"SKIP T{track_id} lost before exit")
+            self._log_track_event(event)
             self.roi_collector.remove_track(track_id)
             return
 
@@ -180,6 +187,9 @@ class PipelineCore:
             f"quality_avg={avg_quality:.1f} quality_range=[{min_quality:.1f}-{max_quality:.1f}]"
         )
 
+        # Log track event for analytics (classification will be updated later)
+        self._log_track_event(event)
+
         # Submit to async worker with multiple ROIs for voting
         # Pass best_roi_for_saving via callback partial
         from functools import partial
@@ -198,6 +208,59 @@ class PipelineCore:
 
         # Clean up
         self.roi_collector.remove_track(track_id)
+
+    def _log_track_event(self, event: TrackEvent):
+        """
+        Log a track lifecycle event to the database for analytics.
+
+        Records the full journey of a tracked object including entry/exit positions,
+        distance traveled, duration, and event type.
+
+        Args:
+            event: Track completion event from the tracker
+        """
+        if self._db is None:
+            return
+
+        try:
+            # Extract entry and exit positions
+            entry_x, entry_y = None, None
+            exit_x, exit_y = None, None
+
+            if event.position_history and len(event.position_history) > 0:
+                entry_x, entry_y = event.position_history[0]
+                exit_x, exit_y = event.position_history[-1]
+
+            # Serialize position history as JSON
+            position_json = None
+            if event.position_history:
+                position_json = json.dumps(
+                    [[int(x), int(y)] for x, y in event.position_history]
+                )
+
+            # Compute total_hits from total_frames and age
+            # total_frames = age + hits in the tracker, but we use total_frames directly
+            total_hits = event.total_frames  # Approximate; includes both hit and missed frames
+
+            self._db.add_track_event(
+                track_id=event.track_id,
+                event_type=event.event_type,
+                timestamp=datetime.fromtimestamp(event.ended_at).isoformat(),
+                created_at=datetime.fromtimestamp(event.created_at).isoformat(),
+                entry_x=entry_x,
+                entry_y=entry_y,
+                exit_x=exit_x,
+                exit_y=exit_y,
+                exit_direction=event.exit_direction,
+                distance_pixels=event.distance_traveled,
+                duration_seconds=event.duration_seconds,
+                total_frames=event.total_frames,
+                avg_confidence=event.avg_confidence,
+                total_hits=total_hits,
+                position_history=position_json
+            )
+        except Exception as e:
+            logger.error(f"[PipelineCore] Failed to log track event T{event.track_id}: {e}")
 
     def _classification_callback(self, track_id: int, class_name: str, confidence: float, non_rejected_rois: int = 0, best_roi: Optional[np.ndarray] = None):
         """
@@ -220,6 +283,17 @@ class PipelineCore:
             f"[PipelineCore] Track {track_id} classified: {class_name} ({confidence:.2f}) "
             f"non_rejected_rois={non_rejected_rois}"
         )
+
+        # Update track event with classification result
+        if self._db is not None:
+            try:
+                self._db.update_track_event_classification(
+                    track_id=track_id,
+                    classification=class_name,
+                    classification_confidence=confidence
+                )
+            except Exception as e:
+                logger.error(f"[PipelineCore] Failed to update track event classification T{track_id}: {e}")
 
         # Delegate to orchestrator callback
         # IMPORTANT: Callback must be thread-safe!

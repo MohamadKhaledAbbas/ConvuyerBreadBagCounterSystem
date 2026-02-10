@@ -284,6 +284,179 @@ class DatabaseManager:
         with self._cursor() as cursor:
             cursor.execute("SELECT key, value FROM config")
             return {row['key']: row['value'] for row in cursor.fetchall()}
+    def add_track_event(
+        self,
+        track_id: int,
+        event_type: str,
+        timestamp: str,
+        created_at: str,
+        entry_x: Optional[int] = None,
+        entry_y: Optional[int] = None,
+        exit_x: Optional[int] = None,
+        exit_y: Optional[int] = None,
+        exit_direction: Optional[str] = None,
+        distance_pixels: Optional[float] = None,
+        duration_seconds: Optional[float] = None,
+        total_frames: Optional[int] = None,
+        avg_confidence: Optional[float] = None,
+        total_hits: Optional[int] = None,
+        classification: Optional[str] = None,
+        classification_confidence: Optional[float] = None,
+        position_history: Optional[str] = None
+    ) -> int:
+        """
+        Add a track lifecycle event for analytics.
+
+        Args:
+            track_id: Track ID from tracker
+            event_type: 'track_completed', 'track_lost', 'track_invalid'
+            timestamp: ISO 8601 timestamp when track ended
+            created_at: ISO 8601 timestamp when track was first seen
+            entry_x: Center X when track was created
+            entry_y: Center Y when track was created
+            exit_x: Center X when track ended
+            exit_y: Center Y when track ended
+            exit_direction: 'top', 'bottom', 'left', 'right', 'timeout'
+            distance_pixels: Total Euclidean distance traveled
+            duration_seconds: Track lifetime in seconds
+            total_frames: Total frames the track existed
+            avg_confidence: Average detection confidence
+            total_hits: Frames where track was detected
+            classification: Final class name (None if skipped)
+            classification_confidence: Classification confidence
+            position_history: JSON array of [x,y] points
+
+        Returns:
+            Track event ID
+        """
+        with self._cursor() as cursor:
+            cursor.execute(
+                """INSERT INTO track_events (
+                    track_id, event_type, timestamp, created_at,
+                    entry_x, entry_y, exit_x, exit_y,
+                    exit_direction, distance_pixels, duration_seconds, total_frames,
+                    avg_confidence, total_hits,
+                    classification, classification_confidence,
+                    position_history
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    track_id, event_type, timestamp, created_at,
+                    entry_x, entry_y, exit_x, exit_y,
+                    exit_direction, distance_pixels, duration_seconds, total_frames,
+                    avg_confidence, total_hits,
+                    classification, classification_confidence,
+                    position_history
+                )
+            )
+            event_id = cursor.lastrowid
+        logger.debug(f"[DatabaseManager] Track event added: id={event_id}, track={track_id}, type={event_type}")
+        return event_id
+    def update_track_event_classification(
+        self,
+        track_id: int,
+        classification: str,
+        classification_confidence: float
+    ) -> None:
+        """
+        Update classification result for a track event.
+
+        Called after async classification completes for a track_completed event.
+
+        Args:
+            track_id: Track ID to update
+            classification: Final class name
+            classification_confidence: Classification confidence
+        """
+        with self._cursor() as cursor:
+            cursor.execute(
+                """UPDATE track_events
+                   SET classification = ?, classification_confidence = ?
+                   WHERE track_id = ? AND classification IS NULL
+                   ORDER BY id DESC LIMIT 1""",
+                (classification, classification_confidence, track_id)
+            )
+        logger.debug(
+            f"[DatabaseManager] Track event classification updated: "
+            f"track={track_id}, class={classification}"
+        )
+    def get_track_events(
+        self,
+        event_type: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        limit: int = 1000
+    ) -> List[Dict[str, Any]]:
+        """
+        Get track events for analytics.
+
+        Args:
+            event_type: Optional filter by event type
+            start_date: Optional start date filter (ISO 8601)
+            end_date: Optional end date filter (ISO 8601)
+            limit: Maximum number of events to return
+
+        Returns:
+            List of track event dictionaries
+        """
+        query = "SELECT * FROM track_events"
+        params = []
+        conditions = []
+        if event_type:
+            conditions.append("event_type = ?")
+            params.append(event_type)
+        if start_date:
+            conditions.append("timestamp >= ?")
+            params.append(start_date)
+        if end_date:
+            conditions.append("timestamp <= ?")
+            params.append(end_date)
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY timestamp ASC LIMIT ?"
+        params.append(limit)
+        with self._cursor() as cursor:
+            cursor.execute(query, params)
+            return [dict(row) for row in cursor.fetchall()]
+    def get_track_event_stats(
+        self,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Get aggregated track event statistics.
+
+        Returns:
+            Dictionary with counts by event type and summary metrics
+        """
+        query = """
+            SELECT
+                event_type,
+                COUNT(*) as count,
+                AVG(duration_seconds) as avg_duration,
+                AVG(distance_pixels) as avg_distance,
+                AVG(avg_confidence) as avg_confidence
+            FROM track_events
+        """
+        params = []
+        conditions = []
+        if start_date:
+            conditions.append("timestamp >= ?")
+            params.append(start_date)
+        if end_date:
+            conditions.append("timestamp <= ?")
+            params.append(end_date)
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " GROUP BY event_type"
+        with self._cursor() as cursor:
+            cursor.execute(query, params)
+            rows = [dict(row) for row in cursor.fetchall()]
+        by_type = {row['event_type']: row for row in rows}
+        total = sum(int(r['count']) for r in rows)
+        return {
+            'total': total,
+            'by_type': by_type
+        }
     def close(self):
         if hasattr(self._local, 'connection') and self._local.connection:
             self._local.connection.close()
