@@ -21,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from src.endpoint.routes import analytics
+from src.endpoint.routes import track_lifecycle
 from src.endpoint.shared import init_shared_resources, cleanup_shared_resources
 from src.utils.AppLogging import logger
 
@@ -63,6 +64,9 @@ app.add_middleware(
 
 # Include analytics router
 app.include_router(analytics.router)
+
+# Include track lifecycle router
+app.include_router(track_lifecycle.router)
 
 
 @app.get("/health")

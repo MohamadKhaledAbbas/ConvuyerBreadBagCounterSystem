@@ -326,7 +326,8 @@ class ConveyorCounterApp:
         self._classification_worker = ClassificationWorker(
             classifier=self._classifier,
             max_queue_size=100,
-            name="ClassificationWorker"
+            name="ClassificationWorker",
+            db=self._db
         )
         self._classification_worker.start()
 

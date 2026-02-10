@@ -105,6 +105,58 @@ CREATE INDEX IF NOT EXISTS idx_track_events_timestamp ON track_events(timestamp)
 CREATE INDEX IF NOT EXISTS idx_track_events_track_id ON track_events(track_id);
 
 -- ============================================================================
+-- Table: track_event_details
+-- ============================================================================
+-- Stores detailed lifecycle steps for each track event.
+-- Each row represents one step: ROI collection, per-ROI classification, voting, etc.
+-- Linked to track_events via track_id for full lifecycle reconstruction.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS track_event_details (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    track_id INTEGER NOT NULL,                 -- Track ID (links to track_events.track_id)
+    timestamp TEXT NOT NULL,                    -- ISO 8601 timestamp of this step
+    step_type TEXT NOT NULL,                    -- Step type (see below)
+    -- step_type values:
+    --   'roi_collected'     - ROI passed quality check and was collected
+    --   'roi_rejected'      - ROI failed quality check
+    --   'roi_classified'    - Individual ROI classification result
+    --   'voting_result'     - Final voting/classification result
+    --   'track_created'     - Track was first created
+    --   'track_completed'   - Track exited frame normally
+    --   'track_lost'        - Track lost (disappeared)
+    --   'track_invalid'     - Track had invalid travel path
+
+    -- Position data (for ROI steps)
+    bbox_x1 INTEGER,                           -- ROI bounding box x1
+    bbox_y1 INTEGER,                           -- ROI bounding box y1
+    bbox_x2 INTEGER,                           -- ROI bounding box x2
+    bbox_y2 INTEGER,                           -- ROI bounding box y2
+
+    -- Quality data (for ROI steps)
+    quality_score REAL,                        -- ROI quality score
+    roi_index INTEGER,                         -- ROI index in collection (0-based)
+
+    -- Classification data (for classification steps)
+    class_name TEXT,                           -- Predicted class name
+    confidence REAL,                           -- Classification confidence
+    is_rejected INTEGER DEFAULT 0,             -- 1 if classified as Rejected
+
+    -- Voting data (for voting_result step)
+    vote_distribution TEXT,                    -- JSON: {"ClassName": score, ...}
+    total_rois INTEGER,                        -- Total ROIs used for voting
+    valid_votes INTEGER,                       -- Non-rejected votes
+
+    -- Extra context
+    detail TEXT                                -- Additional JSON context
+);
+
+-- Indexes for fast lookup
+CREATE INDEX IF NOT EXISTS idx_track_event_details_track_id ON track_event_details(track_id);
+CREATE INDEX IF NOT EXISTS idx_track_event_details_step_type ON track_event_details(step_type);
+CREATE INDEX IF NOT EXISTS idx_track_event_details_timestamp ON track_event_details(timestamp);
+
+-- ============================================================================
 -- Table: config
 -- ============================================================================
 -- Stores system configuration as key-value pairs.

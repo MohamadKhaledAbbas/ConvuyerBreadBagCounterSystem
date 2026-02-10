@@ -93,12 +93,15 @@ class PipelineCore:
         # 3. Collect ROIs for confirmed tracks (non-blocking)
         rois_collected = 0
         for track in self.tracker.get_confirmed_tracks():
-            if self.roi_collector.collect_roi(
+            collected = self.roi_collector.collect_roi(
                 track_id=track.track_id,
                 frame=frame,
                 bbox=track.bbox
-            ):
+            )
+            if collected:
                 rois_collected += 1
+                # Log ROI collection detail to DB
+                self._log_roi_collected(track.track_id, track.bbox)
 
         # 4. Handle completed tracks
         completed_events = self.tracker.get_completed_events()
@@ -262,6 +265,45 @@ class PipelineCore:
         except Exception as e:
             logger.error(f"[PipelineCore] Failed to log track event T{event.track_id}: {e}")
 
+        # Also log a detail row for the event type itself
+        try:
+            self._db.add_track_event_detail(
+                track_id=event.track_id,
+                timestamp=datetime.fromtimestamp(event.ended_at).isoformat(),
+                step_type=event.event_type,
+                detail=json.dumps({
+                    'exit_direction': event.exit_direction,
+                    'total_frames': event.total_frames,
+                    'duration_seconds': round(event.duration_seconds, 2) if event.duration_seconds else None,
+                    'distance_pixels': round(event.distance_traveled, 1) if event.distance_traveled else None
+                })
+            )
+        except Exception as e:
+            logger.error(f"[PipelineCore] Failed to log track event detail T{event.track_id}: {e}")
+
+    def _log_roi_collected(self, track_id: int, bbox: tuple):
+        """Log an ROI collection event with bounding box coordinates."""
+        if self._db is None:
+            return
+        try:
+            x1, y1, x2, y2 = bbox
+            # Get collection stats for roi_index
+            stats = self.roi_collector.get_collection_stats(track_id)
+            roi_index = stats['collected'] - 1 if stats else 0
+            quality = stats['best_quality'] if stats else 0.0
+
+            self._db.add_track_event_detail(
+                track_id=track_id,
+                timestamp=datetime.now().isoformat(),
+                step_type='roi_collected',
+                bbox_x1=int(x1), bbox_y1=int(y1),
+                bbox_x2=int(x2), bbox_y2=int(y2),
+                quality_score=quality,
+                roi_index=roi_index
+            )
+        except Exception as e:
+            logger.error(f"[PipelineCore] Failed to log ROI collection T{track_id}: {e}")
+
     def _classification_callback(self, track_id: int, class_name: str, confidence: float, non_rejected_rois: int = 0, best_roi: Optional[np.ndarray] = None):
         """
         Called when classification completes (runs in worker thread).
@@ -291,6 +333,20 @@ class PipelineCore:
                     track_id=track_id,
                     classification=class_name,
                     classification_confidence=confidence
+                )
+                # Log voting result detail
+                self._db.add_track_event_detail(
+                    track_id=track_id,
+                    timestamp=datetime.now().isoformat(),
+                    step_type='voting_result',
+                    class_name=class_name,
+                    confidence=confidence,
+                    valid_votes=non_rejected_rois,
+                    detail=json.dumps({
+                        'final_class': class_name,
+                        'final_confidence': round(confidence, 4),
+                        'non_rejected_rois': non_rejected_rois
+                    })
                 )
             except Exception as e:
                 logger.error(f"[PipelineCore] Failed to update track event classification T{track_id}: {e}")

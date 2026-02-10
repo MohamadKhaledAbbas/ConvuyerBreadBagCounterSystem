@@ -15,6 +15,11 @@ def init_shared_resources():
     config = get_config()
     _db_instance = DatabaseManager(config.db_path)
     logger.info("[Shared] Database initialized")
+    # Run 7-day retention cleanup on startup
+    try:
+        _db_instance.purge_old_track_events(retention_days=7)
+    except Exception as e:
+        logger.error(f"[Shared] Retention cleanup failed: {e}")
     template_dir = Path(__file__).parent / "templates"
     template_dir.mkdir(exist_ok=True)
     _templates_instance = Jinja2Templates(directory=str(template_dir))

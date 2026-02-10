@@ -49,7 +49,8 @@ class ClassificationWorker(IClassificationWorker):
         self,
         classifier: BaseClassifier,
         max_queue_size: int = 100,
-        name: str = "ClassificationWorker"
+        name: str = "ClassificationWorker",
+        db=None
     ):
         """
         Initialize classification worker.
@@ -58,9 +59,11 @@ class ClassificationWorker(IClassificationWorker):
             classifier: Classifier instance
             max_queue_size: Maximum jobs in queue
             name: Thread name for debugging
+            db: Optional DatabaseManager for logging per-ROI classification details
         """
         self.classifier = classifier
         self.name = name
+        self._db = db
 
         # Job queue
         self.job_queue: queue.Queue[ClassificationJob] = queue.Queue(maxsize=max_queue_size)
@@ -215,10 +218,17 @@ class ClassificationWorker(IClassificationWorker):
                 result: ClassificationResult = self.classifier.classify(job.roi)
                 final_class = result.class_name
                 final_confidence = result.confidence
+                valid_votes = 0 if result.class_name == 'Rejected' else 1
 
                 logger.info(
                     f"[CLASSIFICATION] T{job.track_id} SINGLE_ROI | "
                     f"result={final_class} conf={final_confidence:.3f}"
+                )
+
+                # Log per-ROI classification to DB
+                self._log_roi_classified(
+                    job.track_id, 0, result.class_name, result.confidence,
+                    result.class_name == 'Rejected'
                 )
             else:
                 # Multiple ROIs - voting
@@ -231,6 +241,11 @@ class ClassificationWorker(IClassificationWorker):
                     logger.info(
                         f"[CLASSIFICATION] T{job.track_id} ROI_{idx+1}/{len(all_rois)} | "
                         f"result={result.class_name} conf={result.confidence:.3f}"
+                    )
+                    # Log per-ROI classification to DB
+                    self._log_roi_classified(
+                        job.track_id, idx, result.class_name, result.confidence,
+                        result.class_name == 'Rejected'
                     )
 
                 # Weighted voting (exclude 'Rejected' votes)
@@ -310,6 +325,25 @@ class ClassificationWorker(IClassificationWorker):
     def get_queue_size(self) -> int:
         """Get current number of jobs in queue."""
         return self.job_queue.qsize()
+
+    def _log_roi_classified(self, track_id: int, roi_index: int, class_name: str,
+                            confidence: float, is_rejected: bool):
+        """Log individual ROI classification result to database."""
+        if self._db is None:
+            return
+        try:
+            from datetime import datetime
+            self._db.add_track_event_detail(
+                track_id=track_id,
+                timestamp=datetime.now().isoformat(),
+                step_type='roi_classified',
+                roi_index=roi_index,
+                class_name=class_name,
+                confidence=confidence,
+                is_rejected=1 if is_rejected else 0
+            )
+        except Exception as e:
+            logger.error(f"[{self.name}] Failed to log ROI classification T{track_id}: {e}")
 
     def get_statistics(self) -> dict:
         """Get worker statistics."""

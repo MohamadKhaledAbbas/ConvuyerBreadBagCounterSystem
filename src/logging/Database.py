@@ -457,6 +457,149 @@ class DatabaseManager:
             'total': total,
             'by_type': by_type
         }
+    def add_track_event_detail(
+        self,
+        track_id: int,
+        timestamp: str,
+        step_type: str,
+        bbox_x1: Optional[int] = None,
+        bbox_y1: Optional[int] = None,
+        bbox_x2: Optional[int] = None,
+        bbox_y2: Optional[int] = None,
+        quality_score: Optional[float] = None,
+        roi_index: Optional[int] = None,
+        class_name: Optional[str] = None,
+        confidence: Optional[float] = None,
+        is_rejected: int = 0,
+        vote_distribution: Optional[str] = None,
+        total_rois: Optional[int] = None,
+        valid_votes: Optional[int] = None,
+        detail: Optional[str] = None
+    ) -> int:
+        """
+        Add a detailed lifecycle step for a track event.
+
+        Args:
+            track_id: Track ID from tracker
+            timestamp: ISO 8601 timestamp
+            step_type: One of 'roi_collected', 'roi_rejected', 'roi_classified',
+                       'voting_result', 'track_created', 'track_completed',
+                       'track_lost', 'track_invalid'
+            bbox_x1..bbox_y2: ROI bounding box coordinates
+            quality_score: ROI quality score
+            roi_index: ROI index in collection
+            class_name: Classification result
+            confidence: Classification confidence
+            is_rejected: 1 if classified as Rejected
+            vote_distribution: JSON vote distribution
+            total_rois: Total ROIs for voting
+            valid_votes: Non-rejected votes
+            detail: Additional JSON context
+
+        Returns:
+            Detail event ID
+        """
+        with self._cursor() as cursor:
+            cursor.execute(
+                """INSERT INTO track_event_details (
+                    track_id, timestamp, step_type,
+                    bbox_x1, bbox_y1, bbox_x2, bbox_y2,
+                    quality_score, roi_index,
+                    class_name, confidence, is_rejected,
+                    vote_distribution, total_rois, valid_votes,
+                    detail
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    track_id, timestamp, step_type,
+                    bbox_x1, bbox_y1, bbox_x2, bbox_y2,
+                    quality_score, roi_index,
+                    class_name, confidence, is_rejected,
+                    vote_distribution, total_rois, valid_votes,
+                    detail
+                )
+            )
+            return cursor.lastrowid
+    def get_track_event_details(
+        self,
+        track_id: Optional[int] = None,
+        step_type: Optional[str] = None,
+        limit: int = 5000
+    ) -> List[Dict[str, Any]]:
+        """
+        Get track event detail records.
+
+        Args:
+            track_id: Optional filter by track ID
+            step_type: Optional filter by step type
+            limit: Maximum records to return
+
+        Returns:
+            List of detail dictionaries
+        """
+        query = "SELECT * FROM track_event_details"
+        params = []
+        conditions = []
+        if track_id is not None:
+            conditions.append("track_id = ?")
+            params.append(track_id)
+        if step_type:
+            conditions.append("step_type = ?")
+            params.append(step_type)
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY id ASC LIMIT ?"
+        params.append(limit)
+        with self._cursor() as cursor:
+            cursor.execute(query, params)
+            return [dict(row) for row in cursor.fetchall()]
+    def get_track_lifecycle(self, track_id: int) -> Dict[str, Any]:
+        """
+        Get the full lifecycle of a single track: summary + all detail steps.
+
+        Args:
+            track_id: Track ID to look up
+
+        Returns:
+            Dictionary with 'summary' (from track_events) and 'details' (from track_event_details)
+        """
+        with self._cursor() as cursor:
+            cursor.execute(
+                "SELECT * FROM track_events WHERE track_id = ? ORDER BY id DESC LIMIT 1",
+                (track_id,)
+            )
+            row = cursor.fetchone()
+            summary = dict(row) if row else None
+        details = self.get_track_event_details(track_id=track_id)
+        return {
+            'summary': summary,
+            'details': details
+        }
+    def purge_old_track_events(self, retention_days: int = 7) -> int:
+        """
+        Delete track events and details older than retention_days.
+
+        Args:
+            retention_days: Number of days to retain (default: 7)
+
+        Returns:
+            Number of track_events rows deleted
+        """
+        with self._cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM track_event_details WHERE timestamp < datetime('now', '-' || ? || ' days')",
+                (retention_days,)
+            )
+            details_deleted = cursor.rowcount
+            cursor.execute(
+                "DELETE FROM track_events WHERE timestamp < datetime('now', '-' || ? || ' days')",
+                (retention_days,)
+            )
+            events_deleted = cursor.rowcount
+        logger.info(
+            f"[DatabaseManager] Purged old track events: "
+            f"{events_deleted} events, {details_deleted} details (retention={retention_days}d)"
+        )
+        return events_deleted
     def close(self):
         if hasattr(self._local, 'connection') and self._local.connection:
             self._local.connection.close()
