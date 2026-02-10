@@ -251,6 +251,7 @@ def test_invalid_travel_exits_bottom():
 
     # Should be invalid since it exits from bottom, not top
     assert len(completed) == 0, f"Expected 0 track_completed (bottom exit), got {len(completed)}"
+    assert len(invalid) == 1, f"Expected 1 track_invalid (bottom exit), got {len(invalid)}"
 
     print("✓ test_invalid_travel_exits_bottom passed")
 

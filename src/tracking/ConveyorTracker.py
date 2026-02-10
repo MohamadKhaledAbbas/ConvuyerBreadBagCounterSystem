@@ -601,7 +601,8 @@ class ConveyorTracker(ITracker):
             True if in entry zone
         """
         if self.frame_height is None:
-            return True  # Can't validate without frame dimensions
+            logger.warning("[ConveyorTracker] Cannot validate entry zone: frame_height is None")
+            return False  # Can't validate without frame dimensions
         entry_zone_ratio = getattr(self.config, 'entry_zone_ratio', 0.25)
         entry_y_threshold = self.frame_height * (1.0 - entry_zone_ratio)
         return y >= entry_y_threshold
@@ -620,7 +621,8 @@ class ConveyorTracker(ITracker):
             True if in exit zone
         """
         if self.frame_height is None:
-            return True  # Can't validate without frame dimensions
+            logger.warning("[ConveyorTracker] Cannot validate exit zone: frame_height is None")
+            return False  # Can't validate without frame dimensions
         exit_zone_ratio = getattr(self.config, 'exit_zone_ratio', 0.15)
         exit_y_threshold = self.frame_height * exit_zone_ratio
         return y <= exit_y_threshold
