@@ -60,6 +60,103 @@ CREATE INDEX IF NOT EXISTS idx_events_bag_type_id ON events(bag_type_id);
 CREATE INDEX IF NOT EXISTS idx_events_track_id ON events(track_id);
 
 -- ============================================================================
+-- Table: track_events
+-- ============================================================================
+-- Stores every track lifecycle event for analytics and debugging.
+-- Records the full journey of each tracked object through the frame.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS track_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    track_id INTEGER NOT NULL,                 -- Track ID from tracker
+    event_type TEXT NOT NULL,                   -- 'track_completed', 'track_lost', 'track_invalid'
+    timestamp TEXT NOT NULL,                    -- ISO 8601 timestamp when track ended
+    created_at TEXT NOT NULL,                   -- ISO 8601 timestamp when track was first seen
+
+    -- Entry position (where the track first appeared)
+    entry_x INTEGER,                           -- Center X when track was created
+    entry_y INTEGER,                           -- Center Y when track was created
+
+    -- Exit position (where the track was last seen)
+    exit_x INTEGER,                            -- Center X when track ended
+    exit_y INTEGER,                            -- Center Y when track ended
+
+    -- Travel metrics
+    exit_direction TEXT,                        -- 'top', 'bottom', 'left', 'right', 'timeout'
+    distance_pixels REAL,                      -- Total Euclidean distance traveled (pixels)
+    duration_seconds REAL,                     -- Track lifetime in seconds
+    total_frames INTEGER,                      -- Total frames the track existed
+
+    -- Quality metrics
+    avg_confidence REAL,                       -- Average detection confidence
+    total_hits INTEGER,                        -- Frames where track was detected
+
+    -- Classification outcome (NULL if not classified)
+    classification TEXT,                       -- Final class name (NULL if skipped)
+    classification_confidence REAL,            -- Classification confidence (NULL if skipped)
+
+    -- Position history as JSON (for trajectory visualization)
+    position_history TEXT                       -- JSON array of [x,y] points
+);
+
+-- Indexes for analytics queries
+CREATE INDEX IF NOT EXISTS idx_track_events_event_type ON track_events(event_type);
+CREATE INDEX IF NOT EXISTS idx_track_events_timestamp ON track_events(timestamp);
+CREATE INDEX IF NOT EXISTS idx_track_events_track_id ON track_events(track_id);
+
+-- ============================================================================
+-- Table: track_event_details
+-- ============================================================================
+-- Stores detailed lifecycle steps for each track event.
+-- Each row represents one step: ROI collection, per-ROI classification, voting, etc.
+-- Linked to track_events via track_id for full lifecycle reconstruction.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS track_event_details (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    track_id INTEGER NOT NULL,                 -- Track ID (links to track_events.track_id)
+    timestamp TEXT NOT NULL,                    -- ISO 8601 timestamp of this step
+    step_type TEXT NOT NULL,                    -- Step type (see below)
+    -- step_type values:
+    --   'roi_collected'     - ROI passed quality check and was collected
+    --   'roi_rejected'      - ROI failed quality check
+    --   'roi_classified'    - Individual ROI classification result
+    --   'voting_result'     - Final voting/classification result
+    --   'track_created'     - Track was first created
+    --   'track_completed'   - Track exited frame normally
+    --   'track_lost'        - Track lost (disappeared)
+    --   'track_invalid'     - Track had invalid travel path
+
+    -- Position data (for ROI steps)
+    bbox_x1 INTEGER,                           -- ROI bounding box x1
+    bbox_y1 INTEGER,                           -- ROI bounding box y1
+    bbox_x2 INTEGER,                           -- ROI bounding box x2
+    bbox_y2 INTEGER,                           -- ROI bounding box y2
+
+    -- Quality data (for ROI steps)
+    quality_score REAL,                        -- ROI quality score
+    roi_index INTEGER,                         -- ROI index in collection (0-based)
+
+    -- Classification data (for classification steps)
+    class_name TEXT,                           -- Predicted class name
+    confidence REAL,                           -- Classification confidence
+    is_rejected INTEGER DEFAULT 0,             -- 1 if classified as Rejected
+
+    -- Voting data (for voting_result step)
+    vote_distribution TEXT,                    -- JSON: {"ClassName": score, ...}
+    total_rois INTEGER,                        -- Total ROIs used for voting
+    valid_votes INTEGER,                       -- Non-rejected votes
+
+    -- Extra context
+    detail TEXT                                -- Additional JSON context
+);
+
+-- Indexes for fast lookup
+CREATE INDEX IF NOT EXISTS idx_track_event_details_track_id ON track_event_details(track_id);
+CREATE INDEX IF NOT EXISTS idx_track_event_details_step_type ON track_event_details(step_type);
+CREATE INDEX IF NOT EXISTS idx_track_event_details_timestamp ON track_event_details(timestamp);
+
+-- ============================================================================
 -- Table: config
 -- ============================================================================
 -- Stores system configuration as key-value pairs.
@@ -76,23 +173,22 @@ CREATE TABLE IF NOT EXISTS config (
 CREATE INDEX IF NOT EXISTS idx_config_key ON config(key);
 
 -- ============================================================================
--- Initial Data (Optional)
+-- Initial Data: Default Bag Types
 -- ============================================================================
--- Pre-populate with default bag types if needed.
--- Uncomment and modify as needed for your deployment.
+-- Pre-populated bag types required for the analytics endpoint.
+-- Uses INSERT OR IGNORE to avoid duplicates on re-initialization.
 -- ============================================================================
 
--- Example: Insert default bag types
--- INSERT OR IGNORE INTO bag_types (name, arabic_name, weight, thumb) VALUES
---     ('Wheatberry', 'توت القمح', 500, 'data/classes/Wheatberry/Wheatberry.jpg'),
---     ('Multigrain', 'متعدد الحبوب', 450, 'data/classes/Multigrain/Multigrain.jpg'),
---     ('WholeWheat', 'قمح كامل', 500, 'data/classes/WholeWheat/WholeWheat.jpg');
-
--- Example: Insert default config values
--- INSERT OR IGNORE INTO config (key, value) VALUES
---     ('detection_confidence', '0.5'),
---     ('classification_confidence', '0.7'),
---     ('system_enabled', 'true');
+INSERT OR IGNORE INTO bag_types (id, name, arabic_name, weight, thumb, created_at) VALUES
+    (1, 'Brown_Orange_Family', 'Brown_Orange_Family', 0, 'data/classes/Brown_Orange_Family/Brown_Orange_Family.jpg', '2026-02-03 03:31:05'),
+    (2, 'Red_Yellow', 'Red_Yellow', 0, 'data/classes/Red_Yellow/Red_Yellow.jpg', '2026-02-03 03:31:05'),
+    (3, 'Wheatberry', 'Wheatberry', 0, 'data/classes/Wheatberry/Wheatberry.jpg', '2026-02-03 10:52:21'),
+    (4, 'Blue_Yellow', 'Blue_Yellow', 0, 'data/classes/Blue_Yellow/Blue_Yellow.jpg', '2026-02-06 01:39:32'),
+    (5, 'Rejected', 'Rejected', 0, 'data/classes/Rejected/Rejected.jpg', '2026-02-06 01:51:49'),
+    (6, 'Green_Yellow', 'Green_Yellow', 0, 'data/classes/Green_Yellow/Green_Yellow.jpg', '2026-02-06 01:55:36'),
+    (7, 'Bran', 'Bran', 0, 'data/classes/Bran/Bran.jpg', '2026-02-08 18:16:49'),
+    (8, 'Black_Orange', 'Black_Orange', 0, 'data/classes/Black_Orange/Black_Orange.jpg', '2026-02-10 00:00:00'),
+    (9, 'Purple_Yellow', 'Purple_Yellow', 0, 'data/classes/Purple_Yellow/Purple_Yellow.jpg', '2026-02-10 00:00:00');
 
 -- ============================================================================
 -- Schema Validation Queries

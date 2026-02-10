@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Track Event Lifecycle</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --bg-deep: #0f172a;
+            --glass-bg: rgba(30, 41, 59, 0.7);
+            --glass-border: rgba(255, 255, 255, 0.08);
+            --glass-shadow: 0 4px 30px rgba(0, 0, 0, 0.3);
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --accent-primary: #38bdf8;
+            --accent-success: #2dd4bf;
+            --accent-warning: #fbbf24;
+            --accent-danger: #f87171;
+            --accent-purple: #a78bfa;
+            --radius-lg: 16px;
+            --radius-md: 12px;
+            --radius-sm: 8px;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Inter', system-ui, sans-serif;
+            background-color: var(--bg-deep);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.5;
+        }
+        main {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem 1.5rem;
+        }
+
+        /* Header */
+        .page-header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        .page-header h1 {
+            font-size: 1.8rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 0.25rem;
+        }
+        .page-header .subtitle {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        /* Filter bar */
+        .filter-bar {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-md);
+            padding: 1rem 1.5rem;
+            margin-bottom: 1.5rem;
+            display: flex;
+            gap: 1rem;
+            align-items: end;
+            flex-wrap: wrap;
+        }
+        .filter-bar .field { display: flex; flex-direction: column; gap: 0.3rem; }
+        .filter-bar label { font-size: 0.75rem; color: var(--text-secondary); font-weight: 500; }
+        .filter-bar input, .filter-bar select {
+            background: rgba(15, 23, 42, 0.8);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-sm);
+            color: var(--text-primary);
+            padding: 0.5rem 0.75rem;
+            font-size: 0.85rem;
+            font-family: inherit;
+        }
+        .filter-bar button {
+            background: linear-gradient(135deg, var(--accent-primary), #818cf8);
+            border: none;
+            border-radius: var(--radius-sm);
+            color: white;
+            padding: 0.55rem 1.2rem;
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 0.85rem;
+            transition: transform 0.1s;
+        }
+        .filter-bar button:hover { transform: translateY(-1px); }
+
+        /* Stats cards */
+        .stats-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+        .stat-card {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-md);
+            padding: 1rem 1.25rem;
+            text-align: center;
+        }
+        .stat-card .stat-value {
+            font-size: 2rem;
+            font-weight: 800;
+            line-height: 1.1;
+        }
+        .stat-card .stat-label {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin-top: 0.3rem;
+        }
+        .stat-completed .stat-value { color: var(--accent-success); }
+        .stat-lost .stat-value { color: var(--accent-danger); }
+        .stat-invalid .stat-value { color: var(--accent-warning); }
+        .stat-total .stat-value { color: var(--accent-primary); }
+
+        /* Event table */
+        .events-table-wrap {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.82rem;
+        }
+        thead th {
+            background: rgba(15, 23, 42, 0.6);
+            padding: 0.75rem 0.6rem;
+            text-align: left;
+            font-weight: 600;
+            color: var(--text-secondary);
+            border-bottom: 1px solid var(--glass-border);
+            white-space: nowrap;
+        }
+        tbody td {
+            padding: 0.6rem;
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+            vertical-align: top;
+        }
+        tbody tr:hover { background: rgba(56, 189, 248, 0.05); }
+
+        /* Event type badges */
+        .badge {
+            display: inline-block;
+            padding: 0.15rem 0.5rem;
+            border-radius: 20px;
+            font-size: 0.72rem;
+            font-weight: 600;
+        }
+        .badge-completed { background: rgba(45, 212, 191, 0.15); color: var(--accent-success); }
+        .badge-lost { background: rgba(248, 113, 113, 0.15); color: var(--accent-danger); }
+        .badge-invalid { background: rgba(251, 191, 36, 0.15); color: var(--accent-warning); }
+
+        /* Direction badges */
+        .dir-badge {
+            display: inline-block;
+            padding: 0.1rem 0.4rem;
+            border-radius: 4px;
+            font-size: 0.72rem;
+            background: rgba(255,255,255,0.06);
+            color: var(--text-secondary);
+        }
+
+        /* Expandable detail rows */
+        .detail-toggle {
+            cursor: pointer;
+            color: var(--accent-primary);
+            font-size: 0.8rem;
+            user-select: none;
+        }
+        .detail-toggle:hover { text-decoration: underline; }
+        .detail-row { display: none; }
+        .detail-row.open { display: table-row; }
+        .detail-cell {
+            padding: 0.75rem 1rem;
+            background: rgba(15, 23, 42, 0.5);
+        }
+
+        /* Detail steps list */
+        .steps-list {
+            list-style: none;
+            padding: 0;
+            font-size: 0.78rem;
+        }
+        .steps-list li {
+            padding: 0.35rem 0;
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+            display: flex;
+            gap: 0.75rem;
+            align-items: baseline;
+        }
+        .steps-list li:last-child { border-bottom: none; }
+        .step-type {
+            font-weight: 600;
+            min-width: 110px;
+            flex-shrink: 0;
+        }
+        .step-roi_collected .step-type { color: var(--accent-primary); }
+        .step-roi_rejected .step-type { color: var(--text-muted); }
+        .step-roi_classified .step-type { color: var(--accent-purple); }
+        .step-voting_result .step-type { color: var(--accent-success); }
+        .step-track_created .step-type { color: var(--accent-primary); }
+        .step-track_completed .step-type { color: var(--accent-success); }
+        .step-track_lost .step-type { color: var(--accent-danger); }
+        .step-track_invalid .step-type { color: var(--accent-warning); }
+        .step-info {
+            color: var(--text-secondary);
+            font-family: 'Courier New', monospace;
+            font-size: 0.75rem;
+        }
+
+        /* Coordinates */
+        .coord {
+            font-family: 'Courier New', monospace;
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+        }
+
+        /* Classification pill */
+        .class-pill {
+            display: inline-block;
+            padding: 0.1rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            background: rgba(167, 139, 250, 0.15);
+            color: var(--accent-purple);
+        }
+        .class-pill.rejected {
+            background: rgba(248, 113, 113, 0.15);
+            color: var(--accent-danger);
+        }
+
+        /* Confidence bar */
+        .conf-bar {
+            display: inline-block;
+            width: 50px;
+            height: 6px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 3px;
+            overflow: hidden;
+            vertical-align: middle;
+            margin-left: 4px;
+        }
+        .conf-bar-fill {
+            height: 100%;
+            border-radius: 3px;
+            transition: width 0.3s;
+        }
+
+        /* Empty state */
+        .empty-state {
+            text-align: center;
+            padding: 3rem;
+            color: var(--text-secondary);
+        }
+        .empty-state i { font-size: 2rem; margin-bottom: 0.75rem; display: block; }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .filter-bar { flex-direction: column; }
+            .stats-row { grid-template-columns: repeat(2, 1fr); }
+            table { font-size: 0.75rem; }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <div class="page-header">
+        <h1><i class="fa-solid fa-route"></i> Track Event Lifecycle</h1>
+        <p class="subtitle">Full lifecycle of every tracked bread bag — creation, ROI collection, classification, and outcome</p>
+    </div>
+
+    <!-- Filter Bar -->
+    <form class="filter-bar" method="get" action="/track-events">
+        <div class="field">
+            <label for="start_time">Start Time</label>
+            <input type="datetime-local" id="start_time" name="start_time"
+                   value="{{ meta.start.strftime('%Y-%m-%dT%H:%M') if meta.start else '' }}">
+        </div>
+        <div class="field">
+            <label for="end_time">End Time</label>
+            <input type="datetime-local" id="end_time" name="end_time"
+                   value="{{ meta.end.strftime('%Y-%m-%dT%H:%M') if meta.end else '' }}">
+        </div>
+        <div class="field">
+            <label for="event_type">Event Type</label>
+            <select id="event_type" name="event_type">
+                <option value="">All</option>
+                <option value="track_completed" {{ 'selected' if meta.event_type_filter == 'track_completed' else '' }}>Completed</option>
+                <option value="track_lost" {{ 'selected' if meta.event_type_filter == 'track_lost' else '' }}>Lost</option>
+                <option value="track_invalid" {{ 'selected' if meta.event_type_filter == 'track_invalid' else '' }}>Invalid</option>
+            </select>
+        </div>
+        <button type="submit"><i class="fa-solid fa-filter"></i> Filter</button>
+    </form>
+
+    <!-- Stats -->
+    {% set completed_count = stats.by_type.get('track_completed', {}).get('count', 0)|int %}
+    {% set lost_count = stats.by_type.get('track_lost', {}).get('count', 0)|int %}
+    {% set invalid_count = stats.by_type.get('track_invalid', {}).get('count', 0)|int %}
+    {% set total_count = stats.get('total', 0)|int %}
+
+    <div class="stats-row">
+        <div class="stat-card stat-total">
+            <div class="stat-value">{{ total_count }}</div>
+            <div class="stat-label">Total Events</div>
+        </div>
+        <div class="stat-card stat-completed">
+            <div class="stat-value">{{ completed_count }}</div>
+            <div class="stat-label"><i class="fa-solid fa-check"></i> Completed</div>
+        </div>
+        <div class="stat-card stat-lost">
+            <div class="stat-value">{{ lost_count }}</div>
+            <div class="stat-label"><i class="fa-solid fa-ghost"></i> Lost</div>
+        </div>
+        <div class="stat-card stat-invalid">
+            <div class="stat-value">{{ invalid_count }}</div>
+            <div class="stat-label"><i class="fa-solid fa-ban"></i> Invalid Path</div>
+        </div>
+        {% if total_count > 0 %}
+        <div class="stat-card">
+            <div class="stat-value" style="color: var(--accent-primary);">{{ "%.0f"|format(completed_count / total_count * 100) }}%</div>
+            <div class="stat-label">Success Rate</div>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Events Table -->
+    {% if events|length == 0 %}
+    <div class="empty-state">
+        <i class="fa-solid fa-inbox"></i>
+        <p>No track events found for this time range.</p>
+    </div>
+    {% else %}
+    <div class="events-table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th></th>
+                    <th>Track ID</th>
+                    <th>Type</th>
+                    <th>Entry</th>
+                    <th>Exit</th>
+                    <th>Direction</th>
+                    <th>Distance</th>
+                    <th>Duration</th>
+                    <th>Confidence</th>
+                    <th>Classification</th>
+                    <th>Created</th>
+                    <th>Ended</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for ev in events %}
+                <tr>
+                    <td>
+                        {% if ev.details|length > 0 %}
+                        <span class="detail-toggle" onclick="toggleDetail({{ ev.track_id }})">
+                            <i class="fa-solid fa-chevron-right" id="icon-{{ ev.track_id }}"></i>
+                        </span>
+                        {% endif %}
+                    </td>
+                    <td><strong>T{{ ev.track_id }}</strong></td>
+                    <td>
+                        {% if ev.event_type == 'track_completed' %}
+                            <span class="badge badge-completed">Completed</span>
+                        {% elif ev.event_type == 'track_lost' %}
+                            <span class="badge badge-lost">Lost</span>
+                        {% elif ev.event_type == 'track_invalid' %}
+                            <span class="badge badge-invalid">Invalid</span>
+                        {% else %}
+                            <span class="badge">{{ ev.event_type }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="coord">
+                        {% if ev.entry_x is not none %}({{ ev.entry_x }}, {{ ev.entry_y }}){% else %}—{% endif %}
+                    </td>
+                    <td class="coord">
+                        {% if ev.exit_x is not none %}({{ ev.exit_x }}, {{ ev.exit_y }}){% else %}—{% endif %}
+                    </td>
+                    <td>
+                        {% if ev.exit_direction %}
+                            <span class="dir-badge">{{ ev.exit_direction }}</span>
+                        {% else %}—{% endif %}
+                    </td>
+                    <td class="coord">
+                        {% if ev.distance_pixels is not none %}{{ "%.0f"|format(ev.distance_pixels) }}px{% else %}—{% endif %}
+                    </td>
+                    <td>
+                        {% if ev.duration_seconds is not none %}{{ "%.2f"|format(ev.duration_seconds) }}s{% else %}—{% endif %}
+                    </td>
+                    <td>
+                        {% if ev.avg_confidence is not none %}
+                            {{ "%.2f"|format(ev.avg_confidence) }}
+                            <span class="conf-bar">
+                                <span class="conf-bar-fill" style="width: {{ (ev.avg_confidence * 100)|int }}%; background: {% if ev.avg_confidence >= 0.8 %}var(--accent-success){% elif ev.avg_confidence >= 0.5 %}var(--accent-warning){% else %}var(--accent-danger){% endif %};"></span>
+                            </span>
+                        {% else %}—{% endif %}
+                    </td>
+                    <td>
+                        {% if ev.classification %}
+                            <span class="class-pill {{ 'rejected' if ev.classification == 'Rejected' else '' }}">{{ ev.classification }}</span>
+                            {% if ev.classification_confidence is not none %}
+                                <span style="font-size:0.72rem;color:var(--text-muted)">{{ "%.2f"|format(ev.classification_confidence) }}</span>
+                            {% endif %}
+                        {% else %}—{% endif %}
+                    </td>
+                    <td style="font-size:0.75rem;color:var(--text-muted)">{{ ev.created_at[:19] if ev.created_at else '—' }}</td>
+                    <td style="font-size:0.75rem;color:var(--text-muted)">{{ ev.timestamp[:19] if ev.timestamp else '—' }}</td>
+                </tr>
+
+                <!-- Expandable detail row -->
+                {% if ev.details|length > 0 %}
+                <tr class="detail-row" id="detail-{{ ev.track_id }}">
+                    <td colspan="12" class="detail-cell">
+                        <strong style="font-size:0.8rem;color:var(--accent-primary);">
+                            <i class="fa-solid fa-list-timeline"></i> Lifecycle Steps ({{ ev.details|length }})
+                        </strong>
+                        <ul class="steps-list">
+                        {% for step in ev.details %}
+                            <li class="step-{{ step.step_type }}">
+                                <span class="step-type">{{ step.step_type }}</span>
+                                <span class="step-info">
+                                    {% if step.step_type == 'roi_collected' %}
+                                        ROI #{{ step.roi_index if step.roi_index is not none else '?' }}
+                                        bbox=({{ step.bbox_x1 }}, {{ step.bbox_y1 }}, {{ step.bbox_x2 }}, {{ step.bbox_y2 }})
+                                        {% if step.quality_score is not none %}quality={{ "%.1f"|format(step.quality_score) }}{% endif %}
+
+                                    {% elif step.step_type == 'roi_classified' %}
+                                        ROI #{{ step.roi_index if step.roi_index is not none else '?' }}
+                                        → <span class="class-pill {{ 'rejected' if step.is_rejected else '' }}">{{ step.class_name or '?' }}</span>
+                                        {% if step.confidence is not none %}conf={{ "%.3f"|format(step.confidence) }}{% endif %}
+
+                                    {% elif step.step_type == 'voting_result' %}
+                                        → <span class="class-pill">{{ step.class_name or '?' }}</span>
+                                        {% if step.confidence is not none %}conf={{ "%.3f"|format(step.confidence) }}{% endif %}
+                                        {% if step.valid_votes is not none %}valid_votes={{ step.valid_votes }}{% endif %}
+
+                                    {% elif step.step_type in ('track_completed', 'track_lost', 'track_invalid') %}
+                                        {% if step.detail %}{{ step.detail }}{% endif %}
+
+                                    {% else %}
+                                        {% if step.detail %}{{ step.detail }}{% endif %}
+                                    {% endif %}
+
+                                    <span style="color:var(--text-muted);margin-left:0.5rem;">{{ step.timestamp[:19] if step.timestamp else '' }}</span>
+                                </span>
+                            </li>
+                        {% endfor %}
+                        </ul>
+                    </td>
+                </tr>
+                {% endif %}
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+
+    <div style="text-align:center;margin-top:1.5rem;color:var(--text-muted);font-size:0.75rem;">
+        Showing {{ events|length }} events • Data retained for 7 days •
+        <a href="/track-events" style="color:var(--accent-primary);">Reset filters</a> •
+        <a href="/analytics" style="color:var(--accent-primary);">Counting Analytics</a>
+    </div>
+</main>
+
+<script>
+function toggleDetail(trackId) {
+    const row = document.getElementById('detail-' + trackId);
+    const icon = document.getElementById('icon-' + trackId);
+    if (row) {
+        row.classList.toggle('open');
+        if (icon) {
+            icon.classList.toggle('fa-chevron-right');
+            icon.classList.toggle('fa-chevron-down');
+        }
+    }
+}
+
+// Set default times if not set
+document.addEventListener('DOMContentLoaded', function() {
+    const startInput = document.getElementById('start_time');
+    const endInput = document.getElementById('end_time');
+
+    if (!startInput.value) {
+        const now = new Date();
+        const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        startInput.value = formatDTL(yesterday);
+    }
+    if (!endInput.value) {
+        endInput.value = formatDTL(new Date());
+    }
+
+    function formatDTL(d) {
+        return d.getFullYear() + '-' +
+            String(d.getMonth()+1).padStart(2,'0') + '-' +
+            String(d.getDate()).padStart(2,'0') + 'T' +
+            String(d.getHours()).padStart(2,'0') + ':' +
+            String(d.getMinutes()).padStart(2,'0');
+    }
+});
+</script>
+</body>
+</html>

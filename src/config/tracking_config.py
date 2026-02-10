@@ -132,6 +132,28 @@ class TrackingConfig:
     """Cost threshold for second-stage matching (0-1, lower = stricter)."""
 
     # ==========================================================================
+    # Travel Path Validation (Bottom-to-Top)
+    # ==========================================================================
+
+    require_full_travel: bool = _parse_bool_env("REQUIRE_FULL_TRAVEL", True)
+    """
+    Require tracks to travel from entry zone (bottom) to exit zone (top).
+    Tracks appearing mid-frame or not reaching the top are ignored.
+    """
+
+    entry_zone_ratio: float = _parse_float_env("ENTRY_ZONE_RATIO", 0.25)
+    """
+    Bottom fraction of frame considered as entry zone (0.25 = bottom 25%).
+    Tracks must first appear within this zone to be considered valid.
+    """
+
+    exit_zone_ratio: float = _parse_float_env("EXIT_ZONE_RATIO", 0.15)
+    """
+    Top fraction of frame considered as exit zone (0.15 = top 15%).
+    Tracks must exit through this zone to be considered valid.
+    """
+
+    # ==========================================================================
     # ROI Collection Parameters
     # ==========================================================================
     

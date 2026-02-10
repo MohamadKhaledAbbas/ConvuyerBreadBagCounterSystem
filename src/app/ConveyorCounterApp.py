@@ -326,7 +326,8 @@ class ConveyorCounterApp:
         self._classification_worker = ClassificationWorker(
             classifier=self._classifier,
             max_queue_size=100,
-            name="ClassificationWorker"
+            name="ClassificationWorker",
+            db=self._db
         )
         self._classification_worker.start()
 
@@ -337,7 +338,8 @@ class ConveyorCounterApp:
             detector=self._detector,
             tracker=self._tracker,
             roi_collector=self._roi_collector,
-            classification_worker=self._classification_worker
+            classification_worker=self._classification_worker,
+            db=self._db
         )
         # Set callback for classification completion
         self._pipeline_core.on_track_completed = self._on_classification_completed
