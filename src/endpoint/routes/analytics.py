@@ -1,5 +1,4 @@
 ﻿"""Analytics Routes - Updated with Repository Pattern and Async Support."""
-from functools import lru_cache
 from typing import Optional
 
 from fastapi import APIRouter, Request, HTTPException, Query, Depends

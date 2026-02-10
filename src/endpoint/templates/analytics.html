@@ -64,7 +64,7 @@
                 <div class="card-header stacked">
                     <div class="card-title">{{ c.arabic_name }}</div>
                     <div class="thumb-container">
-                        <img src="{{ c.thumb }}" alt="{{ c.name }}" loading="lazy" onerror="this.src='https://placehold.co/100x100/1e293b/FFF?text={{ c.name[0] if c.name else '?' }}'">
+                        <img src="{{ c.thumb }}" alt="{{ c.name }}" loading="lazy" onerror="this.src='https://placehold.co/100x100/1e293b/FFF?text={{ c.name[:1] if c.name else '?' }}'">
                     </div>
                 </div>
 
@@ -116,7 +116,7 @@
                             </div>
                             {% for run in class_runs %}
                                 <div class="run-row">
-                                    <span class="run-time">{{ run.start[11:16] if run.start and len(run.start) > 16 else 'N/A' }} &rarr; {{ run.end[11:16] if run.end and len(run.end) > 16 else 'N/A' }}</span>
+                                    <span class="run-time">{{ run.start[11:16] if run.start and len(run.start) >= 16 else 'N/A' }} &rarr; {{ run.end[11:16] if run.end and len(run.end) >= 16 else 'N/A' }}</span>
                                     <span class="run-count">{{ run.count }}<br>ربطة</span>
                                     <span class="run-weight">{{ (run.weight * run.count) | round(2) }} كغ</span>
                                 </div>
@@ -144,14 +144,14 @@
                 <div class="timeline-group-card">
                     <div class="group-header">
                         <div class="group-thumb">
-                            <img src="{{ run.thumb }}" alt="{{ run.class_name }}" loading="lazy" onerror="this.src='https://placehold.co/60x60/1e293b/FFF?text={{ run.class_name[0] if run.class_name else '?' }}'">
+                            <img src="{{ run.thumb }}" alt="{{ run.class_name }}" loading="lazy" onerror="this.src='https://placehold.co/60x60/1e293b/FFF?text={{ run.class_name[:1] if run.class_name else '?' }}'">
                         </div>
                         <div class="group-info">
                             <div class="group-name">{{ run.arabic_name or run.class_name }}</div>
                             <div class="group-meta">
                                 <span class="group-time-window">
                                     <i class="fa-regular fa-clock"></i>
-                                    {{ run.start[11:16] if run.start and len(run.start) > 16 else 'N/A' }} &rarr; {{ run.end[11:16] if run.end and len(run.end) > 16 else 'N/A' }}
+                                    {{ run.start[11:16] if run.start and len(run.start) >= 16 else 'N/A' }} &rarr; {{ run.end[11:16] if run.end and len(run.end) >= 16 else 'N/A' }}
                                 </span>
                             </div>
                         </div>
