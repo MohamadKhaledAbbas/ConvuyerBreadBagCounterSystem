@@ -116,7 +116,7 @@
                             </div>
                             {% for run in class_runs %}
                                 <div class="run-row">
-                                    <span class="run-time">{{ run.start[11:16] if run.start and len(run.start) >= 16 else 'N/A' }} &rarr; {{ run.end[11:16] if run.end and len(run.end) >= 16 else 'N/A' }}</span>
+                                    <span class="run-time">{{ run.start[11:16] if run.start and (run.start|length) >= 16 else 'N/A' }} &rarr; {{ run.end[11:16] if run.end and (run.end|length) >= 16 else 'N/A' }}</span>
                                     <span class="run-count">{{ run.count }}<br>ربطة</span>
                                     <span class="run-weight">{{ (run.weight * run.count) | round(2) }} كغ</span>
                                 </div>
@@ -151,7 +151,7 @@
                             <div class="group-meta">
                                 <span class="group-time-window">
                                     <i class="fa-regular fa-clock"></i>
-                                    {{ run.start[11:16] if run.start and len(run.start) >= 16 else 'N/A' }} &rarr; {{ run.end[11:16] if run.end and len(run.end) >= 16 else 'N/A' }}
+                                    {{ run.start[11:16] if run.start and (run.start|length) >= 16 else 'N/A' }} &rarr; {{ run.end[11:16] if run.end and (run.end|length) >= 16 else 'N/A' }}
                                 </span>
                             </div>
                         </div>

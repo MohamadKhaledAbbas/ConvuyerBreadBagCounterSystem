@@ -183,15 +183,15 @@ CREATE INDEX IF NOT EXISTS idx_config_key ON config(key);
 -- ============================================================================
 
 INSERT OR IGNORE INTO bag_types (id, name, arabic_name, weight, thumb) VALUES
-    (1, 'Brown_Orange'  ,   'Brown_Orange'  ,   1000, 'data/classes/Brown_Orange/Brown_Orange.jpg'),
-    (2, 'Red_Yellow'    ,   'Red_Yellow'    ,   1000, 'data/classes/Red_Yellow/Red_Yellow.jpg'),
-    (3, 'Wheatberry'    ,   'Wheatberry'    ,   1000, 'data/classes/Wheatberry/Wheatberry.jpg'),
-    (4, 'Blue_Yellow'   ,   'Blue_Yellow'   ,   1000, 'data/classes/Blue_Yellow/Blue_Yellow.jpg'),
-    (5, 'Rejected'      ,   'Rejected'      ,   1000, 'data/classes/Rejected/Rejected.jpg'),
-    (6, 'Green_Yellow'  ,   'Green_Yellow'  ,   1000, 'data/classes/Green_Yellow/Green_Yellow.jpg'),
-    (7, 'Bran'          ,   'Bran'          ,   1000, 'data/classes/Bran/Bran.jpg'),
-    (8, 'Black_Orange'  ,   'Black_Orange'  ,   1000, 'data/classes/Black_Orange/Black_Orange.jpg'),
-    (9, 'Purple_Yellow' ,   'Purple_Yellow' ,   500, 'data/classes/Purple_Yellow/Purple_Yellow.jpg');
+    (1, 'Brown_Orange'  ,   'Brown_Orange'  ,   1, 'data/classes/Brown_Orange/Brown_Orange.jpg'),
+    (2, 'Red_Yellow'    ,   'Red_Yellow'    ,   1, 'data/classes/Red_Yellow/Red_Yellow.jpg'),
+    (3, 'Wheatberry'    ,   'Wheatberry'    ,   1, 'data/classes/Wheatberry/Wheatberry.jpg'),
+    (4, 'Blue_Yellow'   ,   'Blue_Yellow'   ,   1, 'data/classes/Blue_Yellow/Blue_Yellow.jpg'),
+    (5, 'Green_Yellow'  ,   'Green_Yellow'  ,   1, 'data/classes/Green_Yellow/Green_Yellow.jpg'),
+    (6, 'Bran'          ,   'Bran'          ,   1, 'data/classes/Bran/Bran.jpg'),
+    (7, 'Black_Orange'  ,   'Black_Orange'  ,   1, 'data/classes/Black_Orange/Black_Orange.jpg'),
+    (8, 'Purple_Yellow' ,   'Purple_Yellow' ,   0.5, 'data/classes/Purple_Yellow/Purple_Yellow.jpg'),
+    (9, 'Rejected'      ,   'Rejected'      ,   1, 'data/classes/Rejected/Rejected.jpg');
 
 -- ============================================================================
 -- Schema Validation Queries

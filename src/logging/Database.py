@@ -254,15 +254,15 @@ class DatabaseManager:
     def _seed_default_bag_types(self):
         """Seed default bag types if they don't exist (fallback schema path)."""
         default_bag_types = [
-            (1, 'Brown_Orange_Family', 'Brown_Orange_Family', 0, 'data/classes/Brown_Orange_Family/Brown_Orange_Family.jpg', '2026-02-03 03:31:05'),
+            (1, 'Brown_Orange', 'Brown_Orange', 0, 'data/classes/Brown_Orange_Family/Brown_Orange_Family.jpg', '2026-02-03 03:31:05'),
             (2, 'Red_Yellow', 'Red_Yellow', 0, 'data/classes/Red_Yellow/Red_Yellow.jpg', '2026-02-03 03:31:05'),
             (3, 'Wheatberry', 'Wheatberry', 0, 'data/classes/Wheatberry/Wheatberry.jpg', '2026-02-03 10:52:21'),
             (4, 'Blue_Yellow', 'Blue_Yellow', 0, 'data/classes/Blue_Yellow/Blue_Yellow.jpg', '2026-02-06 01:39:32'),
-            (5, 'Rejected', 'Rejected', 0, 'data/classes/Rejected/Rejected.jpg', '2026-02-06 01:51:49'),
-            (6, 'Green_Yellow', 'Green_Yellow', 0, 'data/classes/Green_Yellow/Green_Yellow.jpg', '2026-02-06 01:55:36'),
-            (7, 'Bran', 'Bran', 0, 'data/classes/Bran/Bran.jpg', '2026-02-08 18:16:49'),
-            (8, 'Black_Orange', 'Black_Orange', 0, 'data/classes/Black_Orange/Black_Orange.jpg', '2026-02-10 00:00:00'),
-            (9, 'Purple_Yellow', 'Purple_Yellow', 0, 'data/classes/Purple_Yellow/Purple_Yellow.jpg', '2026-02-10 00:00:00'),
+            (5, 'Green_Yellow', 'Green_Yellow', 0, 'data/classes/Green_Yellow/Green_Yellow.jpg', '2026-02-06 01:55:36'),
+            (6, 'Bran', 'Bran', 0, 'data/classes/Bran/Bran.jpg', '2026-02-08 18:16:49'),
+            (7, 'Black_Orange', 'Black_Orange', 0, 'data/classes/Black_Orange/Black_Orange.jpg', '2026-02-10 00:00:00'),
+            (8, 'Purple_Yellow', 'Purple_Yellow', 0, 'data/classes/Purple_Yellow/Purple_Yellow.jpg', '2026-02-10 00:00:00'),
+            (9, 'Rejected', 'Rejected', 0, 'data/classes/Rejected/Rejected.jpg', '2026-02-06 01:51:49'),
         ]
         with self._cursor() as cursor:
             cursor.executemany(

@@ -95,7 +95,7 @@ class AppConfig:
             self.classifier_classes = {
                 0: 'Blue_Yellow',
                 1: 'Bran',
-                2: 'Brown_Orange_Family',
+                2: 'Brown_Orange',
                 3: 'Green_Yellow',
                 4: 'Red_Yellow',
                 5: 'Rejected',
