@@ -141,7 +141,7 @@ class TrackingConfig:
     Tracks appearing mid-frame or not reaching the top are ignored.
     """
 
-    entry_zone_ratio: float = _parse_float_env("ENTRY_ZONE_RATIO", 0.25)
+    entry_zone_ratio: float = _parse_float_env("ENTRY_ZONE_RATIO", 0.30)
     """
     Bottom fraction of frame considered as entry zone (0.25 = bottom 25%).
     Tracks must first appear within this zone to be considered valid.
