@@ -64,7 +64,7 @@
                 <div class="card-header stacked">
                     <div class="card-title">{{ c.arabic_name }}</div>
                     <div class="thumb-container">
-                        <img src="{{ c.thumb }}" alt="{{ c.name }}" onerror="this.src='https://placehold.co/100x100/1e293b/FFF?text={{c.name[:1]}}'">
+                        <img src="{{ c.thumb }}" alt="{{ c.name }}" loading="lazy" onerror="this.src='https://placehold.co/100x100/1e293b/FFF?text={{ c.name[:1] if c.name else '?' }}'">
                     </div>
                 </div>
 
@@ -88,11 +88,8 @@
 
                 {% if timeline and timeline.per_class_windows and c.id in timeline.per_class_windows %}
                     {% set class_timeline = timeline.per_class_windows[c.id] %}
-                    {% set class_runs = [] %}
-                    {% if timeline.runs %}
-                        {% set class_runs = timeline.runs | selectattr('bag_type_id', 'equalto', c.id) | list %}
-                    {% endif %}
-                    <button class="expand-btn" onclick="toggleExpansion({{ c.id }})">
+                    {% set class_runs = timeline.runs_by_type.get(c.id, []) %}
+                    <button class="expand-btn" data-class-id="{{ c.id }}" onclick="toggleExpansion(this)">
                         <i class="fa-solid fa-chevron-down"></i> عرض التفاصيل
                     </button>
 
@@ -119,8 +116,8 @@
                             </div>
                             {% for run in class_runs %}
                                 <div class="run-row">
-                                    <span class="run-time">{{ run.start[11:16] }} &rarr; {{ run.end[11:16] }}</span>
-                                    <span class="run-count"> {{ run.count }} <br>  ربطة</span>
+                                    <span class="run-time">{{ run.start[11:16] if run.start and len(run.start) >= 16 else 'N/A' }} &rarr; {{ run.end[11:16] if run.end and len(run.end) >= 16 else 'N/A' }}</span>
+                                    <span class="run-count">{{ run.count }}<br>ربطة</span>
                                     <span class="run-weight">{{ (run.weight * run.count) | round(2) }} كغ</span>
                                 </div>
                             {% endfor %}
@@ -147,14 +144,14 @@
                 <div class="timeline-group-card">
                     <div class="group-header">
                         <div class="group-thumb">
-                            <img src="{{ run.thumb }}" alt="{{ run.class_name }}" onerror="this.src='https://placehold.co/60x60/1e293b/FFF?text={{ run.class_name[:1] }}'">
+                            <img src="{{ run.thumb }}" alt="{{ run.class_name }}" loading="lazy" onerror="this.src='https://placehold.co/60x60/1e293b/FFF?text={{ run.class_name[:1] if run.class_name else '?' }}'">
                         </div>
                         <div class="group-info">
                             <div class="group-name">{{ run.arabic_name or run.class_name }}</div>
                             <div class="group-meta">
                                 <span class="group-time-window">
                                     <i class="fa-regular fa-clock"></i>
-                                    {{ run.end[11:16] }} &rarr; {{ run.start[11:16] }}
+                                    {{ run.start[11:16] if run.start and len(run.start) >= 16 else 'N/A' }} &rarr; {{ run.end[11:16] if run.end and len(run.end) >= 16 else 'N/A' }}
                                 </span>
                             </div>
                         </div>
@@ -185,24 +182,49 @@
 </main>
 
 <script>
-// Toggle card expansion
-function toggleExpansion(classId) {
+// Toggle card expansion with improved handling
+function toggleExpansion(button) {
+    const classId = button.getAttribute('data-class-id');
     const expansion = document.getElementById('expansion-' + classId);
-    const btn = expansion.previousElementSibling;
-    const icon = btn.querySelector('i');
-
-    if (expansion.classList.contains('expanded')) {
+    const icon = button.querySelector('i');
+    
+    if (!expansion) {
+        console.error('Expansion element not found for class:', classId);
+        return;
+    }
+    
+    if (expansion.style.display === 'none') {
+        // Show expansion
+        expansion.style.display = 'block';
+        // Add animation class after display change
+        setTimeout(() => expansion.classList.add('expanded'), 10);
+        icon.classList.remove('fa-chevron-down');
+        icon.classList.add('fa-chevron-up');
+        button.innerHTML = '<i class="fa-solid fa-chevron-up"></i> إخفاء التفاصيل';
+    } else {
+        // Hide expansion
         expansion.classList.remove('expanded');
         icon.classList.remove('fa-chevron-up');
         icon.classList.add('fa-chevron-down');
-        btn.innerHTML = '<i class="fa-solid fa-chevron-down"></i> عرض التفاصيل';
-    } else {
-        expansion.classList.add('expanded');
-        icon.classList.remove('fa-chevron-down');
-        icon.classList.add('fa-chevron-up');
-        btn.innerHTML = '<i class="fa-solid fa-chevron-up"></i> إخفاء التفاصيل';
+        button.innerHTML = '<i class="fa-solid fa-chevron-down"></i> عرض التفاصيل';
+        // Wait for animation to complete before hiding
+        setTimeout(() => {
+            if (!expansion.classList.contains('expanded')) {
+                expansion.style.display = 'none';
+            }
+        }, 300);
     }
 }
+
+// Handle image load errors gracefully
+document.addEventListener('DOMContentLoaded', function() {
+    const images = document.querySelectorAll('img[loading="lazy"]');
+    images.forEach(img => {
+        img.addEventListener('error', function() {
+            console.warn('Failed to load image:', this.src);
+        });
+    });
+});
 </script>
 
 </body>

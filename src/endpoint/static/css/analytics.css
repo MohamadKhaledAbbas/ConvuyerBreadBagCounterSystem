@@ -30,8 +30,8 @@ body {
     padding: 0;
     font-family: 'Inter', system-ui, -apple-system, sans-serif;
     background-color: var(--bg-deep);
+    /* Simplified gradient for better scroll performance - removed 'fixed' attachment */
     background-image: var(--bg-gradient);
-    background-attachment: fixed;
     color: var(--text-primary);
     min-height: 100vh;
 }
