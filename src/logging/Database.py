@@ -22,13 +22,19 @@ from src.utils.AppLogging import logger
 
 class DatabaseManager:
     """Enhanced database manager with V2 schema support."""
+
+    # Write queue tuning constants
+    WRITE_QUEUE_MAX_SIZE = 10000
+    WRITE_BATCH_SIZE = 50
+    WRITE_FLUSH_INTERVAL = 1.0  # seconds
+
     def __init__(self, db_path: str):
         self.db_path = db_path
         self._local = threading.local()
         self._ensure_db_exists()
         self._initialize_schema()
         # Async write queue for non-blocking hot-path DB writes
-        self._write_queue: queue.Queue[Tuple[str, tuple]] = queue.Queue(maxsize=10000)
+        self._write_queue: queue.Queue[Tuple[str, tuple]] = queue.Queue(maxsize=self.WRITE_QUEUE_MAX_SIZE)
         self._write_thread: Optional[threading.Thread] = None
         self._write_stop = threading.Event()
         self._start_write_thread()
@@ -43,12 +49,12 @@ class DatabaseManager:
         logger.info("[DatabaseManager] Async write queue started")
     def _write_loop(self):
         """Background loop: drain write queue in batches, commit periodically."""
-        conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=30.0)
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA synchronous = NORMAL")
-        batch_size = 50
-        flush_interval = 1.0  # seconds
+        batch_size = self.WRITE_BATCH_SIZE
+        flush_interval = self.WRITE_FLUSH_INTERVAL
         pending = 0
         while not self._write_stop.is_set():
             try:
