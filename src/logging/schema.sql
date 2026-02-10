@@ -59,6 +59,9 @@ CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);
 CREATE INDEX IF NOT EXISTS idx_events_bag_type_id ON events(bag_type_id);
 CREATE INDEX IF NOT EXISTS idx_events_track_id ON events(track_id);
 
+-- Composite index for analytics queries (time range + bag_type + confidence breakdown)
+CREATE INDEX IF NOT EXISTS idx_events_analytics ON events(timestamp, bag_type_id, confidence);
+
 -- ============================================================================
 -- Table: track_events
 -- ============================================================================

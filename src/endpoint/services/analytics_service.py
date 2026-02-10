@@ -45,10 +45,47 @@ class AnalyticsService:
         stats = repo_data['stats']
         events = repo_data['events']
         per_class_windows = repo_data['per_class_windows']
-        classifications = [{'id': bid, 'name': d['name'], 'arabic_name': d['arabic_name'], 'count': d['count'], 'high_count': d['high_count'], 'low_count': d['low_count'], 'thumb': d['thumb'], 'weight': d['weight']} for bid, d in stats['by_type'].items()]
+        # Build classifications list with sorted by count (most common first)
+        classifications = [
+            {
+                'id': bid, 
+                'name': d['name'], 
+                'arabic_name': d['arabic_name'], 
+                'count': d['count'], 
+                'high_count': d['high_count'], 
+                'low_count': d['low_count'], 
+                'thumb': d['thumb'], 
+                'weight': d['weight']
+            } 
+            for bid, d in stats['by_type'].items()
+        ]
+        # Sort by count descending for better UX (most common first)
+        classifications.sort(key=lambda x: x['count'], reverse=True)
+        
         ordered_events = sorted(events, key=lambda x: x['timestamp'])
         runs = self.build_consecutive_runs(ordered_events)
-        data = {"meta": {"start": start_time, "end": end_time, "request_time": datetime.now().strftime("%Y/%m/%d - %H:%M:%S")}, "data": {'total': stats['total'], 'classifications': classifications}, "timeline": {"ordered_events": ordered_events, "per_class_windows": per_class_windows, "runs": runs}}
+        
+        # Pre-group runs by bag_type_id for efficient template rendering
+        runs_by_type = self._group_runs_by_type(runs)
+        
+        data = {
+            "meta": {
+                "start": start_time, 
+                "end": end_time, 
+                "request_time": datetime.now().strftime("%Y/%m/%d - %H:%M:%S")
+            }, 
+            "data": {
+                'total': stats['total'], 
+                'classifications': classifications
+            }, 
+            "timeline": {
+                "ordered_events": ordered_events, 
+                "per_class_windows": per_class_windows, 
+                "runs": runs,
+                "runs_by_type": runs_by_type  # Pre-grouped for template efficiency
+            }
+        }
+        
         self.normalize_image_paths(data)
         logger.info(f"[Analytics] Data ready: {stats['total']['count']} bags, {len(classifications)} classes, {len(runs)} runs")
         return data
@@ -128,3 +165,28 @@ class AnalyticsService:
         # Fix thumb paths in runs (from bag_types)
         for run in data.get("timeline", {}).get("runs", []):
             run["thumb"] = fix_path(run.get("thumb", ""))
+        
+        # Fix thumb paths in runs_by_type (from bag_types)
+        for runs_list in data.get("timeline", {}).get("runs_by_type", {}).values():
+            for run in runs_list:
+                run["thumb"] = fix_path(run.get("thumb", ""))
+    
+    def _group_runs_by_type(self, runs: List[Dict]) -> Dict[str, List[Dict]]:
+        """
+        Pre-group runs by bag_type_id for efficient template rendering.
+        
+        This avoids N+1 filtering in the template (selectattr for each classification).
+        
+        Args:
+            runs: List of consecutive runs
+            
+        Returns:
+            Dictionary mapping bag_type_id to list of runs
+        """
+        grouped = {}
+        for run in runs:
+            bag_type_id = run['bag_type_id']
+            if bag_type_id not in grouped:
+                grouped[bag_type_id] = []
+            grouped[bag_type_id].append(run)
+        return grouped
