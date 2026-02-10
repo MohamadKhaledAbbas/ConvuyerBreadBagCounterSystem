@@ -46,13 +46,13 @@ class AppConfig:
     APP_VERSION: str = "2.0.0"
     
     # Video source for testing
-    video_path: str = os.getenv("VIDEO_PATH", "D:\\Recordings\\2026_02_05\\output_2026-02-05_22-45-50.mp4")
+    video_path: str = os.getenv("VIDEO_PATH", "D:\\Recordings\\2026_02_05\\2026_02_10\\h264\\output_2026-02-09_20-06-37.h264")
     
     # Platform-specific model paths
     detection_model: str = os.getenv(
         "DETECTION_MODEL",
         "data/model/detect_yolo_small_v9_bayese_640x640_nv12.bin" if IS_RDK
-        else "data/model/detect_yolo_small_v9.pt"
+        else "data/model/detect_yolo_small_v11.pt"
     )
     classification_model: str = os.getenv(
         "CLASS_MODEL",

@@ -147,24 +147,35 @@ class TrackingConfig:
     max_roi_size: int = _parse_int_env("MAX_ROI_SIZE", 500)
     """Maximum ROI dimension in pixels."""
     
-    min_roi_aspect_ratio: float = _parse_float_env("MIN_ROI_ASPECT_RATIO", 0.3)
+    min_roi_aspect_ratio: float = _parse_float_env("MIN_ROI_ASPECT_RATIO", 0.4)
     """Minimum aspect ratio (width/height) for valid ROI."""
     
-    max_roi_aspect_ratio: float = _parse_float_env("MAX_ROI_ASPECT_RATIO", 3.0)
+    max_roi_aspect_ratio: float = _parse_float_env("MAX_ROI_ASPECT_RATIO", 2.5)
     """Maximum aspect ratio for valid ROI."""
     
-    min_sharpness: float = _parse_float_env("MIN_SHARPNESS", 50.0)
+    min_sharpness: float = _parse_float_env("MIN_SHARPNESS", 100.0)
     """Minimum Laplacian variance for ROI sharpness."""
     
-    min_mean_brightness: float = _parse_float_env("MIN_MEAN_BRIGHTNESS", 30.0)
+    min_mean_brightness: float = _parse_float_env("MIN_MEAN_BRIGHTNESS", 50.0)
     """Minimum mean brightness for valid ROI."""
     
-    max_mean_brightness: float = _parse_float_env("MAX_MEAN_BRIGHTNESS", 230.0)
+    max_mean_brightness: float = _parse_float_env("MAX_MEAN_BRIGHTNESS", 200.0)
     """Maximum mean brightness for valid ROI."""
     
     roi_padding_ratio: float = _parse_float_env("ROI_PADDING_RATIO", 0.05)
     """Padding ratio to add around detected bounding box for ROI."""
     
+    # Temporal/Distance weighting (earlier ROIs = closer to camera = better quality)
+    enable_temporal_weighting: bool = _parse_bool_env("ENABLE_TEMPORAL_WEIGHTING", True)
+    """Enable temporal weighting - earlier ROIs get higher quality scores."""
+
+    temporal_decay_rate: float = _parse_float_env("TEMPORAL_DECAY_RATE", 0.15)
+    """
+    Temporal decay rate for ROI quality (0-1).
+    0 = no decay, 1 = strong decay.
+    0.15 means 15% quality reduction from first to last ROI.
+    """
+
     # ==========================================================================
     # Classification Parameters
     # ==========================================================================
@@ -257,15 +268,18 @@ class TrackingConfig:
     # ROI Saving for Debug/Analysis
     # ==========================================================================
     
-    save_all_rois: bool = _parse_bool_env("SAVE_ALL_ROIS", False)
+    save_all_rois: bool = _parse_bool_env("SAVE_ALL_ROIS", True)
     """Save all ROI candidates for analysis."""
     
-    save_roi_candidates: bool = _parse_bool_env("SAVE_ROI_CANDIDATES", False)
+    save_roi_candidates: bool = _parse_bool_env("SAVE_ROI_CANDIDATES", True)
     """Save ROI candidates with metadata."""
     
     roi_candidates_dir: str = _parse_str_env("ROI_CANDIDATES_DIR", "data/roi_candidates")
     """Directory for saved ROI candidates."""
     
+    save_rois_by_class: bool = _parse_bool_env("SAVE_ROIS_BY_CLASS", True)
+    """Organize saved ROIs by classification result in subdirectories."""
+
     @property
     def reject_label_set(self) -> set:
         """Get reject labels as a set."""

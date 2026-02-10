@@ -27,6 +27,8 @@ from typing import Optional, Dict, Callable
 import cv2
 import numpy as np
 
+from src.classifier.EnhancedROICollectorService import EnhancedROICollectorService, EnhancedROIQualityConfig
+
 # Optional memory monitoring (gracefully degraded if psutil not available)
 try:
     import psutil
@@ -206,6 +208,9 @@ class ConveyorCounterApp:
         self._smoother: Optional[BidirectionalSmoother] = None
         self._db: Optional[DatabaseManager] = None
         
+        # ROI cache for saving by class (track_id -> best_roi)
+        self._roi_cache: Dict[int, np.ndarray] = {}
+
         # State
         self.state = CounterState()
         self._running = False
@@ -309,7 +314,12 @@ class ConveyorCounterApp:
         )
         self._roi_collector = ROICollectorService(
             quality_config=quality_config,
-            max_rois_per_track=10
+            max_rois_per_track=10,
+            save_roi_candidates=self.tracking_config.save_roi_candidates,
+            save_all_rois=self.tracking_config.save_all_rois,
+            roi_candidates_dir=self.tracking_config.roi_candidates_dir,
+            enable_temporal_weighting=self.tracking_config.enable_temporal_weighting,
+            temporal_decay_rate=self.tracking_config.temporal_decay_rate
         )
 
         # Classification Worker
@@ -423,7 +433,7 @@ class ConveyorCounterApp:
         """
         self.state.add_event(event)
 
-    def _on_classification_completed(self, track_id: int, class_name: str, confidence: float, non_rejected_rois: int = 0):
+    def _on_classification_completed(self, track_id: int, class_name: str, confidence: float, non_rejected_rois: int = 0, best_roi: Optional[np.ndarray] = None):
         """
         Callback when classification completes (called by PipelineCore from worker thread).
 
@@ -432,6 +442,7 @@ class ConveyorCounterApp:
             class_name: Classified class
             confidence: Classification confidence
             non_rejected_rois: Number of non-rejected ROIs (for trustworthiness)
+            best_roi: Best quality ROI for saving by class
         """
         # Update debug state
         self.state.last_classification = f"T{track_id}:{class_name}({confidence:.2f})"
@@ -483,7 +494,48 @@ class ConveyorCounterApp:
                 f"CONFIRMED (window full): T{confirmed_record.track_id}->"
                 f"{confirmed_record.class_name} smoothed={confirmed_record.smoothed}"
             )
-            self._record_confirmed_count(confirmed_record, None)
+            self._record_confirmed_count(confirmed_record, best_roi)
+
+    def _save_roi_by_class(self, roi: np.ndarray, record: ClassificationRecord):
+        """
+        Save ROI image organized by classification result.
+
+        Creates subdirectories for each class type:
+        - roi_candidates_dir/ClassName1/
+        - roi_candidates_dir/ClassName2/
+        - roi_candidates_dir/Rejected/
+
+        Args:
+            roi: ROI image
+            record: Classification record with class name and metadata
+        """
+        try:
+            # Sanitize class name for directory
+            class_name_safe = record.class_name.replace(" ", "_").replace("/", "_")
+
+            # Create class-specific subdirectory
+            class_dir = os.path.join(self.tracking_config.roi_candidates_dir, class_name_safe)
+            os.makedirs(class_dir, exist_ok=True)
+
+            # Create filename with metadata
+            timestamp = int(time.time() * 1000)
+            smoothed_suffix = "_smoothed" if record.smoothed else ""
+            filename = (
+                f"track_{record.track_id}_{timestamp}_"
+                f"{class_name_safe}_conf{record.confidence:.2f}"
+                f"{smoothed_suffix}.jpg"
+            )
+
+            filepath = os.path.join(class_dir, filename)
+            cv2.imwrite(filepath, roi)
+
+            logger.debug(
+                f"[ConveyorCounterApp] Saved classified ROI: "
+                f"{class_name_safe}/{filename}"
+            )
+
+        except Exception as e:
+            logger.error(f"[ConveyorCounterApp] Failed to save ROI by class: {e}")
 
     def _record_confirmed_count(self, record: ClassificationRecord, roi: Optional[np.ndarray]):
         """
@@ -507,6 +559,9 @@ class ConveyorCounterApp:
                 f"conf={record.confidence:.3f} total_rejected={self.state.rejected_count} "
                 f"remaining_tentative={remaining_tentative} status=excluded_from_count"
             )
+            # Save rejected ROI if enabled
+            if roi is not None and self.tracking_config.save_rois_by_class:
+                self._save_roi_by_class(roi, record)
             return
 
         # Update CONFIRMED counts (thread-safe)
@@ -537,6 +592,10 @@ class ConveyorCounterApp:
                 f"class_total={class_count} system_total={new_total} "
                 f"status=confirmed_and_persisted"
             )
+
+        # Save ROI by class if enabled
+        if roi is not None and self.tracking_config.save_rois_by_class:
+            self._save_roi_by_class(roi, record)
 
         # Log to database
         if self._db is not None:

@@ -55,7 +55,7 @@ class PipelineCore:
 
         # Callbacks (set by orchestrator)
         # NOTE: Callback is invoked from worker thread - must be thread-safe!
-        self.on_track_completed: Optional[Callable[[int, str, float], None]] = None
+        self.on_track_completed: Optional[Callable[[int, str, float, int, Optional[np.ndarray]], None]] = None
 
         # Optional callback for track events (for UI debugging)
         self.on_track_event: Optional[Callable[[str], None]] = None
@@ -135,6 +135,7 @@ class PipelineCore:
         top_k = min(5, len(all_rois))  # Use up to 5 ROIs for voting
         sorted_rois = sorted(all_rois, key=lambda x: x[1], reverse=True)
         best_rois = [roi for roi, quality in sorted_rois[:top_k]]
+        best_roi_for_saving = best_rois[0].copy()  # Store best ROI for saving by class
         avg_quality = sum(q for _, q in sorted_rois[:top_k]) / top_k
 
         # Get quality range
@@ -153,11 +154,15 @@ class PipelineCore:
         )
 
         # Submit to async worker with multiple ROIs for voting
+        # Pass best_roi_for_saving via callback partial
+        from functools import partial
+        callback_with_roi = partial(self._classification_callback, best_roi=best_roi_for_saving)
+
         submitted = self.classification_worker.submit_job(
             track_id=track_id,
             roi=best_rois[0],  # Primary ROI (best quality)
             bbox_history=event.bbox_history,
-            callback=self._classification_callback,
+            callback=callback_with_roi,
             extra_rois=best_rois[1:] if len(best_rois) > 1 else None  # Additional ROIs for voting
         )
 
@@ -167,7 +172,7 @@ class PipelineCore:
         # Clean up
         self.roi_collector.remove_track(track_id)
 
-    def _classification_callback(self, track_id: int, class_name: str, confidence: float, non_rejected_rois: int = 0):
+    def _classification_callback(self, track_id: int, class_name: str, confidence: float, non_rejected_rois: int = 0, best_roi: Optional[np.ndarray] = None):
         """
         Called when classification completes (runs in worker thread).
 
@@ -176,6 +181,7 @@ class PipelineCore:
             class_name: Classified class
             confidence: Classification confidence
             non_rejected_rois: Number of non-rejected ROIs (for trustworthiness)
+            best_roi: Best quality ROI for saving by class
 
         Warning:
             This method runs in the classification worker thread. The orchestrator's
@@ -191,7 +197,7 @@ class PipelineCore:
         # Delegate to orchestrator callback
         # IMPORTANT: Callback must be thread-safe!
         if self.on_track_completed is not None:
-            self.on_track_completed(track_id, class_name, confidence, non_rejected_rois)
+            self.on_track_completed(track_id, class_name, confidence, non_rejected_rois, best_roi)
 
     def cleanup(self):
         """Release pipeline resources."""

@@ -8,10 +8,12 @@ NEW ARCHITECTURE:
 This allows main loop to run at full speed without blocking on classification.
 """
 
+import os
 import time
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple
 
+import cv2
 import numpy as np
 
 from src.classifier.IClassificationComponents import IROICollector
@@ -57,28 +59,50 @@ class TrackROICollection:
     # Limits
     max_rois: int = 10
 
+    # Temporal weighting
+    enable_temporal_weighting: bool = False
+    temporal_decay_rate: float = 0.15
+
     def add_roi(self, roi: np.ndarray, quality: float):
         """
         Add a quality-passed ROI to collection.
 
+        Supports temporal weighting: earlier ROIs (closer to camera) get higher scores.
+
         Args:
             roi: ROI image
-            quality: Quality score
+            quality: Quality score (raw, before temporal weighting)
         """
         # Don't collect if we have enough
         if self.collected_count >= self.max_rois:
             return
 
+        # Apply temporal weighting if enabled
+        # Earlier ROIs are closer to camera = better quality
+        weighted_quality = quality
+        if self.enable_temporal_weighting and self.collected_count > 0:
+            # Decay quality based on position in collection
+            # First ROI (index 0) = 100% quality
+            # Last ROI (index max_rois-1) = (100 - decay_rate*100)% quality
+            decay_factor = 1.0 - (self.collected_count / max(self.max_rois, 1)) * self.temporal_decay_rate
+            weighted_quality = quality * decay_factor
+
+            logger.debug(
+                f"[ROICollector] T{self.track_id}: Temporal weighting applied - "
+                f"raw_quality={quality:.1f}, weighted={weighted_quality:.1f}, "
+                f"decay_factor={decay_factor:.3f}"
+            )
+
         self.rois.append(roi.copy())
-        self.qualities.append(quality)
+        self.qualities.append(weighted_quality)  # Store weighted quality
         self.timestamps.append(time.time())
         self.collected_count += 1
         self.last_updated = time.time()
 
-        # Track best ROI
-        if quality > self.best_roi_quality:
+        # Track best ROI (using weighted quality)
+        if weighted_quality > self.best_roi_quality:
             self.best_roi = roi.copy()
-            self.best_roi_quality = quality
+            self.best_roi_quality = weighted_quality
             self.best_roi_index = self.collected_count - 1
 
         # Log only periodically to reduce overhead
@@ -107,7 +131,12 @@ class ROICollectorService(IROICollector):
     def __init__(
         self,
         quality_config: Optional[ROIQualityConfig] = None,
-        max_rois_per_track: int = 10
+        max_rois_per_track: int = 10,
+        save_roi_candidates: bool = False,
+        save_all_rois: bool = False,
+        roi_candidates_dir: str = "data/roi_candidates",
+        enable_temporal_weighting: bool = True,
+        temporal_decay_rate: float = 0.15
     ):
         """
         Initialize ROI collector.
@@ -115,9 +144,32 @@ class ROICollectorService(IROICollector):
         Args:
             quality_config: Quality filtering configuration
             max_rois_per_track: Maximum ROIs to collect per track
+            save_roi_candidates: Save ROIs that pass quality checks
+            save_all_rois: Save all ROIs (including rejected ones)
+            roi_candidates_dir: Directory to save ROI images
+            enable_temporal_weighting: Enable temporal decay (earlier ROIs = better)
+            temporal_decay_rate: Decay rate (0-1), 0.15 = 15% reduction from first to last
         """
         self.quality_config = quality_config or ROIQualityConfig()
         self.max_rois_per_track = max_rois_per_track
+
+        # ROI saving configuration
+        self.save_roi_candidates = save_roi_candidates
+        self.save_all_rois = save_all_rois
+        self.roi_candidates_dir = roi_candidates_dir
+
+        # Temporal weighting configuration
+        self.enable_temporal_weighting = enable_temporal_weighting
+        self.temporal_decay_rate = temporal_decay_rate
+
+        # Create ROI save directory if saving is enabled
+        if self.save_roi_candidates or self.save_all_rois:
+            os.makedirs(self.roi_candidates_dir, exist_ok=True)
+            logger.info(
+                f"[ROICollector] ROI saving enabled: "
+                f"save_candidates={save_roi_candidates}, save_all={save_all_rois}, "
+                f"dir={roi_candidates_dir}"
+            )
 
         # Track ID -> ROI collection
         self.collections: Dict[int, TrackROICollection] = {}
@@ -130,7 +182,9 @@ class ROICollectorService(IROICollector):
         logger.info(
             f"[ROICollector] Initialized: max_rois_per_track={max_rois_per_track}, "
             f"quality_thresholds=(sharpness≥{self.quality_config.min_sharpness}, "
-            f"brightness={self.quality_config.min_brightness}-{self.quality_config.max_brightness})"
+            f"brightness={self.quality_config.min_brightness}-{self.quality_config.max_brightness}), "
+            f"temporal_weighting={'enabled' if enable_temporal_weighting else 'disabled'}"
+            f"{f', decay_rate={temporal_decay_rate:.2f}' if enable_temporal_weighting else ''}"
         )
 
     def collect_roi(
@@ -159,7 +213,9 @@ class ROICollectorService(IROICollector):
         if track_id not in self.collections:
             self.collections[track_id] = TrackROICollection(
                 track_id=track_id,
-                max_rois=self.max_rois_per_track
+                max_rois=self.max_rois_per_track,
+                enable_temporal_weighting=self.enable_temporal_weighting,
+                temporal_decay_rate=self.temporal_decay_rate
             )
             logger.info(f"[ROI_LIFECYCLE] T{track_id} ROI_COLLECTION_START | max_rois={self.max_rois_per_track}")
 
@@ -186,6 +242,14 @@ class ROICollectorService(IROICollector):
 
         # Check quality
         quality, is_valid, reason = self._compute_quality(roi)
+
+        # Save ROI if configured
+        if self.save_all_rois:
+            # Save all ROIs (both accepted and rejected)
+            self._save_roi_image(roi, track_id, quality, is_valid, reason)
+        elif self.save_roi_candidates and is_valid:
+            # Save only accepted ROIs
+            self._save_roi_image(roi, track_id, quality, is_valid, reason)
 
         if not is_valid:
             collection.rejected_count += 1
@@ -333,6 +397,43 @@ class ROICollectorService(IROICollector):
             for track_id, _ in sorted_collections[:to_remove]:
                 logger.warning(f"[ROICollector] Removing old track {track_id} (memory limit)")
                 del self.collections[track_id]
+
+    def _save_roi_image(
+        self,
+        roi: np.ndarray,
+        track_id: int,
+        quality: float,
+        is_valid: bool,
+        reason: str = ""
+    ):
+        """
+        Save ROI image to disk for debugging/analysis.
+
+        Args:
+            roi: ROI image
+            track_id: Track identifier
+            quality: Quality score
+            is_valid: Whether ROI passed quality checks
+            reason: Rejection reason if not valid
+        """
+        try:
+            timestamp = int(time.time() * 1000)
+            status = "accepted" if is_valid else "rejected"
+
+            # Create filename with metadata
+            filename = f"track_{track_id}_{timestamp}_{status}_q{quality:.1f}"
+            if not is_valid and reason:
+                # Sanitize reason for filename
+                reason_safe = reason.replace(" ", "_").replace("(", "").replace(")", "")[:30]
+                filename += f"_{reason_safe}"
+            filename += ".jpg"
+
+            filepath = os.path.join(self.roi_candidates_dir, filename)
+            cv2.imwrite(filepath, roi)
+
+            logger.debug(f"[ROICollector] Saved ROI: {filename}")
+        except Exception as e:
+            logger.error(f"[ROICollector] Failed to save ROI: {e}")
 
     def get_statistics(self) -> Dict:
         """Get global statistics."""
