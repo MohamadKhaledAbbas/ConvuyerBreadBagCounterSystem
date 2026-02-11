@@ -1,0 +1,82 @@
+# Rsync filter rules for ConveyorBreadBagCounterSystem
+# Usage: rsync -avz --progress --filter="merge rsync.rules" /path/to/local/project/ user@server:/remote/path/
+# Example: rsync -avz --progress --filter="merge rsync.rules" /mnt/c/0001_MyFiles/0016_Projects/0002_ProjectBased/0012_ConvuyerBreadBagCounterSystem/ sunrise@rdkboard:/home/sunrise/ConveyorBreadBag/
+
+# =============================================================================
+# EXCLUDE: Development and temporary files (makes sync faster)
+# =============================================================================
+- .git/
+- .idea/
+- .vscode/
+- .ipynb_checkpoints/
+- .venv/
+- venv/
+- __pycache__/
+- *.pyc
+- *.pyo
+- *.egg-info/
+- .pytest_cache/
+- .coverage
+- htmlcov/
+
+# Exclude documentation and development files
+- docs/
+- README.md
+- Screenshot*.png
+- *.iml
+- xml_code_inspect/
+
+# Exclude test files (comment out if you want to sync tests)
+- test_*.py
+- DetectClassify.ipynb
+
+# Exclude output and temporary data
+- output/
+- data/logs/
+- data/spool/
+- data/roi_candidates/
+- data/unknown/
+
+# =============================================================================
+# INCLUDE: Essential application files
+# =============================================================================
++ src/
++ src/***
+
+# Main application files
++ main.py
++ run_endpoint.py
++ rtsp_h264_recorder.py
++ analyze_track_events.py
++ check_gpu.py
+
+# Configuration and requirements
++ .gitignore
++ requirements.txt
++ requirements.rdk.txt
++ requirements.windows.txt
+
+# =============================================================================
+# INCLUDE: Critical data folders (model and classes)
+# =============================================================================
++ data/
++ data/classes/
++ data/classes/***
++ data/model/
++ data/model/***
++ data/db/
++ data/db/***
+
+# Model converter if needed
++ data/model_converter/
++ data/model_converter/***
+
+# =============================================================================
+# EXCLUDE: Everything else in data/ (logs, temp files, etc.)
+# =============================================================================
+- data/***
+
+# =============================================================================
+# FINAL: Exclude everything else not explicitly included
+# =============================================================================
+- *

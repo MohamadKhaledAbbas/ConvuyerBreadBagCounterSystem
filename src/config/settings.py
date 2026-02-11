@@ -43,21 +43,21 @@ class AppConfig:
     Application configuration for ConveyerBreadBagCounterSystem.
     """
     
-    APP_VERSION: str = "2.0.0"
+    APP_VERSION: str = "11-02-2026_v2.0.0"
     
     # Video source for testing
-    video_path: str = os.getenv("VIDEO_PATH", "D:\\Recordings\\2026_02_05\\2026_02_10\\h264\\output_2026-02-09_20-06-37.h264")
+    video_path: str = os.getenv("VIDEO_PATH", "D:\\Recordings\\2026_02_05\\2026_02_11\\h264\\output_2026-02-11_02-36-34.h264")
     
     # Platform-specific model paths
     detection_model: str = os.getenv(
         "DETECTION_MODEL",
-        "data/model/detect_yolo_small_v9_bayese_640x640_nv12.bin" if IS_RDK
-        else "data/model/detect_yolo_small_v11.pt"
+        "data/model/yolo_nano_detect_v12_bayese_640x640_nv12.bin" if IS_RDK
+        else "data/model/yolo_nano_detect_v12.pt"
     )
     classification_model: str = os.getenv(
         "CLASS_MODEL",
-        "data/model/classify_yolo_small_v11_bayese_224x224_nv12.bin" if IS_RDK
-        else "data/model/classify_yolo_small_v11.pt"
+        "data/model/yolo_nano_classify_v12_bayese_224x224_nv12.bin" if IS_RDK
+        else "data/model/yolo_nano_classify_v12.pt"
     )
     
     # Database path
@@ -93,13 +93,15 @@ class AppConfig:
     def __post_init__(self):
         if self.classifier_classes is None:
             self.classifier_classes = {
-                0: 'Blue_Yellow',
-                1: 'Bran',
-                2: 'Brown_Orange',
-                3: 'Green_Yellow',
-                4: 'Red_Yellow',
-                5: 'Rejected',
-                6: 'Wheatberry'
+                0: 'Black_Orange',
+                1: 'Blue_Yellow',
+                2: 'Bran',
+                3: 'Brown_Orange',
+                4: 'Green_Yellow',
+                5: 'Purple_Yellow',
+                6: 'Red_Yellow',
+                7: 'Rejected',
+                8: 'Wheatberry'
             }
         
         if self.detector_classes is None:

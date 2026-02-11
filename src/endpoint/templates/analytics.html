@@ -6,7 +6,7 @@
     <title>لوحة تحليلات البيانات</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link href="../static/css/analytics.css?v=5" rel="stylesheet">
+    <link href="/static/css/analytics.css?v=5" rel="stylesheet">
 </head>
 
 <body>
@@ -64,7 +64,7 @@
                 <div class="card-header stacked">
                     <div class="card-title">{{ c.arabic_name }}</div>
                     <div class="thumb-container">
-                        <img src="{{ c.thumb }}" alt="{{ c.name }}" loading="lazy" onerror="this.src='https://placehold.co/100x100/1e293b/FFF?text={{ c.name[:1] if c.name else '?' }}'">
+                        <img src="/{{ c.thumb }}" alt="{{ c.name }}" loading="lazy" onerror="this.src='https://placehold.co/100x100/1e293b/FFF?text={{ c.name[:1] if c.name else '?' }}'">
                     </div>
                 </div>
 
@@ -144,7 +144,7 @@
                 <div class="timeline-group-card">
                     <div class="group-header">
                         <div class="group-thumb">
-                            <img src="{{ run.thumb }}" alt="{{ run.class_name }}" loading="lazy" onerror="this.src='https://placehold.co/60x60/1e293b/FFF?text={{ run.class_name[:1] if run.class_name else '?' }}'">
+                            <img src="/{{ run.thumb }}" alt="{{ run.class_name }}" loading="lazy" onerror="this.src='https://placehold.co/60x60/1e293b/FFF?text={{ run.class_name[:1] if run.class_name else '?' }}'">
                         </div>
                         <div class="group-info">
                             <div class="group-name">{{ run.arabic_name or run.class_name }}</div>
@@ -187,32 +187,25 @@ function toggleExpansion(button) {
     const classId = button.getAttribute('data-class-id');
     const expansion = document.getElementById('expansion-' + classId);
     const icon = button.querySelector('i');
-    
     if (!expansion) {
         console.error('Expansion element not found for class:', classId);
         return;
     }
-    
-    if (expansion.style.display === 'none') {
-        // Show expansion
-        expansion.style.display = 'block';
-        // Add animation class after display change
-        setTimeout(() => expansion.classList.add('expanded'), 10);
-        icon.classList.remove('fa-chevron-down');
-        icon.classList.add('fa-chevron-up');
-        button.innerHTML = '<i class="fa-solid fa-chevron-up"></i> إخفاء التفاصيل';
-    } else {
-        // Hide expansion
+
+    const isExpanded = expansion.classList.contains('expanded');
+
+    if (isExpanded) {
+        // Collapse
         expansion.classList.remove('expanded');
         icon.classList.remove('fa-chevron-up');
         icon.classList.add('fa-chevron-down');
         button.innerHTML = '<i class="fa-solid fa-chevron-down"></i> عرض التفاصيل';
-        // Wait for animation to complete before hiding
-        setTimeout(() => {
-            if (!expansion.classList.contains('expanded')) {
-                expansion.style.display = 'none';
-            }
-        }, 300);
+    } else {
+        // Expand
+        expansion.classList.add('expanded');
+        icon.classList.remove('fa-chevron-down');
+        icon.classList.add('fa-chevron-up');
+        button.innerHTML = '<i class="fa-solid fa-chevron-up"></i> إخفاء التفاصيل';
     }
 }
 

@@ -45,20 +45,42 @@ class AnalyticsService:
         stats = repo_data['stats']
         events = repo_data['events']
         per_class_windows = repo_data['per_class_windows']
-        # Build classifications list with sorted by count (most common first)
-        classifications = [
-            {
-                'id': bid, 
-                'name': d['name'], 
-                'arabic_name': d['arabic_name'], 
-                'count': d['count'], 
-                'high_count': d['high_count'], 
-                'low_count': d['low_count'], 
-                'thumb': d['thumb'], 
-                'weight': d['weight']
-            } 
-            for bid, d in stats['by_type'].items()
-        ]
+
+        # Get ALL bag types from database (including those with zero events)
+        all_bag_types = self.repo.get_all_bag_types()
+
+        # Build classifications list including ALL bag types
+        # Merge stats with all bag types - bag types with events get their counts,
+        # those without events get zero counts
+        classifications = []
+        for bag_type in all_bag_types:
+            bid = bag_type['id']
+            if bid in stats['by_type']:
+                # Has events - use stats data
+                d = stats['by_type'][bid]
+                classifications.append({
+                    'id': bid,
+                    'name': d['name'],
+                    'arabic_name': d['arabic_name'],
+                    'count': d['count'],
+                    'high_count': d['high_count'],
+                    'low_count': d['low_count'],
+                    'thumb': d['thumb'],
+                    'weight': d['weight']
+                })
+            else:
+                # No events - create entry with zero counts
+                classifications.append({
+                    'id': bid,
+                    'name': bag_type['name'],
+                    'arabic_name': bag_type.get('arabic_name', bag_type['name']),
+                    'count': 0,
+                    'high_count': 0,
+                    'low_count': 0,
+                    'thumb': bag_type.get('thumb', ''),
+                    'weight': bag_type.get('weight', 0)
+                })
+
         # Sort by count descending for better UX (most common first)
         classifications.sort(key=lambda x: x['count'], reverse=True)
         
