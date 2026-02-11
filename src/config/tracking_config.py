@@ -132,25 +132,32 @@ class TrackingConfig:
     """Cost threshold for second-stage matching (0-1, lower = stricter)."""
 
     # ==========================================================================
-    # Travel Path Validation (Bottom-to-Top)
+    # Travel Path Validation (Time-based + Exit Direction)
     # ==========================================================================
 
     require_full_travel: bool = _parse_bool_env("REQUIRE_FULL_TRAVEL", True)
     """
-    Require tracks to travel from entry zone (bottom) to exit zone (top).
-    Tracks appearing mid-frame or not reaching the top are ignored.
+    Require tracks to meet minimum travel time and exit from the top.
+    Tracks that don't meet the time threshold or exit from bottom are invalid.
     """
 
-    entry_zone_ratio: float = _parse_float_env("ENTRY_ZONE_RATIO", 0.30)
+    min_travel_duration_seconds: float = _parse_float_env("MIN_TRAVEL_DURATION_SECONDS", 2.0)
     """
-    Bottom fraction of frame considered as entry zone (0.25 = bottom 25%).
-    Tracks must first appear within this zone to be considered valid.
+    Minimum time (seconds) a track must be visible to be considered valid.
+    This replaces zone-based validation with a more robust time-based approach.
+    Typical conveyor speeds require 2-3 seconds to cross the frame.
     """
 
     exit_zone_ratio: float = _parse_float_env("EXIT_ZONE_RATIO", 0.15)
     """
     Top fraction of frame considered as exit zone (0.15 = top 15%).
     Tracks must exit through this zone to be considered valid.
+    """
+
+    bottom_exit_zone_ratio: float = _parse_float_env("BOTTOM_EXIT_ZONE_RATIO", 0.15)
+    """
+    Bottom fraction of frame considered as invalid exit zone (0.15 = bottom 15%).
+    Tracks exiting from this zone are marked invalid (wrong direction).
     """
 
     # ==========================================================================

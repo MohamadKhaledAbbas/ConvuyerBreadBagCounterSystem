@@ -587,25 +587,25 @@ class ConveyorTracker(ITracker):
         """
         return self._get_exit_direction(track) is not None
 
-    def _is_in_entry_zone(self, y: int) -> bool:
+    def _is_in_bottom_exit_zone(self, y: int) -> bool:
         """
-        Check if Y coordinate is in the entry zone (bottom of frame).
+        Check if Y coordinate is in the bottom exit zone (invalid exit).
 
-        Bread bags appear from the bottom, so the entry zone is the
-        lower portion of the frame.
+        Tracks exiting from the bottom are moving in the wrong direction
+        and should be marked as invalid.
 
         Args:
             y: Y coordinate to check
 
         Returns:
-            True if in entry zone
+            True if in bottom exit zone (invalid exit direction)
         """
         if self.frame_height is None:
-            logger.warning("[ConveyorTracker] Cannot validate entry zone: frame_height is None")
+            logger.warning("[ConveyorTracker] Cannot validate bottom exit zone: frame_height is None")
             return False  # Can't validate without frame dimensions
-        entry_zone_ratio = getattr(self.config, 'entry_zone_ratio', 0.25)
-        entry_y_threshold = self.frame_height * (1.0 - entry_zone_ratio)
-        return y >= entry_y_threshold
+        bottom_exit_zone_ratio = getattr(self.config, 'bottom_exit_zone_ratio', 0.15)
+        bottom_y_threshold = self.frame_height * (1.0 - bottom_exit_zone_ratio)
+        return y >= bottom_y_threshold
 
     def _is_in_exit_zone(self, y: int) -> bool:
         """
@@ -629,40 +629,58 @@ class ConveyorTracker(ITracker):
 
     def _has_valid_travel_path(self, track: TrackedObject) -> bool:
         """
-        Check if track followed a valid bottom-to-top travel path.
+        Check if track has a valid travel path using time-based validation.
 
         A valid travel path means:
-        1. Track first appeared in the entry zone (bottom of frame)
-        2. Track is currently exiting through the exit zone (top of frame)
+        1. Track has been visible for minimum required duration (time-based)
+        2. Track is exiting through the top exit zone (valid direction)
+        3. Track is NOT exiting through the bottom (invalid direction)
 
-        This filters out:
-        - Bags appearing mid-frame (e.g., from occlusion recovery)
-        - Bags that exit from the side or bottom
-        - Bags that don't reach the top of the frame
+        This approach is more robust than zone-based validation because:
+        - Works regardless of where the object first appears
+        - Filters out noise/transient detections (too short duration)
+        - Ensures objects traveled the expected path (exit from top)
 
         Args:
             track: Tracked object to validate
 
         Returns:
-            True if the track has a valid bottom-to-top travel path
+            True if the track has a valid travel path
         """
         require_full_travel = getattr(self.config, 'require_full_travel', True)
         if not require_full_travel:
             return True
 
-        # Must have a recorded entry position
-        if track.entry_center_y is None:
-            return False
-
-        # Must have entered from the bottom entry zone
-        if not self._is_in_entry_zone(track.entry_center_y):
-            return False
-
-        # Must be exiting from the top exit zone
+        # Get current position
         _, cy = track.center
-        if not self._is_in_exit_zone(cy):
+
+        # Check 1: Track must NOT be exiting from the bottom (wrong direction)
+        if self._is_in_bottom_exit_zone(cy):
+            logger.debug(
+                f"[ConveyorTracker] T{track.track_id} INVALID: exiting from bottom zone"
+            )
             return False
 
+        # Check 2: Track must be exiting from the top (correct direction)
+        if not self._is_in_exit_zone(cy):
+            logger.debug(
+                f"[ConveyorTracker] T{track.track_id} INVALID: not exiting from top zone"
+            )
+            return False
+
+        # Check 3: Track must have been visible for minimum duration (time-based)
+        min_travel_seconds = getattr(self.config, 'min_travel_duration_seconds', 2.0)
+        track_duration = time.time() - track.created_at
+
+        if track_duration < min_travel_seconds:
+            logger.debug(
+                f"[ConveyorTracker] T{track.track_id} INVALID: duration {track_duration:.2f}s < {min_travel_seconds:.2f}s required"
+            )
+            return False
+
+        logger.debug(
+            f"[ConveyorTracker] T{track.track_id} VALID: duration={track_duration:.2f}s, exiting from top"
+        )
         return True
 
     def update(
