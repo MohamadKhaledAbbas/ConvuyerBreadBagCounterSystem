@@ -1,8 +1,8 @@
 """
-Tracking configuration for ConveyerBreadBagCounterSystem.
+Tracking configuration for ConvuyerBreadBagCounterSystem.
 
-Simplified configuration for conveyer-based tracking.
-Unlike the chaotic table environment, conveyer tracking is simpler:
+Simplified configuration for convuyer-based tracking.
+Unlike the chaotic table environment, convuyer tracking is simpler:
 - Objects appear on one side
 - Move linearly across the frame
 - Disappear on the other side
@@ -46,14 +46,14 @@ def _parse_str_env(key: str, default: str) -> str:
 @dataclass
 class TrackingConfig:
     """
-    Configuration for conveyer-based bread bag tracking and classification.
+    Configuration for convuyer-based bread bag tracking and classification.
     
     Simplified from the original BreadBagCounterSystem which handled:
     - Complex table environments with workers
     - Open/closing/closed state detection
     - Event-centric tracking with centroid association
     
-    For conveyer systems, we use simpler logic:
+    For convuyer systems, we use simpler logic:
     - Single detection class (bread-bag)
     - Linear motion tracking
     - ROI collection during track lifetime
@@ -271,7 +271,7 @@ class TrackingConfig:
     
     spool_dir: str = _parse_str_env(
         "SPOOL_DIR",
-        "/home/sunrise/ConveyerCounting/data/spool" if IS_RDK else "data/spool"
+        "/home/sunrise/ConvuyerBreadCounting/data/spool" if IS_RDK else "data/spool"
     )
     """Directory for spool segment files."""
     

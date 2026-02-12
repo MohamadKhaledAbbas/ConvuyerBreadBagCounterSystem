@@ -80,6 +80,49 @@ class RetentionPolicy:
             self._processed_segments.add(segment_num)
             logger.debug(f"[Retention] Marked segment {segment_num} as processed")
 
+    def delete_processed_immediately(self, segment_num: int) -> bool:
+        """
+        Immediately delete a segment that has been fully processed.
+
+        This is called by the spool processor after completing a segment
+        to free disk space immediately rather than waiting for periodic cleanup.
+
+        Args:
+            segment_num: Segment number to delete
+
+        Returns:
+            True if segment was deleted, False otherwise
+        """
+        segment_path = self.spool_dir / f"seg_{segment_num:06d}.bin"
+
+        if not segment_path.exists():
+            logger.debug(f"[Retention] Segment {segment_num} already deleted")
+            return False
+
+        try:
+            # Delete main segment file
+            size = segment_path.stat().st_size
+            segment_path.unlink()
+
+            # Delete metadata file if exists
+            meta_path = segment_path.with_suffix('.json')
+            if meta_path.exists():
+                meta_path.unlink()
+
+            # Remove from processed tracking
+            with self._processed_lock:
+                self._processed_segments.discard(segment_num)
+
+            self.total_deleted += 1
+            self.bytes_freed += size
+
+            logger.info(f"[Retention] Deleted processed segment {segment_num} ({size / 1024:.1f}KB)")
+            return True
+
+        except OSError as e:
+            logger.error(f"[Retention] Error deleting segment {segment_num}: {e}")
+            return False
+
     def is_processed(self, segment_num: int) -> bool:
         """Check if a segment has been processed."""
         with self._processed_lock:

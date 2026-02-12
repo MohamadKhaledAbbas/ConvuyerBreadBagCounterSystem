@@ -43,6 +43,9 @@
 + src/
 + src/***
 
++ helper_scripts/
++ helper_scripts/***
+
 # Main application files
 + main.py
 + run_endpoint.py
@@ -55,6 +58,17 @@
 + requirements.txt
 + requirements.rdk.txt
 + requirements.windows.txt
++ cyclonedds.xml
++ diagnose_spool_qos.py
++ check_ros2_topics.py
++ test_message_types.py
++ restart_spool_recorder.sh
++ restart_spool_pipeline.sh
++ deploy_and_restart.sh
++ SPOOL_QOS_FIX.md
++ PIPELINE_QOS_CONFIG.md
++ SPOOL_PERFORMANCE_TUNING.md
++ ROS2_FRAMESERVER_FIX.md
 
 # =============================================================================
 # INCLUDE: Critical data folders (model and classes)
@@ -64,12 +78,9 @@
 + data/classes/***
 + data/model/
 + data/model/***
-+ data/db/
-+ data/db/***
 
-# Model converter if needed
-+ data/model_converter/
-+ data/model_converter/***
+# + data/db/
+# + data/db/***
 
 # =============================================================================
 # EXCLUDE: Everything else in data/ (logs, temp files, etc.)
@@ -80,3 +91,5 @@
 # FINAL: Exclude everything else not explicitly included
 # =============================================================================
 - *
+
+

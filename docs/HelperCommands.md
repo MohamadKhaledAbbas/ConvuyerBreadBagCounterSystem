@@ -40,3 +40,5 @@ python3 model_converter/mapper.py --onnx model/best_classify.onnx --cal-images m
 - `--cal-images model_converter/Classify_Calibration` : Calibration images directory
 
 ---
+
+rsync -avz --progress --filter="merge rsync.rules" /mnt/c/0001_MyFiles/0016_Projects/0002_ProjectBased/0012_ConvuyerBreadBagCounterSystem/* sunrise@rdkboard:/home/sunrise/ConvuyerBreadCounting

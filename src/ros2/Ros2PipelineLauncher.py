@@ -16,74 +16,19 @@ Production Notes:
 - Support for both main stream and substream
 """
 
-import os
 import sys
+import os
 
 # Add project root to path for imports
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, PROJECT_ROOT)
+sys.path.append("/home/sunrise/ConvuyerBreadCounting")
 
+from launch import LaunchDescription
+from launch.actions import SetEnvironmentVariable
+from launch_ros.actions import Node
+
+from src.logging.Database import DatabaseManager
+import src.constants as constants
 from src.utils.AppLogging import logger
-from src.utils.platform import IS_RDK
-
-# Only import ROS2 dependencies on RDK platform
-if IS_RDK:
-    from launch import LaunchDescription # type: ignore
-    from launch.actions import SetEnvironmentVariable # type: ignore
-    from launch_ros.actions import Node # type: ignore
-
-    from src.logging.Database import DatabaseManager
-    from src import constants
-
-
-def get_rtsp_config() -> dict:
-    """
-    Get RTSP configuration from database.
-
-    Returns:
-        Dictionary with RTSP connection parameters
-    """
-    try:
-        db_path = os.getenv("DB_PATH", "/home/sunrise/ConveyerCounting/data/db/bag_events.db")
-        db = DatabaseManager(db_path)
-
-        config = {
-            'username': db.get_config(constants.rtsp_username, 'admin'),
-            'password': db.get_config(constants.rtsp_password, ''),
-            'host': db.get_config(constants.rtsp_host, '192.168.1.100'),
-            'port': db.get_config(constants.rtsp_port, '554'),
-        }
-
-        db.close()
-        return config
-
-    except Exception as e:
-        logger.warning(f"[Ros2PipelineLauncher] Could not read RTSP config from DB: {e}")
-        # Return defaults
-        return {
-            'username': os.getenv('RTSP_USERNAME', 'admin'),
-            'password': os.getenv('RTSP_PASSWORD', ''),
-            'host': os.getenv('RTSP_HOST', '192.168.1.100'),
-            'port': os.getenv('RTSP_PORT', '554'),
-        }
-
-
-def build_rtsp_url(config: dict, subtype: int = 0) -> str:
-    """
-    Build RTSP URL from configuration.
-
-    Args:
-        config: RTSP configuration dictionary
-        subtype: Stream subtype (0=main, 1=sub)
-
-    Returns:
-        Complete RTSP URL
-    """
-    return (
-        f"rtsp://{config['username']}:{config['password']}@"
-        f"{config['host']}:{config['port']}"
-        f"/cam/realmonitor?channel=1&subtype={subtype}"
-    )
 
 
 def generate_launch_description():
@@ -112,23 +57,33 @@ def generate_launch_description():
         SetEnvironmentVariable('HOME', '/home/sunrise'),
     ]
 
-    # Get RTSP configuration
-    rtsp_config = get_rtsp_config()
+    # Get RTSP configuration from database
+    db_path = os.getenv("DB_PATH", "/home/sunrise/ConvuyerBreadCounting/data/db/bag_events.db")
+    db = DatabaseManager(db_path)
 
-    # Build RTSP URL (main stream by default)
+    rtsp_username = db.get_config(constants.rtsp_username, 'admin')
+    rtsp_password = db.get_config(constants.rtsp_password, '')
+    rtsp_host = db.get_config(constants.rtsp_host, '192.168.2.108')
+    rtsp_port = db.get_config(constants.rtsp_port, '554')
+
+    # Build RTSP URL
     # Use subtype=0 for main stream (higher quality)
     # Use subtype=1 for sub stream (lower bandwidth)
     use_substream = os.getenv('USE_RTSP_SUBSTREAM', 'false').lower() == 'true'
-    rtsp_url = build_rtsp_url(rtsp_config, subtype=1 if use_substream else 0)
+    subtype = 1 if use_substream else 0
 
-    logger.info(f"[Ros2PipelineLauncher] RTSP URL: rtsp://{rtsp_config['username']}:***@{rtsp_config['host']}:{rtsp_config['port']}/...")
+    rtsp_url = (
+        f"rtsp://{rtsp_username}:{rtsp_password}@{rtsp_host}:{rtsp_port}"
+        f"/cam/realmonitor?channel=1&subtype={subtype}"
+    )
+
+    logger.info(f"[Ros2PipelineLauncher] RTSP URL: rtsp://{rtsp_username}:***@{rtsp_host}:{rtsp_port}/...")
 
     # RTSP Client Node
     # Receives RTSP stream and publishes raw H.264 NAL units
     rtsp_node = Node(
         package='hobot_rtsp_client',
         executable='hobot_rtsp_client',
-        name='rtsp_client',
         output='screen',
         parameters=[
             {
@@ -136,7 +91,7 @@ def generate_launch_description():
                 'rtsp_url_0': rtsp_url,
                 # Transport configuration
                 'rtsp_transport': 'tcp',  # TCP for reliability (avoids UDP packet loss)
-                'rtsp_subtype': 1 if use_substream else 0,
+                'rtsp_subtype': subtype,
                 # Buffer configuration (increase for high-bitrate streams)
                 'rtp_reassembly_buffer_bytes': 1048576,  # 1MB buffer
             }
@@ -145,10 +100,11 @@ def generate_launch_description():
 
     # Hardware Decoder Node
     # Decodes H.264 to NV12 using RDK hardware decoder
+    # NOTE: Subscribe to /spool_image_ch_0 for spool-based architecture
+    # The spool processor reads from disk and publishes to this topic
     hw_decode_node = Node(
         package='hobot_codec',
         executable='hobot_codec_republish',
-        name='hw_decoder',
         output='screen',
         parameters=[
             {
@@ -167,10 +123,3 @@ def generate_launch_description():
 
     return LaunchDescription(env_setup + [rtsp_node, hw_decode_node])
 
-
-# For non-RDK platforms, provide a stub
-if not IS_RDK:
-    def generate_launch_description():
-        """Stub for non-RDK platforms."""
-        logger.error("[Ros2PipelineLauncher] This module requires RDK platform")
-        raise RuntimeError("Ros2PipelineLauncher requires RDK platform with ROS2")

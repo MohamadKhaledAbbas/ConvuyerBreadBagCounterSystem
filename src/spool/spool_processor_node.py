@@ -36,14 +36,14 @@ from src.utils.platform import is_rdk_platform
 if is_rdk_platform():
     import rclpy
     from rclpy.node import Node # type: ignore
-    from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy # type: ignore
+    from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy # type: ignore
 
     try:
-        from hobot_cv_msgs.msg import H26XFrame # type: ignore
+        from img_msgs.msg import H26XFrame # type: ignore
         HAS_H26X_MSG = True
     except ImportError:
         HAS_H26X_MSG = False
-        logger.warning("[SpoolProcessor] hobot_cv_msgs not available")
+        logger.warning("[SpoolProcessor] img_msgs not available")
 else:
     Node = object
     HAS_H26X_MSG = False
@@ -63,11 +63,13 @@ class ProcessorConfig:
     spool_dir: str = "/tmp/spool"
     output_topic: str = "/spool_image_ch_0"
     state_file: str = "/tmp/spool/processor_state.json"
-    playback_mode: PlaybackMode = PlaybackMode.ADAPTIVE
+    playback_mode: PlaybackMode = PlaybackMode.FAST  # Process as fast as possible to catch up
     base_fps: float = 30.0
+    min_frame_interval_ms: float = 33.0  # ~30fps max (1000/33 = 30.3 fps) - prevents CPU overload
     qos_depth: int = 10
     state_save_interval: float = 10.0
     enable_retention: bool = True
+    delete_processed_segments: bool = True  # Delete segments after processing to save disk space
     retention_config: Optional[RetentionConfig] = None
 
 
@@ -91,10 +93,10 @@ class SpoolProcessorNode(Node if is_rdk_platform() else object):
         if is_rdk_platform():
             super().__init__('spool_processor_node')
 
-            # Configure QoS
+            # Configure QoS - use RELIABLE for spool pipeline consistency
             qos = QoSProfile(
-                reliability=ReliabilityPolicy.RELIABLE,
-                history=HistoryPolicy.KEEP_LAST,
+                reliability=QoSReliabilityPolicy.RELIABLE,
+                history=QoSHistoryPolicy.KEEP_LAST,
                 depth=self.config.qos_depth
             )
 
@@ -151,7 +153,9 @@ class SpoolProcessorNode(Node if is_rdk_platform() else object):
 
             logger.info(
                 f"[SpoolProcessor] Initialized: {self.config.spool_dir} → "
-                f"{self.config.output_topic}, mode={self.config.playback_mode.value}"
+                f"{self.config.output_topic}, mode={self.config.playback_mode.value}, "
+                f"min_interval={self.config.min_frame_interval_ms}ms (~{1000/self.config.min_frame_interval_ms:.0f}fps max), "
+                f"delete_after_process={self.config.delete_processed_segments}"
             )
 
         else:
@@ -176,16 +180,25 @@ class SpoolProcessorNode(Node if is_rdk_platform() else object):
             return False
 
         try:
+            from builtin_interfaces.msg import Time # ignore import error
+
             msg = H26XFrame()
             msg.width = record.width
             msg.height = record.height
             msg.data = list(record.data)
 
-            # Set timestamps
+            # Set timestamps - must be ROS2 Time objects, not integers
             if hasattr(msg, 'dts'):
-                msg.dts = record.dts_ns
+                dts_time = Time()
+                dts_time.sec = record.dts_sec
+                dts_time.nanosec = record.dts_nsec
+                msg.dts = dts_time
+
             if hasattr(msg, 'pts'):
-                msg.pts = record.pts_ns
+                pts_time = Time()
+                pts_time.sec = record.pts_sec
+                pts_time.nanosec = record.pts_nsec
+                msg.pts = pts_time
 
             # Set encoding
             if hasattr(msg, 'encoding'):
@@ -220,6 +233,13 @@ class SpoolProcessorNode(Node if is_rdk_platform() else object):
             start_segment = self.state.last_segment
             logger.info(f"[SpoolProcessor] Resuming from segment {start_segment}")
 
+        # For REALTIME mode, track first frame timestamp
+        first_frame_timestamp_ns = None
+        first_frame_wall_time = None
+
+        # For FAST mode, track last frame time for minimum interval throttling
+        last_frame_time = None
+
         while not self._stop_event.is_set():
             try:
                 # Get available segments
@@ -252,7 +272,39 @@ class SpoolProcessorNode(Node if is_rdk_platform() else object):
                             break
 
                         # Pace based on mode
-                        if self.config.playback_mode != PlaybackMode.FAST:
+                        if self.config.playback_mode == PlaybackMode.REALTIME:
+                            # Use actual frame timestamps for pacing
+                            frame_timestamp_ns = record.dts_sec * 1_000_000_000 + record.dts_nsec
+
+                            if first_frame_timestamp_ns is None:
+                                # First frame - establish baseline
+                                first_frame_timestamp_ns = frame_timestamp_ns
+                                first_frame_wall_time = time.monotonic()
+                            else:
+                                # Calculate how long to wait based on timestamp difference
+                                elapsed_since_first_ns = frame_timestamp_ns - first_frame_timestamp_ns
+                                elapsed_since_first_s = elapsed_since_first_ns / 1_000_000_000.0
+
+                                wall_time_elapsed = time.monotonic() - first_frame_wall_time
+                                time_to_wait = elapsed_since_first_s - wall_time_elapsed
+
+                                if time_to_wait > 0:
+                                    time.sleep(time_to_wait)
+
+                        elif self.config.playback_mode == PlaybackMode.FAST:
+                            # FAST mode: enforce minimum interval to prevent CPU overload
+                            if last_frame_time is not None:
+                                min_interval_s = self.config.min_frame_interval_ms / 1000.0
+                                elapsed = time.monotonic() - last_frame_time
+                                remaining = min_interval_s - elapsed
+
+                                if remaining > 0:
+                                    time.sleep(remaining)
+
+                            last_frame_time = time.monotonic()
+
+                        else:
+                            # ADAPTIVE or CATCHUP mode - use FPS-based pacing
                             queue_depth = self._get_queue_depth()
                             self.pacer.calculate_fps(queue_depth)
                             self.pacer.wait_for_next_frame()
@@ -271,8 +323,11 @@ class SpoolProcessorNode(Node if is_rdk_platform() else object):
                     self.state.complete_segment(segment_num)
                     self._segments_processed += 1
 
-                    # Mark for retention
-                    if self.retention:
+                    # Delete processed segment immediately if configured
+                    if self.retention and self.config.delete_processed_segments:
+                        self.retention.delete_processed_immediately(segment_num)
+                    elif self.retention:
+                        # Otherwise just mark for later cleanup
                         self.retention.mark_processed(segment_num)
 
                     logger.info(

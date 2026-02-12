@@ -1,5 +1,5 @@
 """
-Application constants for ConveyerBreadBagCounterSystem.
+Application constants for ConvuyerBreadBagCounterSystem.
 """
 
 # Configuration keys for database

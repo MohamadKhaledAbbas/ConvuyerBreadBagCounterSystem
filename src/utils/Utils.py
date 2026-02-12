@@ -1,5 +1,5 @@
 """
-Utility functions for ConveyerBreadBagCounterSystem.
+Utility functions for ConvuyerBreadBagCounterSystem.
 """
 
 from typing import Tuple, Optional

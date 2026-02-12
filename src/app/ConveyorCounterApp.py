@@ -208,6 +208,9 @@ class ConveyorCounterApp:
         self._smoother: Optional[BidirectionalSmoother] = None
         self._db: Optional[DatabaseManager] = None
         
+        # ROS2 executor (only used on RDK platform)
+        self._ros_executor = None
+
         # ROI cache for saving by class (track_id -> best_roi)
         self._roi_cache: Dict[int, np.ndarray] = {}
 
@@ -275,23 +278,56 @@ class ConveyorCounterApp:
         self._db = DatabaseManager(self.app_config.db_path)
 
         # Load enable_display from database config
-        from src.constants import enable_display_key
+        from src.constants import enable_display_key, is_development_key
         enable_display_str = self._db.get_config(enable_display_key, default='0')
         self.enable_display = enable_display_str == '1'
         logger.info(f"[ConveyorCounterApp] Display enabled: {self.enable_display} (from DB config)")
 
+        # Check if running in development mode (from database config)
+        is_development_str = self._db.get_config(is_development_key, default='0')
+        is_development = is_development_str == '1'
+        logger.info(f"[ConveyorCounterApp] Development mode: {is_development} (from DB config)")
+
         # Frame source
         if self._frame_source is None:
-            source_type = 'opencv'  # Default to OpenCV
-            source = self.video_source or self.app_config.video_path
-            self._frame_source = FrameSourceFactory.create(
-                source_type,
-                source=source,
-                testing_mode=self.testing_mode,
-                queue_size=self.app_config.frame_queue_size,
-                target_fps=self.app_config.frame_target_fps
-            )
-        
+            from src.utils.platform import IS_RDK
+
+            if is_development:
+                # Development mode: use OpenCV with video file
+                source_type = 'opencv'
+                source = self.video_source or self.app_config.video_path
+                self._frame_source = FrameSourceFactory.create(
+                    source_type,
+                    source=source,
+                    testing_mode=self.testing_mode,
+                    queue_size=self.app_config.frame_queue_size,
+                    target_fps=self.app_config.frame_target_fps
+                )
+                logger.info(f"[ConveyorCounterApp] Development mode: using OpenCV with {source}")
+            elif IS_RDK:
+                # Production on RDK: use ROS2 frame source
+                # Initialize ROS2 context BEFORE creating the frame source
+                import os
+                os.environ["HOME"] = "/home/sunrise"
+                from src.ros2.IPC import init_ros2_context
+                self._ros_executor = init_ros2_context()
+
+                source_type = 'ros2'
+                self._frame_source = FrameSourceFactory.create(source_type)
+                logger.info(f"[ConveyorCounterApp] Production mode: using ROS2 frame source")
+            else:
+                # Non-RDK (Windows/Linux): use OpenCV
+                source_type = 'opencv'
+                source = self.video_source or self.app_config.video_path
+                self._frame_source = FrameSourceFactory.create(
+                    source_type,
+                    source=source,
+                    testing_mode=self.testing_mode,
+                    queue_size=self.app_config.frame_queue_size,
+                    target_fps=self.app_config.frame_target_fps
+                )
+                logger.info(f"[ConveyorCounterApp] Windows/Linux mode: using OpenCV with {source}")
+
         # Detector
         if self._detector is None:
             self._detector = DetectorFactory.create(
@@ -704,6 +740,15 @@ class ConveyorCounterApp:
         if self._frame_source is not None:
             self._frame_source.cleanup()
         
+        # Shutdown ROS2 context if initialized
+        if self._ros_executor is not None:
+            try:
+                from src.ros2.IPC import shutdown_ros2_context
+                shutdown_ros2_context()
+                logger.info("[ConveyorCounterApp] ROS2 context shutdown complete")
+            except Exception as e:
+                logger.warning(f"[ConveyorCounterApp] ROS2 shutdown error (ignored): {e}")
+
         # Close database
         if self._db is not None:
             self._db.close()

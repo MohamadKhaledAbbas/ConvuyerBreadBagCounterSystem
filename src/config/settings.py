@@ -1,5 +1,5 @@
 """
-Application settings for ConveyerBreadBagCounterSystem.
+Application settings for ConvuyerBreadBagCounterSystem.
 
 Platform-aware configuration with model paths and runtime settings.
 """
@@ -40,7 +40,7 @@ class ModelInfo:
 @dataclass
 class AppConfig:
     """
-    Application configuration for ConveyerBreadBagCounterSystem.
+    Application configuration for ConvuyerBreadBagCounterSystem.
     """
     
     APP_VERSION: str = "11-02-2026_v2.0.0"
@@ -62,7 +62,7 @@ class AppConfig:
     
     # Database path
     if IS_RDK:
-        db_path: str = os.getenv("DB_PATH", "/home/sunrise/ConveyerCounting/data/db/bag_events.db")
+        db_path: str = os.getenv("DB_PATH", "/home/sunrise/ConvuyerBreadCounting/data/db/bag_events.db")
     else:
         db_path: str = os.getenv("DB_PATH", "data/db/bag_events.db")
     
@@ -83,7 +83,7 @@ class AppConfig:
     # Classifier class names - bread bag types
     classifier_classes: Dict[int, str] = None
     
-    # Detector class names - just bread-bag for conveyer
+    # Detector class names - just bread-bag for convuyer
     detector_classes: Dict[int, str] = None
     
     # Model info objects
@@ -105,7 +105,7 @@ class AppConfig:
             }
         
         if self.detector_classes is None:
-            # For conveyer, we only detect bread bags (single class)
+            # For convuyer, we only detect bread bags (single class)
             self.detector_classes = {
                 0: 'bread-bag'
             }

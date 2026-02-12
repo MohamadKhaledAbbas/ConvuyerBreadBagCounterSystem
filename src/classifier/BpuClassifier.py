@@ -1,20 +1,31 @@
 """
 BPU-accelerated classifier for RDK platform.
-"""
 
-from typing import List, Tuple
+Based on the working implementation from BreadBagCounterSystem.
+Optimized for NV12 input format as required by BPU models.
+"""
 
 import cv2
 import numpy as np
+from typing import List, Tuple, Dict, Optional
 
 from src.classifier.BaseClassifier import BaseClassifier, ClassificationResult
 from src.utils.AppLogging import logger
 
+# Import BPU Library safely
 try:
     from hobot_dnn import pyeasy_dnn as dnn
     HAS_BPU = True
+    logger.info("[BpuClassifier] Using hobot_dnn")
 except ImportError:
-    HAS_BPU = False
+    try:
+        from hobot_dnn_rdkx5 import pyeasy_dnn as dnn
+        HAS_BPU = True
+        logger.info("[BpuClassifier] Using hobot_dnn_rdkx5")
+    except ImportError:
+        logger.warning("[BpuClassifier] hobot_dnn not found. BPU classification unavailable.")
+        dnn = None
+        HAS_BPU = False
 
 
 class BpuClassifier(BaseClassifier):
@@ -23,6 +34,8 @@ class BpuClassifier(BaseClassifier):
     
     Uses Horizon BPU-optimized .bin models for efficient
     edge inference on RDK hardware.
+
+    Requires NV12 format input (handled automatically in preprocessing).
     """
     
     def __init__(
@@ -45,25 +58,71 @@ class BpuClassifier(BaseClassifier):
         self.model_path = model_path
         self._class_names = classes
         self.input_size = input_size
-        
+        self.input_w, self.input_h = input_size
+
+        # Pre-allocate NV12 buffer for efficiency
+        self.area = self.input_h * self.input_w
+        self.nv12_buffer = np.zeros((self.area * 3 // 2,), dtype=np.uint8)
+
         # Load model
         logger.info(f"[BpuClassifier] Loading model: {model_path}")
-        self.models = dnn.load(model_path)
-        
-        if not self.models:
+        self.model = dnn.load(model_path)
+
+        if not self.model:
             raise ValueError(f"Failed to load model: {model_path}")
         
+        # Try to log model input properties
+        try:
+            input_shape = self.model[0].inputs[0].properties.shape
+            logger.info(f"[BpuClassifier] Model loaded. Input shape: {input_shape}")
+        except Exception as e:
+            logger.debug(f"[BpuClassifier] Could not read model properties: {e}")
+
         logger.info(f"[BpuClassifier] Model loaded, classes: {len(classes)}")
     
-    def _preprocess(self, roi: np.ndarray) -> np.ndarray:
-        """Preprocess ROI for BPU inference."""
-        # Resize to model input size
-        resized = cv2.resize(roi, self.input_size)
-        
-        # BPU expects BGR HWC format
-        return resized
-    
-    def _postprocess(self, output: np.ndarray) -> ClassificationResult:
+    def _preprocess(self, img: np.ndarray) -> np.ndarray:
+        """
+        Preprocess BGR image to NV12 format for BPU.
+
+        Args:
+            img: BGR image (numpy array)
+
+        Returns:
+            NV12 formatted buffer
+        """
+        # Resize with INTER_NEAREST for speed (acceptable for classification)
+        resized = cv2.resize(img, (self.input_w, self.input_h), interpolation=cv2.INTER_NEAREST)
+        return self._bgr2nv12(resized)
+
+    def _bgr2nv12(self, bgr_img: np.ndarray) -> np.ndarray:
+        """
+        Convert BGR to NV12 using pre-allocated buffer.
+
+        NV12 format:
+        - Y plane: full resolution (height * width bytes)
+        - UV plane: half resolution, interleaved (height/2 * width bytes)
+
+        Args:
+            bgr_img: BGR image resized to model input size
+
+        Returns:
+            NV12 buffer ready for BPU inference
+        """
+        # Convert BGR to YUV I420 (planar: Y...U...V...)
+        yuv420p = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2YUV_I420).reshape((self.area * 3 // 2,))
+
+        # Copy Y plane directly to pre-allocated buffer
+        self.nv12_buffer[:self.area] = yuv420p[:self.area]
+
+        # Interleave UV into NV12 format (UVUVUV...)
+        u_start = self.area
+        v_start = self.area + (self.area // 4)
+        self.nv12_buffer[self.area::2] = yuv420p[u_start:v_start]
+        self.nv12_buffer[self.area + 1::2] = yuv420p[v_start:]
+
+        return self.nv12_buffer
+
+    def _postprocess(self, output: np.ndarray) -> Tuple[int, str, float, np.ndarray]:
         """
         Post-process BPU classifier output.
         
@@ -71,31 +130,28 @@ class BpuClassifier(BaseClassifier):
             output: Model output tensor (logits or probabilities)
             
         Returns:
-            ClassificationResult
+            Tuple of (class_id, class_name, confidence, probabilities)
         """
         # Flatten if needed
-        output = output.flatten()
-        
+        probs = output.flatten()
+
         # Apply softmax if not already probabilities
-        if output.max() > 1.0 or output.min() < 0.0:
-            # Logits - apply softmax
-            exp_output = np.exp(output - np.max(output))
-            probabilities = exp_output / exp_output.sum()
-        else:
-            probabilities = output
-        
+        if probs.max() > 1.0 or probs.min() < 0.0:
+            exp_scores = np.exp(probs - np.max(probs))
+            probs = exp_scores / np.sum(exp_scores)
+
+        # Ensure normalized
+        probs_sum = np.sum(probs)
+        if probs_sum > 0:
+            probs = probs / probs_sum
+
         # Get top prediction
-        class_id = int(np.argmax(probabilities))
-        confidence = float(probabilities[class_id])
-        
+        class_id = int(np.argmax(probs))
+        confidence = float(probs[class_id])
         class_name = self._class_names[class_id] if class_id < len(self._class_names) else "Unknown"
         
-        return ClassificationResult(
-            class_id=class_id,
-            class_name=class_name,
-            confidence=confidence
-        )
-    
+        return class_id, class_name, confidence, probs
+
     def classify(self, roi: np.ndarray) -> ClassificationResult:
         """
         Classify a single ROI image.
@@ -106,23 +162,89 @@ class BpuClassifier(BaseClassifier):
         Returns:
             ClassificationResult
         """
-        # Preprocess
-        input_data = self._preprocess(roi)
-        
-        # Run inference
-        outputs = self.models[0].forward(input_data)
-        
-        # Get output array
-        output_array = outputs[0].buffer
-        
-        # Post-process
-        return self._postprocess(output_array)
-    
+        if self.model is None:
+            logger.error("[BpuClassifier] Model not loaded!")
+            return ClassificationResult(class_id=-1, class_name="Unknown", confidence=0.0)
+
+        if roi is None or roi.size == 0:
+            logger.error("[BpuClassifier] Invalid ROI!")
+            return ClassificationResult(class_id=-1, class_name="Unknown", confidence=0.0)
+
+        try:
+            # Preprocess (resize + BGR to NV12)
+            input_data = self._preprocess(roi)
+
+            # Run inference
+            outputs = self.model[0].forward(input_data)
+
+            # Get output array
+            output_array = outputs[0].buffer
+
+            # Post-process
+            class_id, class_name, confidence, _ = self._postprocess(output_array)
+
+            return ClassificationResult(
+                class_id=class_id,
+                class_name=class_name,
+                confidence=confidence
+            )
+
+        except Exception as e:
+            logger.error(f"[BpuClassifier] Classification error: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return ClassificationResult(class_id=-1, class_name="Unknown", confidence=0.0)
+
+    def classify_with_probs(self, roi: np.ndarray) -> Tuple[ClassificationResult, Dict[str, float]]:
+        """
+        Classify ROI and return full probability distribution.
+
+        Required for multi-ROI voting and evidence accumulation.
+
+        Args:
+            roi: BGR image crop
+
+        Returns:
+            Tuple of (ClassificationResult, probability_dict)
+        """
+        if self.model is None:
+            return ClassificationResult(class_id=-1, class_name="Unknown", confidence=0.0), {"Unknown": 1.0}
+
+        if roi is None or roi.size == 0:
+            return ClassificationResult(class_id=-1, class_name="Unknown", confidence=0.0), {"Unknown": 1.0}
+
+        try:
+            # Preprocess
+            input_data = self._preprocess(roi)
+
+            # Run inference
+            outputs = self.model[0].forward(input_data)
+            output_array = outputs[0].buffer
+
+            # Post-process
+            class_id, class_name, confidence, probs = self._postprocess(output_array)
+
+            # Build probability dictionary
+            probs_dict = {}
+            for i, name in enumerate(self._class_names):
+                if i < len(probs):
+                    probs_dict[name] = float(probs[i])
+
+            result = ClassificationResult(
+                class_id=class_id,
+                class_name=class_name,
+                confidence=confidence
+            )
+
+            return result, probs_dict
+
+        except Exception as e:
+            logger.error(f"[BpuClassifier] classify_with_probs error: {e}")
+            return ClassificationResult(class_id=-1, class_name="Unknown", confidence=0.0), {"Unknown": 1.0}
+
     def classify_batch(self, rois: List[np.ndarray]) -> List[ClassificationResult]:
         """
         Classify multiple ROI images.
-        
-        Note: BPU runs sequentially for simplicity.
         
         Args:
             rois: List of BGR image crops
@@ -134,7 +256,7 @@ class BpuClassifier(BaseClassifier):
     
     def cleanup(self):
         """Release BPU resources."""
-        self.models = None
+        self.model = None
         logger.info("[BpuClassifier] Cleanup complete")
     
     @property

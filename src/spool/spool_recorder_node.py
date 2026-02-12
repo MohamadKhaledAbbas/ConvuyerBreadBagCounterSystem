@@ -28,14 +28,14 @@ from src.utils.platform import is_rdk_platform
 if is_rdk_platform():
     import rclpy
     from rclpy.node import Node # type: ignore
-    from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy # type: ignore
+    from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy # type: ignore
 
     try:
-        from hobot_cv_msgs.msg import H26XFrame # type: ignore
+        from img_msgs.msg import H26XFrame # type: ignore
         HAS_H26X_MSG = True
     except ImportError:
         HAS_H26X_MSG = False
-        logger.warning("[SpoolRecorder] hobot_cv_msgs not available")
+        logger.warning("[SpoolRecorder] img_msgs not available")
 else:
     Node = object
     HAS_H26X_MSG = False
@@ -76,10 +76,11 @@ class SpoolRecorderNode(Node if is_rdk_platform() else object):
         if is_rdk_platform():
             super().__init__('spool_recorder_node')
 
-            # Configure QoS for reliable delivery
+            # Configure QoS - MUST use RELIABLE to match hobot_rtsp_client publisher
+            # Publisher uses RELIABLE, so subscriber MUST also use RELIABLE
             qos = QoSProfile(
-                reliability=ReliabilityPolicy.RELIABLE,
-                history=HistoryPolicy.KEEP_LAST,
+                reliability=QoSReliabilityPolicy.RELIABLE,
+                history=QoSHistoryPolicy.KEEP_LAST,
                 depth=self.config.qos_depth
             )
 
@@ -132,6 +133,10 @@ class SpoolRecorderNode(Node if is_rdk_platform() else object):
             msg: H26XFrame message
         """
         try:
+            # Debug logging for first frame
+            if self._frames_received == 0:
+                logger.info(f"[SpoolRecorder] First frame received! Size: {len(msg.data)} bytes, {msg.width}x{msg.height}")
+
             # Extract frame data
             data = bytes(msg.data)
             width = msg.width
@@ -140,13 +145,26 @@ class SpoolRecorderNode(Node if is_rdk_platform() else object):
             # Handle timestamps - prefer msg timestamps, fall back to current time
             now_ns = time.time_ns()
 
-            if hasattr(msg, 'dts') and msg.dts > 0:
-                dts_ns = msg.dts
+            # Convert ROS2 Time objects to nanoseconds
+            if hasattr(msg, 'dts'):
+                # msg.dts is a ROS2 Time object with sec and nanosec fields
+                if hasattr(msg.dts, 'sec'):
+                    dts_ns = msg.dts.sec * 1_000_000_000 + msg.dts.nanosec
+                elif isinstance(msg.dts, (int, float)):
+                    dts_ns = int(msg.dts) if msg.dts > 0 else now_ns
+                else:
+                    dts_ns = now_ns
             else:
                 dts_ns = now_ns
 
-            if hasattr(msg, 'pts') and msg.pts > 0:
-                pts_ns = msg.pts
+            if hasattr(msg, 'pts'):
+                # msg.pts is a ROS2 Time object with sec and nanosec fields
+                if hasattr(msg.pts, 'sec'):
+                    pts_ns = msg.pts.sec * 1_000_000_000 + msg.pts.nanosec
+                elif isinstance(msg.pts, (int, float)):
+                    pts_ns = int(msg.pts) if msg.pts > 0 else now_ns
+                else:
+                    pts_ns = now_ns
             else:
                 pts_ns = now_ns
 

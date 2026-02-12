@@ -1,5 +1,5 @@
 """
-Centralized logging configuration for ConveyerBreadBagCounterSystem.
+Centralized logging configuration for ConvuyerBreadBagCounterSystem.
 
 Provides standard logging with configurable file retention.
 Track event details are stored in the database (track_event_details table),
@@ -28,10 +28,10 @@ def setup_logging(log_dir: str = "data/logs") -> logging.Logger:
 
     # Generate timestamped log filename
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = os.path.join(log_dir, f"conveyer_counter_{timestamp}.log")
+    log_file = os.path.join(log_dir, f"convuyer_counter_{timestamp}.log")
 
     # Create logger
-    logger = logging.getLogger("ConveyerBreadBagCounter")
+    logger = logging.getLogger("ConvuyerBreadBagCounter")
     logger.setLevel(logging.DEBUG)
 
     # Prevent duplicate handlers
@@ -73,7 +73,7 @@ def _cleanup_old_logs(log_dir: str, retention_days: int = 7):
     cutoff = time.time() - (retention_days * 86400)
     deleted = 0
     try:
-        for log_file in Path(log_dir).glob("conveyer_counter_*.log"):
+        for log_file in Path(log_dir).glob("convuyer_counter_*.log"):
             if log_file.stat().st_mtime < cutoff:
                 log_file.unlink()
                 deleted += 1
@@ -94,7 +94,7 @@ def get_log_file_paths() -> Dict[str, str]:
     if not os.path.exists(log_dir):
         return {}
 
-    files = sorted(Path(log_dir).glob("conveyer_counter_*.log"), reverse=True)
+    files = sorted(Path(log_dir).glob("convuyer_counter_*.log"), reverse=True)
     if files:
         return {"main_log": str(files[0])}
     return {}

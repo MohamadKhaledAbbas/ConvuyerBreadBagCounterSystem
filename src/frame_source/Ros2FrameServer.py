@@ -1,434 +1,283 @@
 """
-ROS2 frame server for receiving frames from ROS2 topics.
+ROS2 Frame Server for receiving frames from ROS2 topics.
 
-Subscribes to NV12 images output by hobot-codec decoder and provides
+Subscribes to NV12 images from hobot-codec decoder and provides
 frames for the detection/classification pipeline.
 
-Flow:
-    hobot-codec → /nv12_images (HbmNV12Image) → Ros2FrameServer
+Uses sensor_msgs.msg.Image (standard ROS2 package) for compatibility.
 
-Frame Outputs:
-    - NV12: Raw format for BPU detection (no conversion overhead)
-    - BGR: Converted format for classification and visualization
-
-Only available on RDK platform.
+IMPORTANT: rclpy.init() must be called externally before instantiating this class.
+Use init_ros2_context() from src.ros2.IPC to initialize the ROS2 context.
 """
 
-import threading
+import os
+import queue
 import time
-from dataclasses import dataclass
-from typing import Iterator, Tuple, Optional, NamedTuple
+from typing import Iterator, Tuple, Optional
 
 import cv2
 import numpy as np
+import rclpy
+from sensor_msgs.msg import Image
+from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 
 from src.frame_source.FrameSource import FrameSource
 from src.utils.AppLogging import logger
-
-try:
-    import rclpy
-    from rclpy.node import Node
-    from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-    from hbmem_msgs.msg import HbmNV12Image
-    HAS_ROS2 = True
-except ImportError:
-    HAS_ROS2 = False
-
-
-class FrameData(NamedTuple):
-    """
-    Container for frame data with both NV12 and BGR representations.
-    
-    Attributes:
-        nv12: Raw NV12 data (numpy array, shape: height*1.5 x width)
-        bgr: BGR converted frame (numpy array, shape: height x width x 3)
-        width: Frame width in pixels
-        height: Frame height in pixels
-        timestamp_ns: Frame timestamp in nanoseconds
-        frame_index: Frame sequence number
-    """
-    nv12: np.ndarray
-    bgr: np.ndarray
-    width: int
-    height: int
-    timestamp_ns: int
-    frame_index: int
 
 
 def nv12_to_bgr(nv12_data: np.ndarray, width: int, height: int) -> np.ndarray:
     """
     Convert NV12 YUV data to BGR format.
-    
-    NV12 Layout:
-        - Y plane: height x width bytes (luminance)
-        - UV plane: height/2 x width bytes (interleaved chrominance)
-        - Total size: height * 1.5 * width bytes
-    
+
     Args:
-        nv12_data: Raw NV12 data as 1D numpy array
+        nv12_data: Raw NV12 data as numpy array
         width: Frame width
         height: Frame height
-        
+
     Returns:
         BGR image as numpy array (height x width x 3)
     """
-    # Reshape to NV12 format: Y plane (height) + UV plane (height/2)
-    total_height = int(height * 1.5)
-    
-    if nv12_data.size != width * total_height:
-        # Handle potential data mismatch
-        expected_size = width * total_height
-        if nv12_data.size < expected_size:
-            padded = np.zeros(expected_size, dtype=np.uint8)
-            padded[:nv12_data.size] = nv12_data
-            nv12_data = padded
-        else:
-            nv12_data = nv12_data[:expected_size]
-    
-    yuv_image = nv12_data.reshape(total_height, width)
+    yuv_image = nv12_data.reshape(int(height * 1.5), width)
     bgr = cv2.cvtColor(yuv_image, cv2.COLOR_YUV2BGR_NV12)
-    
     return bgr
 
 
-def bgr_to_nv12(bgr: np.ndarray) -> np.ndarray:
+class FrameServer(Node, FrameSource):
     """
-    Convert BGR frame to NV12 format.
-    
-    Args:
-        bgr: BGR image (height x width x 3)
-        
-    Returns:
-        NV12 data as numpy array (height*1.5 x width)
+    ROS 2 Subscriber that listens for incoming frames and buffers the latest
+    frame for consumption by the main logic thread. This node is designed
+    to be added to an external SingleThreadedExecutor.
+
+    ACK-free mode - frames are buffered in input_queue and smart degraded mode handles overload.
     """
-    yuv = cv2.cvtColor(bgr, cv2.COLOR_BGR2YUV_I420)
-    height, width = bgr.shape[:2]
-    
-    # I420 to NV12 conversion
-    y_size = width * height
-    u_size = y_size // 4
-    
-    y = yuv[:height, :].flatten()
-    u = yuv[height:height + height // 4, :].flatten()
-    v = yuv[height + height // 4:, :].flatten()
-    
-    # Interleave U and V for NV12
-    uv = np.empty(u_size * 2, dtype=np.uint8)
-    uv[0::2] = u
-    uv[1::2] = v
-    
-    nv12 = np.concatenate([y, uv])
-    return nv12.reshape(int(height * 1.5), width)
 
-
-@dataclass
-class FrameServerConfig:
-    """Configuration for ROS2 frame server."""
-    topic: str = '/nv12_images'
-    timeout: float = 30.0
-    qos_depth: int = 10
-    target_width: int = 1280
-    target_height: int = 720
-    convert_to_bgr: bool = True  # Set False for NV12-only mode
-
-
-class Ros2FrameServer(FrameSource):
-    """
-    ROS2 frame server that subscribes to NV12 image topics from hobot-codec.
-    
-    Provides both NV12 (for BPU detection) and BGR (for classification) outputs.
-    Detection can use NV12 directly without conversion overhead.
-    """
-    
-    def __init__(
-            self, 
-            topic: str = '/nv12_images', 
-            timeout: float = 30.0,
-            config: Optional[FrameServerConfig] = None
-    ):
+    def __init__(self, topic: str = '/nv12_images', target_fps: float = 20.0):
         """
-        Initialize ROS2 frame server.
-        
+        Initialize the ROS2 frame server.
+
+        IMPORTANT: rclpy.init() must be called externally before this class is instantiated.
+
         Args:
             topic: ROS2 topic to subscribe to
-            timeout: Timeout in seconds waiting for first frame
-            config: Full configuration (overrides topic/timeout if provided)
+            target_fps: Target frames per second (for logging only)
         """
-        if not HAS_ROS2:
-            raise ImportError(
-                "ROS2 not available. Install rclpy and hbmem_msgs packages."
-            )
-        
-        if config:
-            self.config = config
-        else:
-            self.config = FrameServerConfig(topic=topic, timeout=timeout)
-        
-        self.topic = self.config.topic
-        self.timeout = self.config.timeout
-        self.running = True
-        
-        # Frame storage - both NV12 and BGR
-        self._last_nv12: Optional[np.ndarray] = None
-        self._last_bgr: Optional[np.ndarray] = None
-        self._last_width: int = 0
-        self._last_height: int = 0
-        self._last_timestamp_ns: int = 0
-        self._frame_lock = threading.Lock()
-        
-        self.frame_count = 0
-        self._dropped_frames = 0
-        
-        # Initialize ROS2
-        if not rclpy.ok():
-            rclpy.init()
-        
-        self.node = rclpy.create_node('conveyer_frame_server')
-        
-        # Configure QoS for reliable delivery with some buffering
+        super().__init__('frame_server')
+
+        # Support ROS_TARGET_FPS environment variable override
+        env_fps = os.getenv('ROS_TARGET_FPS')
+        if env_fps:
+            try:
+                target_fps = float(env_fps)
+                logger.info(f"[Ros2FrameServer] Using ROS_TARGET_FPS from environment: {target_fps}")
+            except ValueError:
+                logger.warning(f"[Ros2FrameServer] Invalid ROS_TARGET_FPS value '{env_fps}', using default {target_fps}")
+
         qos = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
             history=HistoryPolicy.KEEP_LAST,
-            depth=self.config.qos_depth
+            depth=50,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE
         )
-        
-        # Subscribe to NV12 image topic
-        self.subscription = self.node.create_subscription(
-            HbmNV12Image,
-            self.topic,
-            self._frame_callback,
-            qos
+
+        self.subscription = self.create_subscription(
+            Image,
+            topic,
+            self.listener_callback,
+            qos)
+
+        # Buffer more frames to reduce frame drops
+        self.frame_queue = queue.Queue(maxsize=30)
+        self.last_frame_time = time.time()
+
+        # Store target_fps for logging only
+        self.target_fps = target_fps
+
+        # Proactive drop threshold (80% of queue size)
+        self.proactive_drop_threshold = int(self.frame_queue.maxsize * 0.8)
+
+        # Stats for debugging
+        self.frames_received = 0
+        self.frames_processed = 0
+        self.frames_dropped = 0
+        self.last_stats_log_time = time.time()
+        self.stats_log_interval = 5.0
+
+        # Timing stats
+        self._timing_stats = {'callback': 0, 'reshape': 0, 'nv12_copy': 0, 'count': 0}
+
+        logger.info(f"[Ros2FrameServer] Initialized: topic={topic}, queue_size=30, target_fps={target_fps}")
+
+    def _get_timing_stats_string(self) -> str:
+        """Get formatted timing stats string and reset counters."""
+        if self._timing_stats['count'] == 0:
+            return ""
+
+        count = self._timing_stats['count']
+        stats_str = (
+            f", avg_callback={self._timing_stats['callback'] / count:.2f}ms"
+            f" (reshape={self._timing_stats['reshape'] / count:.2f}ms"
+            f", nv12_copy={self._timing_stats['nv12_copy'] / count:.2f}ms)"
         )
-        
-        logger.info(f"[Ros2FrameServer] Subscribed to {self.topic}")
-    
-    def _frame_callback(self, msg: 'HbmNV12Image'):
-        """
-        Process incoming ROS2 NV12 frame message.
-        
-        Stores both NV12 (for detection) and BGR (for classification).
-        """
-        try:
-            # Extract dimensions
-            width = msg.width
-            height = msg.height
-            
-            # Get NV12 data
-            nv12_data = np.frombuffer(msg.data, dtype=np.uint8)
-            
-            # Get timestamp (ROS2 header or generate)
-            if hasattr(msg, 'header') and hasattr(msg.header, 'stamp'):
-                timestamp_ns = (
-                    msg.header.stamp.sec * 1_000_000_000 + 
-                    msg.header.stamp.nanosec
-                )
-            else:
-                timestamp_ns = time.time_ns()
-            
-            # Reshape NV12 data
-            total_height = int(height * 1.5)
-            expected_size = width * total_height
-            
-            if nv12_data.size >= expected_size:
-                nv12_frame = nv12_data[:expected_size].reshape(total_height, width)
-            else:
-                # Handle undersized data
-                logger.warning(
-                    f"[Ros2FrameServer] NV12 data size mismatch: "
-                    f"{nv12_data.size} < {expected_size}"
-                )
-                self._dropped_frames += 1
-                return
-            
-            # Convert to BGR if needed
-            bgr_frame = None
-            if self.config.convert_to_bgr:
-                bgr_frame = nv12_to_bgr(nv12_data, width, height)
-                
-                # Resize if target dimensions differ
-                if (width != self.config.target_width or 
-                    height != self.config.target_height):
-                    bgr_frame = cv2.resize(
-                        bgr_frame, 
-                        (self.config.target_width, self.config.target_height)
-                    )
-            
-            # Store frame data (thread-safe)
-            with self._frame_lock:
-                self._last_nv12 = nv12_frame
-                self._last_bgr = bgr_frame
-                self._last_width = width
-                self._last_height = height
-                self._last_timestamp_ns = timestamp_ns
-                self.frame_count += 1
-                
-        except Exception as e:
-            logger.error(f"[Ros2FrameServer] Error processing frame: {e}")
-            self._dropped_frames += 1
-    
-    def get_frame_data(self) -> Optional[FrameData]:
-        """
-        Get the latest frame data with both NV12 and BGR.
-        
-        Returns:
-            FrameData with NV12 and BGR representations, or None if no frame
-        """
-        with self._frame_lock:
-            if self._last_nv12 is None:
-                return None
-            
-            return FrameData(
-                nv12=self._last_nv12.copy(),
-                bgr=self._last_bgr.copy() if self._last_bgr is not None else None,
-                width=self._last_width,
-                height=self._last_height,
-                timestamp_ns=self._last_timestamp_ns,
-                frame_index=self.frame_count
+        # Reset timing stats
+        self._timing_stats = {'callback': 0, 'reshape': 0, 'nv12_copy': 0, 'count': 0}
+        return stats_str
+
+    def listener_callback(self, msg):
+        """Handle incoming ROS2 image message."""
+        now = time.time()
+        self.frames_received += 1
+
+        t_callback_start = time.perf_counter()
+        self.frames_processed += 1
+
+        # Log stats periodically
+        if now - self.last_stats_log_time >= self.stats_log_interval:
+            queue_utilization = (self.frame_queue.qsize() / self.frame_queue.maxsize) * 100
+            drop_rate = (self.frames_dropped / self.frames_received * 100) if self.frames_received > 0 else 0.0
+            timing_stats_str = self._get_timing_stats_string()
+
+            logger.info(
+                f"[Ros2FrameServer] Stats: received={self.frames_received}, "
+                f"processed={self.frames_processed}, dropped={self.frames_dropped}, "
+                f"drop_rate={drop_rate:.2f}%, queue_util={queue_utilization:.1f}%{timing_stats_str}"
             )
-    
-    def get_nv12_frame(self) -> Optional[Tuple[np.ndarray, int, int]]:
-        """
-        Get the latest NV12 frame for BPU detection.
-        
-        No conversion overhead - direct NV12 for detection.
-        
-        Returns:
-            Tuple of (nv12_data, width, height) or None
-        """
-        with self._frame_lock:
-            if self._last_nv12 is None:
-                return None
-            return (self._last_nv12.copy(), self._last_width, self._last_height)
-    
+            self.last_stats_log_time = now
+
+        t_reshape_start = time.perf_counter()
+
+        expected = msg.height * msg.width * 3 // 2
+        img = np.frombuffer(msg.data, dtype=np.uint8)
+        if img.size < expected:
+            self.get_logger().error(f"Frame size mismatch: got {img.size}, expected {expected}")
+            return
+
+        try:
+            # NV12 conversion - reshape to NV12 format
+            nv12_img = img.reshape((msg.height * 3 // 2, msg.width))
+            t_reshape_end = time.perf_counter()
+
+            # Store raw NV12 data ONLY - BGR conversion is done lazily
+            t_nv12_copy_start = time.perf_counter()
+            nv12_data = nv12_img.copy()
+            t_nv12_copy_end = time.perf_counter()
+
+        except Exception as e:
+            self.get_logger().error(f"Frame conversion error: {e}")
+            return
+
+        # Accumulate timing stats
+        t_callback_end = time.perf_counter()
+        self._timing_stats['callback'] += (t_callback_end - t_callback_start) * 1000
+        self._timing_stats['reshape'] += (t_reshape_end - t_reshape_start) * 1000
+        self._timing_stats['nv12_copy'] += (t_nv12_copy_end - t_nv12_copy_start) * 1000
+        self._timing_stats['count'] += 1
+
+        latency_ms = (now - self.last_frame_time) * 1000
+        self.last_frame_time = now
+
+        # Leaky queue with drop tracking
+        queue_size = self.frame_queue.qsize()
+        if queue_size >= self.proactive_drop_threshold:
+            try:
+                self.frame_queue.get_nowait()
+                self.frames_dropped += 1
+                logger.debug(f"[Ros2FrameServer] Proactive drop at queue_size={queue_size}")
+            except queue.Empty:
+                pass
+        elif self.frame_queue.full():
+            try:
+                self.frame_queue.get_nowait()
+                self.frames_dropped += 1
+            except queue.Empty:
+                pass
+
+        # Enqueue new frame: (nv12_data, latency_ms, frame_index, (height, width))
+        frame_size = (msg.height, msg.width)
+        self.frame_queue.put((nv12_data, latency_ms, 0, frame_size))
+
     def frames(self) -> Iterator[Tuple[np.ndarray, float]]:
         """
-        Yield BGR frames from ROS2 topic.
-        
-        This is the standard FrameSource interface yielding BGR frames.
-        For NV12 access, use get_nv12_frame() or get_frame_data().
-        
+        Yield frames from the queue.
+
         Yields:
-            Tuple of (bgr_frame, latency_ms)
+            Tuple of (bgr_frame, latency_ms) - compatible with FrameSource interface
+
+        Note: For RDK optimization, the original NV12 data is stored in
+        self._last_nv12_data and can be accessed by the BPU detector to avoid
+        BGR->NV12 reconversion.
         """
-        # Wait for first frame
-        start_time = time.time()
-        while self._last_bgr is None and self.running:
-            rclpy.spin_once(self.node, timeout_sec=0.1)
-            if time.time() - start_time > self.timeout:
-                logger.error(
-                    f"[Ros2FrameServer] Timeout waiting for frames on {self.topic}"
-                )
-                return
-        
-        logger.info(f"[Ros2FrameServer] Started receiving frames")
-        
-        last_yield_time = None
-        prev_frame_count = 0
-        
-        while self.running:
-            rclpy.spin_once(self.node, timeout_sec=0.1)
-            
-            with self._frame_lock:
-                if self._last_bgr is None:
-                    continue
-                
-                # Only yield new frames
-                current_count = self.frame_count
-                if current_count == prev_frame_count:
-                    continue
-                
-                prev_frame_count = current_count
-                frame = self._last_bgr.copy()
-            
-            current_time = time.perf_counter()
-            
-            # Calculate inter-frame latency
-            if last_yield_time is None:
-                latency_ms = 0.0
-            else:
-                latency_ms = (current_time - last_yield_time) * 1000.0
-            
-            last_yield_time = current_time
-            
-            yield (frame, latency_ms)
-            
-            # Log progress periodically
-            if self.frame_count % 300 == 0:
-                logger.info(
-                    f"[Ros2FrameServer] Frames: {self.frame_count}, "
-                    f"dropped: {self._dropped_frames}"
-                )
-    
-    def frames_with_nv12(self) -> Iterator[Tuple[FrameData, float]]:
-        """
-        Yield frames with both NV12 and BGR data.
-        
-        Use this when you need NV12 for detection AND BGR for classification.
-        
-        Yields:
-            Tuple of (FrameData, latency_ms)
-        """
-        # Wait for first frame
-        start_time = time.time()
-        while self._last_nv12 is None and self.running:
-            rclpy.spin_once(self.node, timeout_sec=0.1)
-            if time.time() - start_time > self.timeout:
-                logger.error(
-                    f"[Ros2FrameServer] Timeout waiting for frames on {self.topic}"
-                )
-                return
-        
-        logger.info(f"[Ros2FrameServer] Started receiving NV12 frames")
-        
-        last_yield_time = None
-        prev_frame_count = 0
-        
-        while self.running:
-            rclpy.spin_once(self.node, timeout_sec=0.1)
-            
-            frame_data = self.get_frame_data()
-            if frame_data is None:
+        logger.info("[Ros2FrameServer] Starting frame iteration loop")
+        frame_count = 0
+
+        # Store last NV12 data for BPU detector optimization
+        self._last_nv12_data = None
+        self._last_frame_size = None
+
+        while rclpy.ok():
+            # Spin once to process ROS2 callbacks (fills the queue)
+            rclpy.spin_once(self, timeout_sec=0.001)
+
+            try:
+                item = self.frame_queue.get(timeout=0.1)  # Shorter timeout since we're spinning
+
+                if len(item) == 4:
+                    nv12_data, latency_ms, frame_index, frame_size = item
+                    frame_count += 1
+
+                    if frame_count == 1:
+                        logger.info(f"[Ros2FrameServer] First frame yielded! {frame_size[1]}x{frame_size[0]}")
+                    elif frame_count % 100 == 0:
+                        logger.debug(f"[Ros2FrameServer] Yielded {frame_count} frames, queue size: {self.frame_queue.qsize()}")
+
+                    # Store NV12 data for BPU detector optimization
+                    self._last_nv12_data = nv12_data
+                    self._last_frame_size = frame_size
+
+                    # Convert NV12 to BGR for pipeline compatibility
+                    height, width = frame_size
+                    bgr_frame = nv12_to_bgr(nv12_data, width, height)
+
+                    yield bgr_frame, latency_ms
+
+                elif len(item) == 2:
+                    # Legacy format
+                    frame, latency_ms = item
+                    frame_count += 1
+                    self._last_nv12_data = None
+                    self._last_frame_size = None
+                    yield frame, latency_ms
+            except queue.Empty:
                 continue
-            
-            # Only yield new frames
-            if frame_data.frame_index == prev_frame_count:
-                continue
-            
-            prev_frame_count = frame_data.frame_index
-            current_time = time.perf_counter()
-            
-            # Calculate inter-frame latency
-            if last_yield_time is None:
-                latency_ms = 0.0
-            else:
-                latency_ms = (current_time - last_yield_time) * 1000.0
-            
-            last_yield_time = current_time
-            
-            yield (frame_data, latency_ms)
-    
+
+    def get_last_nv12_data(self) -> Tuple[Optional[np.ndarray], Optional[Tuple[int, int]]]:
+        """
+        Get the last NV12 frame data for BPU detector optimization.
+
+        Returns:
+            Tuple of (nv12_data, frame_size) or (None, None) if not available
+        """
+        return self._last_nv12_data, self._last_frame_size
+
+    def get_bgr_frame(self, nv12_data: np.ndarray, frame_size: Tuple[int, int]) -> np.ndarray:
+        """
+        Convert NV12 frame to BGR (lazy conversion).
+
+        Args:
+            nv12_data: NV12 frame data
+            frame_size: (height, width) tuple
+
+        Returns:
+            BGR frame as numpy array
+        """
+        height, width = frame_size
+        return nv12_to_bgr(nv12_data, width, height)
+
     def cleanup(self):
-        """Clean up ROS2 resources."""
-        self.running = False
-        self.node.destroy_subscription(self.subscription)
-        self.node.destroy_node()
-        if rclpy.ok():
-            rclpy.shutdown()
-        logger.info(
-            f"[Ros2FrameServer] Cleanup complete. "
-            f"Received: {self.frame_count}, dropped: {self._dropped_frames}"
-        )
-    
-    def get_stats(self) -> dict:
-        """Get frame server statistics."""
-        return {
-            'frames_received': self.frame_count,
-            'frames_dropped': self._dropped_frames,
-            'topic': self.topic,
-            'last_width': self._last_width,
-            'last_height': self._last_height
-        }
-
-
-# Alias for factory compatibility
-FrameServer = Ros2FrameServer
+        """Destroys the node, relying on the main app to shutdown the ROS context."""
+        logger.info("[Ros2FrameServer] cleanup called. Destroying node.")
+        try:
+            self.destroy_node()
+        except Exception as e:
+            logger.debug(f"[Ros2FrameServer] destroy_node() raised (ignored): {e}")
+        logger.info("[Ros2FrameServer] cleanup finished")
