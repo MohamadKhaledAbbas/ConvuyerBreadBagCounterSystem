@@ -17,7 +17,7 @@ ffmpeg -r 14 -i input.h264 -c:v copy output.mp4
 Launch a Docker container with the OpenExplorer AI toolchain, mounting your model directory for conversion tasks.
 
 ```bash
-docker run -it --rm -v "C:\Users\Khaled\PyCharmMiscProject\data:/data" openexplorer/ai_toolchain_ubuntu_20_x5_cpu:v1.2.8 /bin/bash
+docker run -it --rm -v "C:\0001_MyFiles\0016_Projects\0002_ProjectBased\0012_ConvuyerBreadBagCounterSystem\data:/data" openexplorer/ai_toolchain_ubuntu_20_x5_cpu:v1.2.8 /bin/bash
 ```
 
 - `-it` : Interactive terminal
