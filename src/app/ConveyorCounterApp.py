@@ -222,6 +222,11 @@ class ConveyorCounterApp:
         self._frame_count = 0
         self._start_time: Optional[float] = None
         
+        # Last frame data for on-demand snapshot annotation (headless mode)
+        self._last_detections = []
+        self._last_tracks = []
+        self._last_debug_info = {}
+
         # Memory monitoring
         self._last_memory_log_time: float = 0.0
         self._memory_log_interval: float = 60.0  # Log memory every 60 seconds
@@ -385,13 +390,13 @@ class ConveyorCounterApp:
         # Set callback for track events (for UI debugging)
         self._pipeline_core.on_track_event = self._on_track_event
 
-        # Visualizer (handles display)
-        if self.enable_display:
-            self._pipeline_visualizer = PipelineVisualizer(
-                tracking_config=self.tracking_config,
-                window_name="Conveyor Counter",
-                display_size=(1280, 720)
-            )
+        # Visualizer - always create for snapshot support (even in headless mode)
+        # In headless mode, it's only used for on-demand snapshot annotation
+        self._pipeline_visualizer = PipelineVisualizer(
+            tracking_config=self.tracking_config,
+            window_name="Conveyor Counter",
+            display_size=(1280, 720)
+        )
 
         # Bidirectional smoother (uses sliding window approach)
         self._smoother = BidirectionalSmoother(
@@ -437,21 +442,26 @@ class ConveyorCounterApp:
             elapsed = time.perf_counter() - self._start_time
             self.state.fps = self._frame_count / elapsed if elapsed > 0 else 0
         
-        # Visualization (if enabled)
-        if self.enable_display and self._pipeline_visualizer:
-            # Build debug info for visualization including tentative counts
-            debug_info = {
-                'pending_classify': self.state.pending_classifications,
-                'pending_smooth': self.state.pending_smoothing,
-                'rejected': self.state.rejected_count,
-                'last_class': self.state.last_classification,
-                'recent_events': self.state.get_recent_events(),
-                'rois_collected': rois_collected,
-                'processing_ms': self.state.processing_time_ms,
-                'tentative_total': self.state.tentative_total,
-                'tentative_counts': self.state.get_tentative_snapshot()
-            }
+        # Build debug info for visualization (used for both display and snapshot)
+        debug_info = {
+            'pending_classify': self.state.pending_classifications,
+            'pending_smooth': self.state.pending_smoothing,
+            'rejected': self.state.rejected_count,
+            'last_class': self.state.last_classification,
+            'recent_events': self.state.get_recent_events(),
+            'rois_collected': rois_collected,
+            'processing_ms': self.state.processing_time_ms,
+            'tentative_total': self.state.tentative_total,
+            'tentative_counts': self.state.get_tentative_snapshot()
+        }
 
+        # Store detection data for on-demand snapshot annotation
+        self._last_detections = detections
+        self._last_tracks = active_tracks
+        self._last_debug_info = debug_info
+
+        # Visualization (if display enabled)
+        if self.enable_display and self._pipeline_visualizer:
             frame = self._pipeline_visualizer.annotate_frame(
                 frame=frame,
                 detections=detections,
@@ -686,10 +696,13 @@ class ConveyorCounterApp:
         2. If "1", capture frame and write to disk
         3. Set flag back to "0" immediately
 
+        For headless mode (enable_display=False), creates annotated frame on-demand
+        using the stored detection/tracking data.
+
         Args:
             snapshot_writer: SnapshotWriter instance
             frame: Raw BGR frame
-            annotated_frame: Frame with detection overlays
+            annotated_frame: Frame with detection overlays (may be same as frame in headless mode)
         """
         try:
             # Check if snapshot is requested
@@ -700,10 +713,26 @@ class ConveyorCounterApp:
             if requested != "1":
                 return
 
+            # In headless mode, annotated_frame is same as raw frame
+            # Create annotated version on-demand for snapshot
+            frame_with_overlay = annotated_frame
+            if not self.enable_display and self._pipeline_visualizer is not None:
+                # Create annotated frame on-demand
+                frame_with_overlay = self._pipeline_visualizer.annotate_frame(
+                    frame=frame.copy(),  # Copy to avoid modifying original
+                    detections=self._last_detections,
+                    tracks=self._last_tracks,
+                    fps=self.state.fps,
+                    active_tracks=self.state.active_tracks,
+                    total_counted=self.state.total_counted,
+                    counts_by_class=self.state.get_counts_snapshot(),
+                    debug_info=self._last_debug_info
+                )
+
             # Capture snapshot
             success = snapshot_writer.write_snapshot(
                 frame=frame,
-                frame_with_overlay=annotated_frame,
+                frame_with_overlay=frame_with_overlay,
                 frame_number=self._frame_count
             )
 
