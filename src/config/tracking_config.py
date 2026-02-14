@@ -297,10 +297,10 @@ class TrackingConfig:
     # ROI Saving for Debug/Analysis
     # ==========================================================================
     
-    save_all_rois: bool = _parse_bool_env("SAVE_ALL_ROIS", True)
+    save_all_rois: bool = _parse_bool_env("SAVE_ALL_ROIS", False)
     """Save all ROI candidates for analysis."""
     
-    save_roi_candidates: bool = _parse_bool_env("SAVE_ROI_CANDIDATES", True)
+    save_roi_candidates: bool = _parse_bool_env("SAVE_ROI_CANDIDATES", False)
     """Save ROI candidates with metadata."""
     
     roi_candidates_dir: str = _parse_str_env("ROI_CANDIDATES_DIR", "data/roi_candidates")
@@ -308,6 +308,37 @@ class TrackingConfig:
     
     save_rois_by_class: bool = _parse_bool_env("SAVE_ROIS_BY_CLASS", True)
     """Organize saved ROIs by classification result in subdirectories."""
+
+    save_classified_rois: bool = _parse_bool_env("SAVE_CLASSIFIED_ROIS", True)
+    """
+    Save only the ROIs that are actually used for classification (voting).
+    This is narrower than save_all_rois and save_roi_candidates.
+    Only the top-K ROIs selected for classification voting are saved.
+    """
+
+    classified_rois_dir: str = _parse_str_env("CLASSIFIED_ROIS_DIR", "data/classified_rois")
+    """Directory for saving ROIs used in classification."""
+
+    classified_rois_retention_hours: float = _parse_float_env("CLASSIFIED_ROIS_RETENTION_HOURS", 24.0)
+    """
+    Maximum age (hours) for classified ROI files before automatic deletion.
+    Set to 0 to disable time-based retention (not recommended for production).
+    Default: 24 hours.
+    """
+
+    classified_rois_max_count: int = _parse_int_env("CLASSIFIED_ROIS_MAX_COUNT", 12_000)
+    """
+    Maximum number of classified ROI files to retain.
+    When exceeded, oldest files are deleted first.
+    Set to 0 to disable count-based retention.
+    Default: 10000 files.
+    """
+
+    classified_rois_purge_interval_minutes: float = _parse_float_env("CLASSIFIED_ROIS_PURGE_INTERVAL_MINUTES", 15.0)
+    """
+    How often to run the purge check (in minutes).
+    Default: 15 minutes.
+    """
 
     @property
     def reject_label_set(self) -> set:

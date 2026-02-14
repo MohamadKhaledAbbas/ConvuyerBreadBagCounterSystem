@@ -375,7 +375,8 @@ class ConveyorCounterApp:
             tracker=self._tracker,
             roi_collector=self._roi_collector,
             classification_worker=self._classification_worker,
-            db=self._db
+            db=self._db,
+            tracking_config=self.tracking_config
         )
         # Set callback for classification completion
         self._pipeline_core.on_track_completed = self._on_classification_completed

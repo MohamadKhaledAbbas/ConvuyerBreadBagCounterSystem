@@ -5,13 +5,19 @@ This module handles the main processing pipeline without UI or recording concern
 Follows Single Responsibility Principle.
 """
 
+import glob
 import json
+import os
+import threading
+import time
 from datetime import datetime
 from typing import List, Optional, Callable, Tuple
 
+import cv2
 import numpy as np
 
 from src.classifier.IClassificationComponents import IROICollector, IClassificationWorker
+from src.config.tracking_config import TrackingConfig
 from src.detection.BaseDetection import BaseDetector, Detection
 from src.tracking.ITracker import ITracker, TrackedObject, TrackEvent
 from src.utils.AppLogging import logger
@@ -40,7 +46,8 @@ class PipelineCore:
         tracker: ITracker,
         roi_collector: IROICollector,
         classification_worker: IClassificationWorker,
-        db=None
+        db=None,
+        tracking_config: Optional[TrackingConfig] = None
     ):
         """
         Initialize core pipeline.
@@ -51,12 +58,14 @@ class PipelineCore:
             roi_collector: ROI collection service
             classification_worker: Async classification worker
             db: Optional DatabaseManager for track event analytics
+            tracking_config: Optional tracking configuration for ROI saving options
         """
         self.detector = detector
         self.tracker = tracker
         self.roi_collector = roi_collector
         self.classification_worker = classification_worker
         self._db = db
+        self._tracking_config = tracking_config or TrackingConfig()
 
         # Callbacks (set by orchestrator)
         # NOTE: Callback is invoked from worker thread - must be thread-safe!
@@ -64,6 +73,20 @@ class PipelineCore:
 
         # Optional callback for track events (for UI debugging)
         self.on_track_event: Optional[Callable[[str], None]] = None
+
+        # Ensure classified ROIs directory exists if saving is enabled
+        if self._tracking_config.save_classified_rois:
+            os.makedirs(self._tracking_config.classified_rois_dir, exist_ok=True)
+            logger.info(f"[PipelineCore] Save classified ROIs enabled: {self._tracking_config.classified_rois_dir}")
+
+        # Background purge mechanism for classified ROIs
+        self._purge_thread: Optional[threading.Thread] = None
+        self._purge_stop_event = threading.Event()
+        self._last_purge_time: float = 0.0
+
+        # Start purge thread if saving is enabled and retention is configured
+        if self._tracking_config.save_classified_rois:
+            self._start_purge_thread()
 
         logger.info("[PipelineCore] Initialized")
 
@@ -179,6 +202,10 @@ class PipelineCore:
         qualities = [q for _, q in sorted_rois[:top_k]]
         min_quality = min(qualities)
         max_quality = max(qualities)
+
+        # Save classified ROIs if enabled (before classification)
+        if self._tracking_config.save_classified_rois:
+            self._save_classified_rois(track_id, sorted_rois[:top_k])
 
         # Notify UI of classification submission
         if self.on_track_event:
@@ -362,9 +389,192 @@ class PipelineCore:
         if self.on_track_completed is not None:
             self.on_track_completed(track_id, class_name, confidence, non_rejected_rois, best_roi)
 
+    def _save_classified_rois(self, track_id: int, rois_with_quality: List[Tuple[np.ndarray, float]]):
+        """
+        Save ROIs that are used for classification (voting).
+
+        This saves only the ROIs actually sent to the classifier, which is narrower than:
+        - save_all_rois: saves all collected ROIs
+        - save_roi_candidates: saves accepted ROI candidates
+
+        Directory structure:
+            classified_rois_dir/
+                track_XXXX_roi_0_quality_YYY.jpg  (best quality)
+                track_XXXX_roi_1_quality_YYY.jpg  (second best)
+                ...
+
+        Args:
+            track_id: Track identifier
+            rois_with_quality: List of (roi, quality_score) tuples, sorted by quality descending
+        """
+        try:
+            timestamp = int(time.time() * 1000)
+            saved_count = 0
+
+            for idx, (roi, quality) in enumerate(rois_with_quality):
+                if roi is None or roi.size == 0:
+                    continue
+
+                # Filename includes track_id, roi index (by quality rank), quality score, timestamp
+                filename = f"track_{track_id}_{timestamp}_roi_{idx}_quality_{quality:.1f}.jpg"
+                filepath = os.path.join(self._tracking_config.classified_rois_dir, filename)
+
+                cv2.imwrite(filepath, roi)
+                saved_count += 1
+
+            logger.debug(
+                f"[PipelineCore] Saved {saved_count} classified ROIs for T{track_id} "
+                f"to {self._tracking_config.classified_rois_dir}"
+            )
+
+        except Exception as e:
+            logger.error(f"[PipelineCore] Failed to save classified ROIs for T{track_id}: {e}")
+
+    def _start_purge_thread(self):
+        """Start background thread for purging old classified ROIs."""
+        if self._purge_thread is not None and self._purge_thread.is_alive():
+            return
+
+        self._purge_stop_event.clear()
+        self._purge_thread = threading.Thread(
+            target=self._purge_loop,
+            name="ClassifiedROIPurger",
+            daemon=True
+        )
+        self._purge_thread.start()
+        logger.info(
+            f"[PipelineCore] Started classified ROI purge thread "
+            f"(retention={self._tracking_config.classified_rois_retention_hours}h, "
+            f"max_count={self._tracking_config.classified_rois_max_count}, "
+            f"interval={self._tracking_config.classified_rois_purge_interval_minutes}min)"
+        )
+
+    def _purge_loop(self):
+        """Background loop for periodic purge of old classified ROIs."""
+        purge_interval_seconds = self._tracking_config.classified_rois_purge_interval_minutes * 60
+
+        while not self._purge_stop_event.is_set():
+            try:
+                # Wait for purge interval or stop event
+                if self._purge_stop_event.wait(timeout=purge_interval_seconds):
+                    break  # Stop event was set
+
+                # Perform purge
+                self._purge_classified_rois()
+
+            except Exception as e:
+                logger.error(f"[PipelineCore] Error in purge loop: {e}", exc_info=True)
+
+        logger.info("[PipelineCore] Classified ROI purge thread stopped")
+
+    def _purge_classified_rois(self):
+        """
+        Purge old classified ROIs based on retention policy.
+
+        Two-phase purge:
+        1. Time-based: Delete files older than retention_hours
+        2. Count-based: If still over max_count, delete oldest files first
+        """
+        try:
+            roi_dir = self._tracking_config.classified_rois_dir
+            if not os.path.exists(roi_dir):
+                return
+
+            # Get all ROI files with their modification times
+            pattern = os.path.join(roi_dir, "track_*.jpg")
+            files = glob.glob(pattern)
+
+            if not files:
+                return
+
+            # Get file info: (filepath, mtime)
+            file_info = []
+            for filepath in files:
+                try:
+                    mtime = os.path.getmtime(filepath)
+                    file_info.append((filepath, mtime))
+                except OSError:
+                    continue
+
+            if not file_info:
+                return
+
+            initial_count = len(file_info)
+            deleted_time_based = 0
+            deleted_count_based = 0
+
+            # Phase 1: Time-based deletion
+            retention_hours = self._tracking_config.classified_rois_retention_hours
+            if retention_hours > 0:
+                retention_seconds = retention_hours * 3600
+                cutoff_time = time.time() - retention_seconds
+
+                # Filter out files to delete (older than cutoff)
+                files_to_keep = []
+                for filepath, mtime in file_info:
+                    if mtime < cutoff_time:
+                        try:
+                            os.remove(filepath)
+                            deleted_time_based += 1
+                        except OSError as e:
+                            logger.warning(f"[PipelineCore] Failed to delete old ROI {filepath}: {e}")
+                    else:
+                        files_to_keep.append((filepath, mtime))
+
+                file_info = files_to_keep
+
+            # Phase 2: Count-based deletion (delete oldest first)
+            max_count = self._tracking_config.classified_rois_max_count
+            if max_count > 0 and len(file_info) > max_count:
+                # Sort by mtime ascending (oldest first)
+                file_info.sort(key=lambda x: x[1])
+
+                # Delete oldest files to get under max_count
+                files_to_delete = len(file_info) - max_count
+                for filepath, _ in file_info[:files_to_delete]:
+                    try:
+                        os.remove(filepath)
+                        deleted_count_based += 1
+                    except OSError as e:
+                        logger.warning(f"[PipelineCore] Failed to delete excess ROI {filepath}: {e}")
+
+            total_deleted = deleted_time_based + deleted_count_based
+            remaining = initial_count - total_deleted
+
+            if total_deleted > 0:
+                logger.info(
+                    f"[PipelineCore] Purged classified ROIs: "
+                    f"time_based={deleted_time_based}, count_based={deleted_count_based}, "
+                    f"remaining={remaining}"
+                )
+            else:
+                logger.debug(
+                    f"[PipelineCore] Classified ROI purge check: no files to purge "
+                    f"(total={initial_count})"
+                )
+
+        except Exception as e:
+            logger.error(f"[PipelineCore] Failed to purge classified ROIs: {e}", exc_info=True)
+
+    def _stop_purge_thread(self, timeout: float = 5.0):
+        """Stop the background purge thread."""
+        if self._purge_thread is None:
+            return
+
+        self._purge_stop_event.set()
+
+        if self._purge_thread.is_alive():
+            self._purge_thread.join(timeout=timeout)
+
+        self._purge_thread = None
+        logger.info("[PipelineCore] Stopped classified ROI purge thread")
+
     def cleanup(self):
         """Release pipeline resources."""
         logger.info("[PipelineCore] Cleaning up...")
+
+        # Stop purge thread first
+        self._stop_purge_thread()
 
         if self.classification_worker:
             self.classification_worker.stop(timeout=10.0)
