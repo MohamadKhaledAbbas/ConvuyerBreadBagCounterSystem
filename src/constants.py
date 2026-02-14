@@ -11,6 +11,7 @@ rtsp_port = "rtsp_port"
 is_profiler_enabled = "is_profiler_enabled"
 enable_display_key = "enable_display"
 enable_recording_key = "enable_recording"
+snapshot_requested_key = "snapshot_requested"  # Flag for on-demand snapshot capture
 
 CONFIG_KEYS = [
     is_development_key,
@@ -21,4 +22,5 @@ CONFIG_KEYS = [
     is_profiler_enabled,
     enable_display_key,
     enable_recording_key,
+    snapshot_requested_key,
 ]

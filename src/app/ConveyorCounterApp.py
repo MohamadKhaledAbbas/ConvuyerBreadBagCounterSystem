@@ -46,8 +46,10 @@ from src.classifier.ClassifierFactory import ClassifierFactory
 from src.classifier.ROICollectorService import ROICollectorService, ROIQualityConfig
 from src.config.settings import AppConfig
 from src.config.tracking_config import TrackingConfig
+from src.constants import snapshot_requested_key
 from src.detection.BaseDetection import BaseDetector
 from src.detection.DetectorFactory import DetectorFactory
+from src.endpoint.routes.snapshot import get_snapshot_writer, SnapshotWriter
 from src.frame_source.FrameSource import FrameSource
 from src.frame_source.FrameSourceFactory import FrameSourceFactory
 from src.logging.Database import DatabaseManager
@@ -670,6 +672,58 @@ class ConveyorCounterApp:
             except Exception as e:
                 logger.error(f"[ConveyorCounterApp] Count callback error: {e}")
 
+    def _maybe_capture_snapshot(
+        self,
+        snapshot_writer: SnapshotWriter,
+        frame: np.ndarray,
+        annotated_frame: np.ndarray
+    ):
+        """
+        Check if snapshot is requested and capture if so.
+
+        On-demand snapshot capture:
+        1. Check snapshot_requested flag in database
+        2. If "1", capture frame and write to disk
+        3. Set flag back to "0" immediately
+
+        Args:
+            snapshot_writer: SnapshotWriter instance
+            frame: Raw BGR frame
+            annotated_frame: Frame with detection overlays
+        """
+        try:
+            # Check if snapshot is requested
+            if self._db is None:
+                return
+
+            requested = self._db.get_config(snapshot_requested_key, "0")
+            if requested != "1":
+                return
+
+            # Capture snapshot
+            success = snapshot_writer.write_snapshot(
+                frame=frame,
+                frame_with_overlay=annotated_frame,
+                frame_number=self._frame_count
+            )
+
+            # Clear the flag immediately (regardless of success)
+            self._db.set_config(snapshot_requested_key, "0")
+
+            if success:
+                logger.debug(f"[ConveyorCounterApp] Snapshot captured at frame {self._frame_count}")
+            else:
+                logger.warning(f"[ConveyorCounterApp] Snapshot capture failed at frame {self._frame_count}")
+
+        except Exception as e:
+            # Don't let snapshot errors crash the main loop
+            logger.error(f"[ConveyorCounterApp] Snapshot error: {e}")
+            # Try to clear the flag anyway
+            try:
+                if self._db:
+                    self._db.set_config(snapshot_requested_key, "0")
+            except Exception:
+                pass
 
     def run(self, max_frames: Optional[int] = None):
         """
@@ -688,6 +742,9 @@ class ConveyorCounterApp:
         self._frame_count = 0
         
         try:
+            # Get snapshot writer for on-demand browser-based viewing
+            snapshot_writer = get_snapshot_writer()
+
             for frame, latency_ms in self._frame_source.frames():
                 if not self._running:
                     break
@@ -700,6 +757,9 @@ class ConveyorCounterApp:
                 # Process frame through modular pipeline
                 annotated = self._process_frame(frame)
                 
+                # Check if snapshot is requested (on-demand via database flag)
+                self._maybe_capture_snapshot(snapshot_writer, frame, annotated)
+
                 # Display (delegated to PipelineVisualizer)
                 if self.enable_display and self._pipeline_visualizer:
                     should_continue = self._pipeline_visualizer.show(annotated)
