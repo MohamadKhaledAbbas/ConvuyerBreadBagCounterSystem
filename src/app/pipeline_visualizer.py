@@ -559,7 +559,7 @@ class PipelineVisualizer:
         panel_w = 300
         panel_h = 380
         panel_x = w - panel_w - 15
-        panel_y = 15
+        panel_y = 75
 
         # Draw panel background
         self._draw_panel_background(frame, panel_x, panel_y, panel_w, panel_h)
@@ -686,7 +686,7 @@ class PipelineVisualizer:
         events_to_show = recent_events[-5:]
 
         # Calculate panel dimensions
-        panel_w = 500
+        panel_w = 400
         panel_h = len(events_to_show) * self.LINE_HEIGHT_SMALL + 50
         panel_x = 15
         panel_y = h - panel_h - 15
