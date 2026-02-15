@@ -4,19 +4,21 @@ Counts Routes - Real-time count visibility with three-tier display.
 Provides:
 - GET /api/counts      - JSON endpoint with confirmed/pending/just_classified data
 - GET /api/counts/stream - SSE endpoint for real-time updates
+- GET /api/bag-types   - Bag type metadata (name, thumb path) for UI images
 - GET /counts          - HTML dashboard with live pipeline visualization
 """
 
 import asyncio
 import json
 import time
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 from fastapi import APIRouter, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 from src.endpoint.pipeline_state import read_state
-from src.endpoint.shared import get_templates
+from src.endpoint.shared import get_db, get_templates
 from src.utils.AppLogging import logger
 
 router = APIRouter(tags=["counts"])
@@ -33,12 +35,32 @@ async def api_counts() -> Dict[str, Any]:
     - just_classified: Real-time classification results (before smoothing)
     - smoothing_rate: Fraction of items that were corrected by smoothing
     - window_status: Smoothing window fill state
+    - recent_events: Last 10 pipeline events for live feed
     """
     state = read_state()
 
     # Remove internal fields
     result = {k: v for k, v in state.items() if not k.startswith("_")}
     return result
+
+
+@router.get("/api/bag-types")
+async def api_bag_types() -> List[Dict[str, Any]]:
+    """
+    Bag type metadata endpoint for UI image rendering.
+
+    Returns list of bag types with normalized web paths for thumbnails.
+    Used by the counts dashboard to show classification images.
+    """
+    db = get_db()
+    bag_types = await run_in_threadpool(db.get_all_bag_types)
+
+    # Normalize thumb paths: data/classes/X → known_classes/X
+    for bt in bag_types:
+        thumb = bt.get("thumb", "") or ""
+        bt["thumb"] = thumb.replace("data/classes/", "known_classes/")
+
+    return bag_types
 
 
 @router.get("/api/counts/stream")

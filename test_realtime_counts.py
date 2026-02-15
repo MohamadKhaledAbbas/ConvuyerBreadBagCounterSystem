@@ -135,7 +135,7 @@ def test_api_counts_endpoint():
 
 
 def test_counts_html_page():
-    """Test /counts HTML page renders with SSE code."""
+    """Test /counts HTML page renders with SSE code and visual elements."""
     from src.endpoint.shared import init_shared_resources, cleanup_shared_resources
 
     init_shared_resources()
@@ -155,9 +155,90 @@ def test_counts_html_page():
         assert "Confirmed" in body
         assert "Pending" in body
         assert "Just Classified" in body
-        print("PASS: /counts page renders with SSE and three-tier display")
+        # New: verify visual enhancements
+        assert "/api/bag-types" in body, "Should fetch bag types for thumbnails"
+        assert "Live Event Feed" in body, "Should have live event feed"
+        assert "renderConfirmed" in body, "Should have card rendering for confirmed"
+        assert "renderPending" in body, "Should have card rendering for pending"
+        assert "grayscale" in body, "Pending items should use grayscale overlay"
+        assert "feed-item" in body, "Should have feed item styling"
+        print("PASS: /counts page renders with SSE, thumbnails, and live feed")
     finally:
         cleanup_shared_resources()
+
+
+def test_api_bag_types_endpoint():
+    """Test /api/bag-types returns bag type metadata."""
+    from src.endpoint.shared import init_shared_resources, cleanup_shared_resources
+
+    init_shared_resources()
+    try:
+        from fastapi.testclient import TestClient
+        from src.endpoint.server import app
+
+        client = TestClient(app)
+
+        resp = client.get("/api/bag-types")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data, list), "Should return a list"
+        assert len(data) >= 9, f"Should have at least 9 default bag types, got {len(data)}"
+
+        # Check one bag type has the expected structure
+        names = {bt["name"] for bt in data}
+        assert "Brown_Orange" in names, "Should include Brown_Orange"
+        assert "Rejected" in names, "Should include Rejected"
+
+        # Check thumb paths are normalized to web paths
+        for bt in data:
+            if bt.get("thumb"):
+                assert "known_classes/" in bt["thumb"], \
+                    f"Thumb path should be normalized: {bt['thumb']}"
+                assert "data/classes/" not in bt["thumb"], \
+                    f"Should not have filesystem path: {bt['thumb']}"
+        print("PASS: /api/bag-types returns normalized bag type metadata")
+    finally:
+        cleanup_shared_resources()
+
+
+def test_pipeline_state_with_events():
+    """Test pipeline state includes recent_events field."""
+    from src.endpoint.pipeline_state import write_state, read_state, _empty_state
+
+    # Empty state should have recent_events
+    empty = _empty_state()
+    assert "recent_events" in empty
+    assert empty["recent_events"] == []
+    print("PASS: empty state includes recent_events")
+
+    # Round-trip with events
+    fd, tf = tempfile.mkstemp(suffix=".json")
+    os.close(fd)
+    os.remove(tf)
+    try:
+        import time
+        state = {
+            "confirmed": {"Brown_Orange": 5},
+            "pending": {},
+            "just_classified": {},
+            "confirmed_total": 5,
+            "pending_total": 0,
+            "just_classified_total": 0,
+            "smoothing_rate": 0.0,
+            "window_status": {"size": 7, "current_items": 0, "next_confirmation_in": 7},
+            "recent_events": [
+                {"ts": time.time(), "msg": "CONFIRMED T1:Brown_Orange"},
+                {"ts": time.time(), "msg": "TENTATIVE T2:Brown_Orange (pending smoothing)"},
+            ]
+        }
+        write_state(state, tf)
+        result = read_state(tf)
+        assert len(result["recent_events"]) == 2
+        assert result["recent_events"][0]["msg"] == "CONFIRMED T1:Brown_Orange"
+        print("PASS: pipeline state round-trips recent_events")
+    finally:
+        if os.path.exists(tf):
+            os.remove(tf)
 
 
 def test_sse_stream_endpoint():
@@ -168,7 +249,8 @@ def test_sse_stream_endpoint():
 
     route_paths = [route.path for route in app.routes]
     assert "/api/counts/stream" in route_paths
-    print("PASS: /api/counts/stream route is registered")
+    assert "/api/bag-types" in route_paths
+    print("PASS: /api/counts/stream and /api/bag-types routes are registered")
 
 
 if __name__ == "__main__":
@@ -176,5 +258,7 @@ if __name__ == "__main__":
     test_smoother_pending_summary()
     test_api_counts_endpoint()
     test_counts_html_page()
+    test_api_bag_types_endpoint()
+    test_pipeline_state_with_events()
     test_sse_stream_endpoint()
     print("\n=== All tests PASSED ===")

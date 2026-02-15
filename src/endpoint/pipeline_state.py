@@ -95,5 +95,6 @@ def _empty_state() -> Dict[str, Any]:
             "current_items": 0,
             "next_confirmation_in": 7
         },
+        "recent_events": [],
         "_updated_at": 0
     }

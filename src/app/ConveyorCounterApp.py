@@ -700,6 +700,12 @@ class ConveyorCounterApp:
             window_size = self._smoother.window_size
             next_confirmation_in = max(0, window_size - pending_total)
 
+            # Build recent events for live feed
+            raw_events = self.state.get_recent_events()
+            recent_events = [
+                {"ts": ts, "msg": msg} for ts, msg in raw_events
+            ]
+
             state = {
                 "confirmed": self.state.get_counts_snapshot(),
                 "pending": pending_summary,
@@ -712,7 +718,8 @@ class ConveyorCounterApp:
                     "size": window_size,
                     "current_items": pending_total,
                     "next_confirmation_in": next_confirmation_in
-                }
+                },
+                "recent_events": recent_events
             }
             write_pipeline_state(state)
         except Exception as e:
