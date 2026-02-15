@@ -64,17 +64,19 @@ async def api_bag_types() -> List[Dict[str, Any]]:
 
 
 @router.get("/api/counts/stream")
-async def api_counts_stream() -> StreamingResponse:
+async def api_counts_stream(request: Request) -> StreamingResponse:
     """
     Server-Sent Events (SSE) endpoint for real-time count updates.
 
     Pushes state updates at ~1 second intervals when data changes.
+    Stops when the client disconnects so the server thread is freed.
+
     Clients connect via EventSource:
         const es = new EventSource('/api/counts/stream');
         es.onmessage = (e) => { const data = JSON.parse(e.data); ... };
     """
     return StreamingResponse(
-        _sse_generator(),
+        _sse_generator(request),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -84,11 +86,20 @@ async def api_counts_stream() -> StreamingResponse:
     )
 
 
-async def _sse_generator():
-    """Generate SSE events by polling pipeline state file."""
+async def _sse_generator(request: Request):
+    """Generate SSE events by polling pipeline state file.
+
+    Stops when the client disconnects (request.is_disconnected()) to avoid
+    leaking background tasks that block other server requests.
+    """
     last_updated_at = 0.0
 
     while True:
+        # Stop generating when the client has disconnected
+        if await request.is_disconnected():
+            logger.debug("[SSE] Client disconnected, stopping stream")
+            return
+
         try:
             state = read_state()
             current_updated = state.get("_updated_at", 0)

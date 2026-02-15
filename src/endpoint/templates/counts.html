@@ -1,14 +1,19 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ar" dir="rtl">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Live Counts — Conveyor Counter</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/analytics.css?v=7">
+    <title>العد المباشر — عدّاد أكياس الخبز</title>
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/analytics.css?v=8">
     <style>
-        /* ── Overrides on analytics.css ── */
-        main { padding-top: 1.5rem; }
+        /* ── RTL & Arabic font overrides ── */
+        body, main, .page-header h1, .hero-label, .hero-sub, .hero-value,
+        .proc-label, .proc-name, .proc-count-unit, .section-label,
+        .card-title, .card-batch-info, .status-badge, .proc-idle,
+        .footer-row { font-family: 'Cairo', 'Inter', sans-serif; }
+
+        main { padding-top: 1.5rem; direction: rtl; }
 
         /* Header */
         .page-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1.5rem; flex-wrap:wrap; gap:12px }
@@ -59,7 +64,7 @@
         .proc-label { font-size:.68rem; text-transform:uppercase; letter-spacing:.08em; font-weight:700; color:var(--text-muted); line-height:1 }
         .proc-name { font-size:1rem; font-weight:700; color:var(--text-primary); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
 
-        .proc-count-block { text-align:right; flex-shrink:0 }
+        .proc-count-block { text-align:left; flex-shrink:0 }
         .proc-count-value {
             font-size: 2rem;
             font-weight: 800;
@@ -69,9 +74,9 @@
             transition: color .3s;
         }
         .processing-bar.active .proc-count-value { color: #e2e8f0 }
-        .proc-count-unit { font-size:.7rem; color:var(--text-muted); font-weight:600; display:block; text-align:right }
+        .proc-count-unit { font-size:.7rem; color:var(--text-muted); font-weight:600; display:block; text-align:left }
 
-        .proc-breakdown { font-size:.68rem; color:var(--text-muted); font-variant-numeric:tabular-nums; display:flex; gap:8px; justify-content:flex-end; margin-top:2px }
+        .proc-breakdown { font-size:.68rem; color:var(--text-muted); font-variant-numeric:tabular-nums; display:flex; gap:8px; justify-content:flex-start; margin-top:2px }
         .proc-breakdown .confirmed-part { color:rgba(45,212,191,.7) }
         .proc-breakdown .pending-part { color:rgba(56,189,248,.7) }
 
@@ -126,7 +131,7 @@
         .confirm-flash { animation:confirmFlash .7s ease }
 
         /* Footer */
-        .footer-row { display:flex; justify-content:flex-end; padding:12px 0; font-size:.78rem; color:var(--text-muted) }
+        .footer-row { display:flex; justify-content:flex-start; padding:12px 0; font-size:.78rem; color:var(--text-muted) }
     </style>
 </head>
 <body>
@@ -134,10 +139,10 @@
 <main>
     <!-- Header -->
     <div class="page-header">
-        <h1>📊 Live Counts</h1>
+        <h1>📊 العد المباشر</h1>
         <div class="status-badge" id="statusBadge">
             <span class="dot"></span>
-            <span id="statusText">Connecting…</span>
+            <span id="statusText">جارٍ الاتصال…</span>
         </div>
     </div>
 
@@ -145,19 +150,19 @@
     <section class="hero-section">
         <div class="hero-card">
             <div class="hero-metric primary">
-                <div class="hero-label">Current Batch</div>
+                <div class="hero-label">الدفعة الحالية</div>
                 <div class="hero-value" id="heroBatch" style="color:var(--text-primary)">0</div>
-                <div class="hero-sub">Total counted (confirmed + pending)</div>
+                <div class="hero-sub">إجمالي العد (مؤكد + قيد المعالجة)</div>
             </div>
             <div class="hero-metric">
-                <div class="hero-label">Confirmed</div>
+                <div class="hero-label">مؤكد</div>
                 <div class="hero-value" id="heroConfirmed" style="color:#2dd4bf">0</div>
-                <div class="hero-sub" style="color:var(--text-muted)">Persisted</div>
+                <div class="hero-sub" style="color:var(--text-muted)">تم الحفظ</div>
             </div>
             <div class="hero-metric">
-                <div class="hero-label">Processing</div>
+                <div class="hero-label">قيد المعالجة</div>
                 <div class="hero-value" id="heroPending" style="color:#94a3b8">0</div>
-                <div class="hero-sub" style="color:var(--text-muted)">Not yet confirmed</div>
+                <div class="hero-sub" style="color:var(--text-muted)">لم يتم التأكيد بعد</div>
             </div>
         </div>
     </section>
@@ -167,21 +172,21 @@
         <!-- Idle state -->
         <div id="procIdle" class="proc-idle">
             <span>📦</span>
-            <span>Waiting for classifications…</span>
+            <span>في انتظار التصنيفات…</span>
         </div>
         <!-- Active state (hidden by default) -->
         <div id="procActive" style="display:none;width:100%">
             <div style="display:flex;align-items:center;gap:16px;width:100%">
                 <div class="proc-thumb" id="procThumb">
-                    <img id="procImg" src="" alt="Current batch type">
+                    <img id="procImg" src="" alt="نوع الدفعة الحالية">
                 </div>
                 <div class="proc-info">
-                    <div class="proc-label">Now Processing</div>
+                    <div class="proc-label">قيد التشغيل الآن</div>
                     <div class="proc-name" id="procName">—</div>
                 </div>
                 <div class="proc-count-block">
                     <span class="proc-count-value" id="procCountValue">0</span>
-                    <span class="proc-count-unit">bags</span>
+                    <span class="proc-count-unit">كيس</span>
                     <div class="proc-breakdown" id="procBreakdown"></div>
                 </div>
                 <div class="proc-status">
@@ -195,7 +200,7 @@
     <div class="connect-arrow" id="connectArrow">▼</div>
 
     <!-- Confirmed class cards — all types, analytics-style -->
-    <div class="section-label">Counts by Type</div>
+    <div class="section-label">العدد حسب النوع</div>
     <section class="grid-container" id="classGrid">
         <!-- Populated by JS on init -->
     </section>
@@ -291,10 +296,10 @@ function updateClassCards(confirmed, pending) {
 
         // Show breakdown only when there are items
         if (batch > 0 && pend > 0) {
-            infoEl.innerHTML = '<span class="confirmed-part">✓ ' + conf + ' confirmed</span>' +
-                               '<span class="pending-part">⏳ +' + pend + ' pending</span>';
+            infoEl.innerHTML = '<span class="confirmed-part">✓ ' + conf + ' مؤكد</span>' +
+                               '<span class="pending-part">⏳ +' + pend + ' قيد الانتظار</span>';
         } else if (batch > 0) {
-            infoEl.innerHTML = '<span class="confirmed-part">✓ ' + conf + ' confirmed</span>';
+            infoEl.innerHTML = '<span class="confirmed-part">✓ ' + conf + ' مؤكد</span>';
         } else {
             infoEl.innerHTML = '';
         }
@@ -400,7 +405,7 @@ function updateUI(data) {
     updateClassCards(data.confirmed, allPending);
 
     // Footer
-    $id('lastUpdate').textContent = 'Updated ' + new Date().toLocaleTimeString();
+    $id('lastUpdate').textContent = 'آخر تحديث ' + new Date().toLocaleTimeString('ar');
 
     // Track state
     prevConfirmed = Object.assign({}, data.confirmed || {});
@@ -412,14 +417,14 @@ function connectSSE() {
     const es = new EventSource('/api/counts/stream');
     es.onopen = () => {
         $id('statusBadge').className = 'status-badge';
-        $id('statusText').textContent = 'Connected';
+        $id('statusText').textContent = 'متصل';
     };
     es.onmessage = (e) => {
         try { updateUI(JSON.parse(e.data)); } catch(err) { console.warn('SSE parse error', err); }
     };
     es.onerror = () => {
         $id('statusBadge').className = 'status-badge disconnected';
-        $id('statusText').textContent = 'Reconnecting…';
+        $id('statusText').textContent = 'جارٍ إعادة الاتصال…';
         es.close();
         setTimeout(connectSSE, 3000);
     };

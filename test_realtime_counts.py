@@ -135,7 +135,7 @@ def test_api_counts_endpoint():
 
 
 def test_counts_html_page():
-    """Test /counts HTML page renders with SSE, batch totals, processing bar, and per-class breakdown."""
+    """Test /counts HTML page renders with SSE, batch totals, processing bar, and per-class breakdown (Arabic)."""
     from src.endpoint.shared import init_shared_resources, cleanup_shared_resources
 
     init_shared_resources()
@@ -148,11 +148,18 @@ def test_counts_html_page():
         resp = client.get("/counts")
         assert resp.status_code == 200
         body = resp.text
-        assert "Live Counts" in body
+        # Arabic page structure
+        assert 'lang="ar"' in body, "Should be Arabic"
+        assert 'dir="rtl"' in body, "Should be RTL"
+        assert "العد المباشر" in body, "Should have Arabic title"
+        assert "الدفعة الحالية" in body, "Should have Arabic batch label"
+        assert "مؤكد" in body, "Should have Arabic confirmed label"
+        assert "قيد المعالجة" in body, "Should have Arabic processing label"
+        assert "العدد حسب النوع" in body, "Should have Arabic section label"
+        assert "قيد التشغيل الآن" in body, "Should have Arabic 'Now Processing' label"
+        # Core SSE and JS logic preserved
         assert "EventSource" in body
         assert "/api/counts/stream" in body
-        assert "Confirmed" in body
-        # Simplified UX elements
         assert "/api/bag-types" in body, "Should fetch bag types for thumbnails"
         assert "buildClassCards" in body, "Should build all-type cards on init"
         assert "updateClassCards" in body, "Should update cards with batch counts"
@@ -162,22 +169,17 @@ def test_counts_html_page():
         assert "stat-card" in body, "Should use analytics-style stat cards"
         assert "confirm-flash" in body, "Should have confirmation animation"
         assert "confirm-pulse" in body, "Should have arrow pulse animation"
-        # Current batch hero metric
-        assert "Current Batch" in body, "Should show current batch total"
         assert "heroBatch" in body, "Should have batch total hero element"
         assert "batchTotal" in body, "JS should compute batch total"
-        # Per-class batch info (confirmed + pending breakdown)
         assert "card-batch-info" in body, "Should have per-class batch breakdown"
         assert "confirmed-part" in body, "Should show confirmed portion"
         assert "pending-part" in body, "Should show pending portion"
         assert "allPending" in body, "JS should merge pending + just_classified"
-        # Processing bar elements
         assert "current_batch_type" in body, "Should reference current_batch_type from data"
         assert "procName" in body, "Should have batch type name element"
         assert "procImg" in body, "Should have batch type image element"
         assert "procCountValue" in body, "Should have per-type count element"
         assert "procBreakdown" in body, "Should have per-type breakdown"
-        assert "Now Processing" in body, "Should show 'Now Processing' label"
         assert "prevBatchType" in body, "JS should track batch type changes"
         assert "procIdle" in body, "Should have idle state"
         assert "procActive" in body, "Should have active state"
@@ -187,7 +189,7 @@ def test_counts_html_page():
         assert "feed-item" not in body, "Should not have feed item styling"
         assert "Smoothing Window" not in body, "Should not show smoothing window"
         assert "window-fill" not in body, "Should not have smoothing progress bar"
-        print("PASS: /counts page renders with compact processing bar, batch totals, and per-class breakdown")
+        print("PASS: /counts page renders with Arabic RTL layout, processing bar, batch totals")
     finally:
         cleanup_shared_resources()
 
@@ -362,6 +364,108 @@ def test_smoother_get_dominant_class():
     print("PASS: get_dominant_class excludes Rejected class")
 
 
+def test_large_window_outlier_smoothing():
+    """Test that multiple outliers are smoothed in larger windows (e.g., window=15).
+
+    With window_size=15, up to 3 items (20% of 15) of a non-dominant class
+    should be smoothed when the dominant class has ≥70% dominance.
+    This prevents 'leaking' between batches during transitions.
+    """
+    from src.tracking.BidirectionalSmoother import BidirectionalSmoother
+
+    smoother = BidirectionalSmoother(window_size=15, min_window_dominance=0.7)
+
+    # Simulate: 13 Black_Orange with 2 Brown_Orange outliers scattered in the middle
+    # Pattern: B,B,B,B,B,Br,B,B,B,Br,B,B,B,B,B  (B=Black, Br=Brown)
+    # After filling window (15 items), 1 is confirmed; then add 2 more B
+    # to push the Brown items through the full window context.
+    classes = (
+        ["Black_Orange"] * 5 + ["Brown_Orange"] +
+        ["Black_Orange"] * 4 + ["Brown_Orange"] +
+        ["Black_Orange"] * 4
+    )
+
+    results = []
+    for i, cls in enumerate(classes, 1):
+        conf = 0.99 if cls == "Brown_Orange" else 0.95
+        r = smoother.add_classification(i, cls, conf, 0.9, 5)
+        if r:
+            results.append(r)
+
+    # Add 2 more Black items to push Brown outliers through full window context
+    for i in range(16, 18):
+        r = smoother.add_classification(i, "Black_Orange", 0.95, 0.9, 5)
+        if r:
+            results.append(r)
+
+    # Flush remaining
+    flushed = smoother.flush_remaining()
+    all_records = results + flushed
+
+    assert len(all_records) == 17, f"Expected 17, got {len(all_records)}"
+
+    # The 2 Brown outliers (tracks 6, 11) should be smoothed to Black
+    for tid in [6, 11]:
+        rec = [r for r in all_records if r.track_id == tid][0]
+        assert rec.class_name == "Black_Orange", (
+            f"T{tid} should be smoothed to Black_Orange, got {rec.class_name}"
+        )
+        assert rec.smoothed is True, f"T{tid} should be marked as smoothed"
+        assert rec.original_class == "Brown_Orange", f"T{tid} original should be Brown_Orange"
+
+    # All other items should be Black_Orange (unsmoothed)
+    for rec in all_records:
+        if rec.track_id not in [6, 11]:
+            assert rec.class_name == "Black_Orange", (
+                f"T{rec.track_id} should be Black_Orange, got {rec.class_name}"
+            )
+
+    print("PASS: large window (15) smooths multiple outliers (2 Brown in Black batch)")
+
+
+def test_sql_subquery_for_update():
+    """Test that the UPDATE query works in SQLite (uses subquery, not ORDER BY on UPDATE)."""
+    import sqlite3
+    import tempfile
+
+    fd, db_path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.execute("""CREATE TABLE track_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            track_id INTEGER,
+            classification TEXT,
+            classification_confidence REAL
+        )""")
+        # Insert two rows for same track_id
+        conn.execute("INSERT INTO track_events (track_id, classification, classification_confidence) VALUES (1, NULL, NULL)")
+        conn.execute("INSERT INTO track_events (track_id, classification, classification_confidence) VALUES (1, NULL, NULL)")
+        conn.commit()
+
+        # Execute the exact query pattern used in pipeline_core.py
+        conn.execute(
+            """UPDATE track_events
+               SET classification = ?, classification_confidence = ?
+               WHERE id = (
+                   SELECT id FROM track_events
+                   WHERE track_id = ? AND classification IS NULL
+                   ORDER BY id DESC LIMIT 1
+               )""",
+            ("Brown_Orange", 0.95, 1)
+        )
+        conn.commit()
+
+        # Verify: only the latest row (id=2) was updated
+        rows = conn.execute("SELECT id, classification FROM track_events ORDER BY id").fetchall()
+        assert rows[0] == (1, None), f"First row should remain NULL, got {rows[0]}"
+        assert rows[1] == (2, "Brown_Orange"), f"Second row should be updated, got {rows[1]}"
+        conn.close()
+        print("PASS: UPDATE with subquery works in SQLite (no syntax error)")
+    finally:
+        os.remove(db_path)
+
+
 if __name__ == "__main__":
     test_pipeline_state_module()
     test_smoother_pending_summary()
@@ -372,4 +476,6 @@ if __name__ == "__main__":
     test_sse_stream_endpoint()
     test_high_confidence_outlier_smoothing()
     test_smoother_get_dominant_class()
+    test_large_window_outlier_smoothing()
+    test_sql_subquery_for_update()
     print("\n=== All tests PASSED ===")

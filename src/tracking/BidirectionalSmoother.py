@@ -272,17 +272,21 @@ class BidirectionalSmoother:
             return oldest_record
 
         # Check if oldest record should be smoothed (outlier in dominant batch)
-        # On a conveyor, bags come in monotype batches. A single different-class
-        # item against strong dominance is almost certainly a misclassification,
-        # even if it has high confidence.
-        # Example: [black, black, black, blue(1.00), black, black, black]
-        # The blue is overridden to black because it's a single outlier.
+        # On a conveyor, bags come in monotype batches. A small minority of
+        # different-class items against strong dominance is almost certainly
+        # misclassification, even with high confidence.
+        # Examples:
+        #   window=7:  [B,B,B,X(1.00),B,B,B] → X smoothed (1 outlier)
+        #   window=15: [B,B,B,B,B,B,B,B,B,X,B,X,B,B,B] → X smoothed (2 outliers)
         if oldest_record.class_name != dominant_class:
-            # Check if it's truly an outlier (only one of its class in window)
             class_dist = self._get_window_distribution()
             class_count = class_dist.get(oldest_record.class_name, 0)
+            # Allow smoothing when the non-dominant class is a small minority
+            # (up to ~20% of window size, minimum 1).  This handles both small
+            # windows (size 7 → threshold 1) and larger ones (size 15 → threshold 3).
+            outlier_threshold = max(1, int(len(self.window_buffer) * 0.2))
 
-            if class_count <= 1:
+            if class_count <= outlier_threshold:
                 reason = (
                     "outlier_low_conf" if self._is_low_confidence(oldest_record)
                     else "outlier_batch_override"
@@ -303,7 +307,8 @@ class BidirectionalSmoother:
                     f"[SMOOTHING] T{oldest_record.track_id} SMOOTHED | "
                     f"{oldest_record.class_name}->{dominant_class} "
                     f"conf={oldest_record.confidence:.3f} dominance={dominance_ratio:.2f} "
-                    f"reason={reason}"
+                    f"class_count={class_count}/{len(self.window_buffer)} "
+                    f"threshold={outlier_threshold} reason={reason}"
                 )
                 return smoothed
 

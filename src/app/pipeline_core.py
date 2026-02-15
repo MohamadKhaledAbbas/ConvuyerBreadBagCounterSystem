@@ -363,8 +363,11 @@ class PipelineCore:
                 self._db.enqueue_write(
                     """UPDATE track_events
                        SET classification = ?, classification_confidence = ?
-                       WHERE track_id = ? AND classification IS NULL
-                       ORDER BY id DESC LIMIT 1""",
+                       WHERE id = (
+                           SELECT id FROM track_events
+                           WHERE track_id = ? AND classification IS NULL
+                           ORDER BY id DESC LIMIT 1
+                       )""",
                     (class_name, confidence, track_id)
                 )
                 # Log voting result detail (non-blocking)
