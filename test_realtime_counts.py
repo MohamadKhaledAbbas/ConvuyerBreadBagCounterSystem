@@ -175,9 +175,8 @@ def test_counts_html_page():
         assert "confirmed-part" in body, "Should show confirmed portion"
         assert "pending-part" in body, "Should show pending portion"
         assert "allPending" in body, "JS should use pending counts"
-        # Verify no double-counting: just_classified should NOT be merged into allPending
-        assert "just_classified_total" not in body or \
-            "data.pending_total || 0) + (data.just_classified_total" not in body, \
+        # Verify no double-counting: pending_total must NOT be summed with just_classified_total
+        assert "pending_total || 0) + (data.just_classified_total" not in body, \
             "Should not sum pending_total + just_classified_total (double-counting bug)"
         assert "current_batch_type" in body, "Should reference current_batch_type from data"
         assert "procName" in body, "Should have batch type name element"
