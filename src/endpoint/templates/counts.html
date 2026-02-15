@@ -5,12 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Live Counts — Conveyor Counter</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/analytics.css?v=5">
+    <link rel="stylesheet" href="/static/css/analytics.css">
     <style>
-        /* ── Overrides & additions on top of analytics.css ── */
+        /* ── Overrides on analytics.css ── */
         main { padding-top: 1.5rem; }
 
-        /* Page header with live badge */
+        /* Header */
         .page-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1.5rem; flex-wrap:wrap; gap:12px }
         .page-header h1 { font-size:1.5rem; font-weight:700; color:var(--text-primary); margin:0 }
         .status-badge { display:inline-flex; align-items:center; gap:6px; padding:5px 14px; border-radius:20px; font-size:.78rem; font-weight:600; background:rgba(45,212,191,.12); color:#2dd4bf; border:1px solid rgba(45,212,191,.25) }
@@ -19,95 +19,113 @@
         .status-badge.disconnected .dot { background:#f87171; animation:none }
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
 
-        /* Hero card additions for live counts */
-        .hero-card { grid-template-columns: 1fr 1fr 1fr; }
+        /* Hero with 2 cols */
+        .hero-card { grid-template-columns: 1fr 1fr; }
         @media(max-width:768px) { .hero-card { grid-template-columns:1fr; } }
 
-        /* Stacked bar inside class cards */
-        .count-bar { display:flex; height:8px; border-radius:4px; overflow:hidden; margin:0.6rem 0 0.3rem; background:rgba(255,255,255,.06) }
-        .count-bar .seg-confirmed { background:#2dd4bf; transition:width .5s ease }
-        .count-bar .seg-pending { background:#38bdf8; transition:width .5s ease }
-        .count-bar .seg-classified { background:#fbbf24; transition:width .5s ease }
-
-        .count-breakdown { display:flex; gap:0.75rem; margin:0.6rem 0 0.2rem; padding:0.6rem; background:rgba(15,23,42,.4); border-radius:var(--radius-md); justify-content:space-around }
-        .cb-item { display:flex; flex-direction:column; align-items:center; gap:0.15rem }
-        .cb-label { font-size:.6rem; font-weight:700; text-transform:uppercase; letter-spacing:.08em; opacity:.85 }
-        .cb-value { font-size:1.2rem; font-weight:700 }
-        .cb-item.confirmed .cb-label, .cb-item.confirmed .cb-value { color:#2dd4bf }
-        .cb-item.pending .cb-label, .cb-item.pending .cb-value { color:#38bdf8 }
-        .cb-item.classified .cb-label, .cb-item.classified .cb-value { color:#fbbf24 }
-
-        /* Current batch section */
-        .batch-section { margin-top:2rem }
-        .batch-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem; flex-wrap:wrap; gap:0.5rem }
-        .batch-title { font-size:1.2rem; font-weight:700; color:var(--text-primary); display:flex; align-items:center; gap:0.5rem }
-        .batch-title .live-dot { width:10px; height:10px; border-radius:50%; background:#2dd4bf; display:inline-block; animation:pulse 1.5s infinite }
-        .batch-meta { font-size:.85rem; color:var(--text-secondary) }
-
-        /* Window progress (inside batch) */
-        .window-bar { margin-bottom:1rem; padding:12px 20px; background:var(--glass-bg); border:1px solid var(--glass-border); border-radius:var(--radius-md) }
-        .window-meta { display:flex; justify-content:space-between; font-size:.8rem; margin-bottom:6px }
-        .window-meta .wlabel { color:var(--text-muted) }
-        .window-meta .wvalue { color:#38bdf8; font-weight:700 }
-        .window-track { height:6px; background:rgba(255,255,255,.06); border-radius:3px; overflow:hidden }
-        .window-fill { height:100%; background:linear-gradient(90deg,#38bdf8,#2dd4bf); border-radius:3px; transition:width .5s ease }
-
-        /* Batch item cards */
-        .batch-grid { display:flex; flex-direction:column; gap:0.8rem }
-        .batch-item { display:flex; align-items:center; gap:1rem; padding:1rem 1.25rem; background:var(--glass-bg); border:1px solid var(--glass-border); border-radius:var(--radius-md); transition:all .3s }
-        .batch-item:hover { border-color:#38bdf8; background:rgba(30,41,59,.9) }
-        .batch-item .b-thumb { width:52px; height:52px; border-radius:var(--radius-md); overflow:hidden; flex-shrink:0; position:relative; background:#0f172a }
-        .batch-item .b-thumb img { width:100%; height:100%; object-fit:cover }
-        .batch-item.is-pending .b-thumb img { filter:grayscale(50%) brightness(.75) }
-        .batch-item.is-pending .b-thumb::after { content:'⏳'; position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:1.1rem; background:rgba(15,23,42,.4) }
-        .batch-item .b-info { flex:1; min-width:0 }
-        .batch-item .b-name { font-size:.95rem; font-weight:600; color:var(--text-primary) }
-        .batch-item .b-status { font-size:.75rem; margin-top:2px }
-        .batch-item.is-confirmed .b-thumb { border:2px solid #2dd4bf }
-        .batch-item.is-confirmed .b-status { color:#2dd4bf }
-        .batch-item.is-pending .b-thumb { border:2px solid rgba(56,189,248,.4) }
-        .batch-item.is-pending .b-status { color:#38bdf8 }
-        .batch-item .b-status .st-pending { color:#38bdf8 }
-        .batch-item .b-status .st-classified { color:#fbbf24 }
-        .batch-item .b-count { font-size:1.3rem; font-weight:700; flex-shrink:0 }
-        .batch-item.is-confirmed .b-count { color:#2dd4bf }
-        .batch-item.is-pending .b-count { color:#38bdf8 }
-
-        /* Live feed panel */
-        .feed-panel { background:var(--glass-bg); border:1px solid var(--glass-border); border-radius:var(--radius-lg); padding:1.25rem; max-height:500px; display:flex; flex-direction:column; margin-top:2rem }
-        .feed-scroll { flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:6px; padding-right:4px }
-        .feed-scroll::-webkit-scrollbar { width:4px }
-        .feed-scroll::-webkit-scrollbar-thumb { background:#38bdf8; border-radius:2px }
-        .feed-item { padding:10px 12px; border-radius:var(--radius-md); background:rgba(15,23,42,.5); border-left:3px solid var(--text-muted); font-size:.78rem; line-height:1.5; animation:feedIn .3s ease; display:flex; gap:10px; align-items:flex-start }
-        .feed-item.confirmed { border-left-color:#2dd4bf; background:rgba(45,212,191,.06) }
-        .feed-item.tentative { border-left-color:#fbbf24; background:rgba(251,191,36,.05) }
-        .feed-item.smoothed { border-left-color:#a78bfa; background:rgba(167,139,250,.06) }
-        .feed-item.rejected { border-left-color:#f87171; background:rgba(248,113,113,.05) }
-        .feed-time { color:var(--text-muted); font-variant-numeric:tabular-nums; white-space:nowrap; font-size:.72rem; margin-top:1px }
-        .feed-msg { color:var(--text-secondary); word-break:break-word; flex:1 }
-        .feed-msg strong { color:var(--text-primary); font-weight:600 }
-        @keyframes feedIn { from{opacity:0;transform:translateY(-6px)} to{opacity:1;transform:translateY(0)} }
-
-        /* Two-column for batch + feed */
-        .bottom-grid { display:grid; grid-template-columns:1fr 380px; gap:1.5rem; align-items:start }
-        @media(max-width:960px) { .bottom-grid { grid-template-columns:1fr } }
-
-        /* Stats footer */
-        .stats-row { display:flex; gap:20px; flex-wrap:wrap; padding:14px 20px; background:var(--glass-bg); border:1px solid var(--glass-border); border-radius:var(--radius-md); font-size:.82rem; margin-top:1.5rem }
-        .stat-pair { display:flex; gap:6px; align-items:center }
-        .stat-pair .slabel { color:var(--text-muted) }
-        .stat-pair .sval { color:#38bdf8; font-weight:700 }
-
-        /* Section separator */
+        /* Section label */
         .section-label { font-size:.8rem; font-weight:700; text-transform:uppercase; letter-spacing:.1em; color:var(--text-muted); margin-bottom:12px; display:flex; align-items:center; gap:8px }
+
+        /* ── Processing card (the bridge) ── */
+        .processing-section { margin: 2rem 0 0; display:flex; flex-direction:column; align-items:center; gap:0 }
+
+        .processing-card {
+            background: rgba(30,41,59,.6);
+            border: 1px dashed rgba(148,163,184,.3);
+            border-radius: var(--radius-lg);
+            padding: 1.5rem 2.5rem;
+            text-align: center;
+            position: relative;
+            transition: all .4s ease;
+            min-width: 260px;
+        }
+        .processing-card.has-items {
+            border-color: rgba(56,189,248,.4);
+            background: rgba(30,41,59,.75);
+        }
+        .processing-card .proc-icon {
+            font-size: 2rem;
+            margin-bottom: .5rem;
+        }
+        .processing-card .proc-count {
+            font-size: 2.5rem;
+            font-weight: 800;
+            color: var(--text-muted);
+            transition: color .3s;
+            font-variant-numeric: tabular-nums;
+        }
+        .processing-card.has-items .proc-count { color: #94a3b8; }
+        .processing-card .proc-label {
+            font-size: .8rem;
+            color: var(--text-muted);
+            margin-top: .25rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: .08em;
+        }
+
+        /* Spinner for processing */
+        .spinner {
+            display: inline-block;
+            width: 20px; height: 20px;
+            border: 2.5px solid rgba(148,163,184,.2);
+            border-top-color: #38bdf8;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            vertical-align: middle;
+            margin-left: 6px;
+        }
+        .spinner.hidden { display:none }
+        @keyframes spin { to { transform:rotate(360deg) } }
+
+        /* Connecting line */
+        .connect-line {
+            width: 2px;
+            height: 40px;
+            background: rgba(148,163,184,.15);
+            position: relative;
+            transition: background .4s;
+        }
+        .connect-line.active { background: rgba(56,189,248,.35) }
+        .connect-line .line-dot {
+            position: absolute;
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            background: #38bdf8;
+            left: 50%; top: 0;
+            transform: translateX(-50%);
+            opacity: 0;
+            transition: opacity .3s;
+        }
+        .connect-line.active .line-dot {
+            opacity: 1;
+            animation: flowDown 1.2s ease-in-out infinite;
+        }
+        @keyframes flowDown {
+            0% { top:0; opacity:0 }
+            30% { opacity:1 }
+            70% { opacity:1 }
+            100% { top:calc(100% - 8px); opacity:0 }
+        }
+
+        /* Confirmed transition flash on line */
+        @keyframes confirmPulse {
+            0% { background: rgba(45,212,191,.6); box-shadow: 0 0 12px rgba(45,212,191,.4) }
+            100% { background: rgba(148,163,184,.15); box-shadow: none }
+        }
+        .connect-line.confirm-pulse { animation: confirmPulse .8s ease; width: 3px }
+
+        /* Card confirmed count */
+        .card-metric-large { font-variant-numeric: tabular-nums; }
 
         /* Animations */
         @keyframes countBump { 0%{transform:scale(1)} 50%{transform:scale(1.12)} 100%{transform:scale(1)} }
         .bump { animation:countBump .3s ease }
-        @keyframes confirmFlash { 0%{box-shadow:0 0 0 0 rgba(45,212,191,.5)} 100%{box-shadow:0 0 0 12px rgba(45,212,191,0)} }
-        .confirm-flash { animation:confirmFlash .6s ease }
+        @keyframes confirmFlash { 0%{box-shadow:0 0 0 0 rgba(45,212,191,.5)} 100%{box-shadow:0 0 0 14px rgba(45,212,191,0)} }
+        .confirm-flash { animation:confirmFlash .7s ease }
 
-        .empty { color:var(--text-muted); font-size:.85rem; padding:16px 0; font-style:italic }
+        /* Footer */
+        .footer-row { display:flex; justify-content:flex-end; padding:12px 0; font-size:.78rem; color:var(--text-muted) }
     </style>
 </head>
 <body>
@@ -115,91 +133,55 @@
 <main>
     <!-- Header -->
     <div class="page-header">
-        <h1>📊 Live Pipeline Counts</h1>
+        <h1>📊 Live Counts</h1>
         <div class="status-badge" id="statusBadge">
             <span class="dot"></span>
             <span id="statusText">Connecting…</span>
         </div>
     </div>
 
-    <!-- Hero section — Total overview like analytics -->
+    <!-- Hero — Batch totals -->
     <section class="hero-section">
         <div class="hero-card">
             <div class="hero-metric primary">
-                <div class="hero-label">Total Bags (All Stages)</div>
-                <div class="hero-value" id="heroTotal">0</div>
-                <div class="hero-breakdown">
-                    <span class="tier-badge high-tier" id="heroConfirmedBadge">Confirmed: 0</span>
-                    <span class="tier-badge low-tier" id="heroPendingBadge">Pending: 0</span>
-                </div>
-            </div>
-            <div class="hero-metric">
                 <div class="hero-label">Confirmed</div>
                 <div class="hero-value" id="heroConfirmed" style="color:#2dd4bf">0</div>
+                <div class="hero-sub" id="heroSub">Current batch</div>
             </div>
             <div class="hero-metric">
-                <div class="hero-label">In Pipeline</div>
-                <div class="hero-value" id="heroPipeline" style="color:#38bdf8">0</div>
+                <div class="hero-label">Processing</div>
+                <div class="hero-value" id="heroPending" style="color:#94a3b8">0</div>
+                <div class="hero-sub" style="color:var(--text-muted)">Not yet confirmed</div>
             </div>
         </div>
     </section>
 
-    <!-- Classification cards — analytics style with live counts -->
-    <div class="section-label">Per-Class Breakdown</div>
+    <!-- Processing bridge -->
+    <div class="processing-section">
+        <div class="processing-card" id="processingCard">
+            <div class="proc-icon">📦</div>
+            <div class="proc-count" id="procCount">0<span class="spinner hidden" id="procSpinner"></span></div>
+            <div class="proc-label">Bags being processed</div>
+        </div>
+        <div class="connect-line" id="connectLine"><div class="line-dot"></div></div>
+    </div>
+
+    <!-- Confirmed class cards — all types, analytics-style -->
+    <div class="section-label">Confirmed Counts by Type</div>
     <section class="grid-container" id="classGrid">
-        <div class="empty" id="classGridEmpty">Waiting for data…</div>
+        <!-- Populated by JS on init -->
     </section>
 
-    <!-- Bottom: Current Batch + Live Feed -->
-    <div class="bottom-grid">
-        <!-- Current Batch -->
-        <div class="batch-section">
-            <div class="batch-header">
-                <div class="batch-title"><span class="live-dot"></span> Current Batch</div>
-                <div class="batch-meta" id="batchMeta">Smoothing window: 0 / 7</div>
-            </div>
-
-            <div class="window-bar">
-                <div class="window-meta">
-                    <span class="wlabel">Smoothing Progress</span>
-                    <span class="wvalue" id="windowLabel">0 / 7 — next in 7 items</span>
-                </div>
-                <div class="window-track">
-                    <div class="window-fill" id="windowFill" style="width:0%"></div>
-                </div>
-            </div>
-
-            <div class="batch-grid" id="batchGrid">
-                <div class="empty" id="batchEmpty">No items in current batch</div>
-            </div>
-        </div>
-
-        <!-- Live Event Feed -->
-        <div>
-            <div class="feed-panel">
-                <div class="section-label" style="margin-bottom:10px">📡 Live Event Feed</div>
-                <div class="feed-scroll" id="feedScroll">
-                    <div class="empty">Waiting for events…</div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Stats footer -->
-    <div class="stats-row">
-        <div class="stat-pair"><span class="slabel">Smoothing Rate:</span><span class="sval" id="smoothRate">0%</span></div>
-        <div class="stat-pair"><span class="slabel">Window Size:</span><span class="sval" id="windowSize">7</span></div>
-        <div class="stat-pair" id="lastUpdate" style="margin-left:auto;color:var(--text-muted)">—</div>
-    </div>
+    <!-- Footer -->
+    <div class="footer-row"><span id="lastUpdate">—</span></div>
 </main>
 
 <script>
 // ── State ──
 let bagTypes = {};
-let prevState = {};
+let allTypeNames = [];
 let prevConfirmed = {};
 let isFirstRender = true;
-let seenEventCount = 0;
 
 const $id = id => document.getElementById(id);
 
@@ -216,257 +198,123 @@ function confirmFlash(el) {
     el.classList.add('confirm-flash');
 }
 
+function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
 function thumbUrl(className) {
     const bt = bagTypes[className];
     if (bt && bt.thumb) return '/' + bt.thumb;
     const letter = className ? className.charAt(0) : '?';
-    return 'https://placehold.co/100x100/1e293b/FFF?text=' + encodeURIComponent(letter);
+    return 'https://placehold.co/170x170/1e293b/64748b?text=' + encodeURIComponent(letter);
 }
 
 function imgTag(className) {
     const safe = (className || '?').charAt(0);
-    return '<img src="' + thumbUrl(className) + '" alt="' + className + '" loading="lazy" onerror="this.src=\'https://placehold.co/100x100/1e293b/FFF?text=' + encodeURIComponent(safe) + '\'">';
+    return '<img src="' + thumbUrl(className) + '" alt="' + escHtml(className) + '" loading="lazy" onerror="this.src=\'https://placehold.co/170x170/1e293b/64748b?text=' + encodeURIComponent(safe) + '\'">';
 }
 
-function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
-
-// ── Render analytics-style class cards ──
-function renderClassCards(confirmed, pending, justClassified) {
+// ── Build all type cards once (including zeros) ──
+function buildClassCards() {
     const grid = $id('classGrid');
-    const empty = $id('classGridEmpty');
+    grid.innerHTML = '';
 
-    // Merge all class names
-    const allClasses = new Set([
-        ...Object.keys(confirmed || {}),
-        ...Object.keys(pending || {}),
-        ...Object.keys(justClassified || {})
-    ]);
-
-    if (allClasses.size === 0) {
-        empty.style.display = '';
-        Array.from(grid.querySelectorAll('.stat-card')).forEach(c => c.remove());
-        return;
-    }
-    empty.style.display = 'none';
-
-    // Sort by total count descending
-    const sorted = [...allClasses].map(name => ({
-        name,
-        conf: (confirmed || {})[name] || 0,
-        pend: (pending || {})[name] || 0,
-        cls:  (justClassified || {})[name] || 0
-    })).sort((a, b) => (b.conf + b.pend + b.cls) - (a.conf + a.pend + a.cls));
-
-    const existing = {};
-    grid.querySelectorAll('.stat-card').forEach(card => { existing[card.dataset.cls] = card; });
-
-    sorted.forEach(item => {
-        const total = item.conf + item.pend + item.cls;
-        let card = existing[item.name];
-        const wasConfirmed = prevConfirmed[item.name] || 0;
-        const justConfirmedMore = !isFirstRender && item.conf > wasConfirmed;
-
-        if (!card) {
-            card = document.createElement('div');
-            card.className = 'stat-card';
-            card.dataset.cls = item.name;
-            card.innerHTML =
-                '<div class="card-header stacked">' +
-                    '<div class="card-title">' + escHtml(item.name) + '</div>' +
-                    '<div class="thumb-container">' + imgTag(item.name) + '</div>' +
-                '</div>' +
-                '<div class="card-metric-large" data-role="total">' + total + '</div>' +
-                '<div class="count-bar">' +
-                    '<div class="seg-confirmed" data-role="bar-c" style="width:0%"></div>' +
-                    '<div class="seg-pending" data-role="bar-p" style="width:0%"></div>' +
-                    '<div class="seg-classified" data-role="bar-j" style="width:0%"></div>' +
-                '</div>' +
-                '<div class="count-breakdown">' +
-                    '<div class="cb-item confirmed"><span class="cb-label">Confirmed</span><span class="cb-value" data-role="cv-c">' + item.conf + '</span></div>' +
-                    '<div class="cb-item pending"><span class="cb-label">Pending</span><span class="cb-value" data-role="cv-p">' + item.pend + '</span></div>' +
-                    '<div class="cb-item classified"><span class="cb-label">Classified</span><span class="cb-value" data-role="cv-j">' + item.cls + '</span></div>' +
-                '</div>';
-            grid.appendChild(card);
-        } else {
-            // Update existing
-            const totalEl = card.querySelector('[data-role="total"]');
-            const cvC = card.querySelector('[data-role="cv-c"]');
-            const cvP = card.querySelector('[data-role="cv-p"]');
-            const cvJ = card.querySelector('[data-role="cv-j"]');
-
-            if (totalEl.textContent !== String(total)) { totalEl.textContent = total; bump(totalEl); }
-            if (cvC.textContent !== String(item.conf)) { cvC.textContent = item.conf; bump(cvC); }
-            if (cvP.textContent !== String(item.pend)) { cvP.textContent = item.pend; }
-            if (cvJ.textContent !== String(item.cls))  { cvJ.textContent = item.cls;  }
-        }
-
-        // Update bar widths
-        if (total > 0) {
-            card.querySelector('[data-role="bar-c"]').style.width = (item.conf / total * 100) + '%';
-            card.querySelector('[data-role="bar-p"]').style.width = (item.pend / total * 100) + '%';
-            card.querySelector('[data-role="bar-j"]').style.width = (item.cls / total * 100) + '%';
-        }
-
-        // Flash on confirmation increase
-        if (justConfirmedMore) { confirmFlash(card); }
-
-        delete existing[item.name];
+    // Sort: non-Rejected first alphabetically, Rejected last
+    const sorted = [...allTypeNames].sort((a, b) => {
+        if (a === 'Rejected') return 1;
+        if (b === 'Rejected') return -1;
+        return a.localeCompare(b);
     });
 
-    Object.values(existing).forEach(c => c.remove());
-}
-
-// ── Render current batch items ──
-function renderBatch(pending, justClassified) {
-    const grid = $id('batchGrid');
-    const empty = $id('batchEmpty');
-
-    // Merge pending + justClassified for the batch view
-    const allNames = new Set([
-        ...Object.keys(pending || {}),
-        ...Object.keys(justClassified || {})
-    ]);
-
-    if (allNames.size === 0) {
-        empty.style.display = '';
-        Array.from(grid.querySelectorAll('.batch-item')).forEach(c => c.remove());
-        return;
-    }
-    empty.style.display = 'none';
-
-    const items = [...allNames].map(name => ({
-        name,
-        pend: (pending || {})[name] || 0,
-        cls: (justClassified || {})[name] || 0
-    })).sort((a, b) => (b.pend + b.cls) - (a.pend + a.cls));
-
-    const existing = {};
-    grid.querySelectorAll('.batch-item').forEach(card => { existing[card.dataset.cls] = card; });
-
-    items.forEach(item => {
-        let card = existing[item.name];
-        if (!card) {
-            card = document.createElement('div');
-            card.dataset.cls = item.name;
-            grid.appendChild(card);
-        }
-
-        const isPending = item.pend > 0;
-        const isClassified = item.cls > 0 && item.pend === 0;
-        card.className = 'batch-item' + (isPending ? ' is-pending' : ' is-confirmed');
-
-        let statusHtml = '';
-        if (item.pend > 0 && item.cls > 0) {
-            statusHtml = '<span class="st-pending">' + item.pend + ' in smoothing</span> · <span class="st-classified">' + item.cls + ' waiting</span>';
-        } else if (item.pend > 0) {
-            statusHtml = '<span class="st-pending">' + item.pend + ' in smoothing window — not yet confirmed</span>';
-        } else {
-            statusHtml = '<span class="st-classified">' + item.cls + ' classified — waiting for smoothing</span>';
-        }
-
+    sorted.forEach(name => {
+        const card = document.createElement('div');
+        card.className = 'stat-card';
+        card.dataset.cls = name;
         card.innerHTML =
-            '<div class="b-thumb">' + imgTag(item.name) + '</div>' +
-            '<div class="b-info">' +
-                '<div class="b-name">' + escHtml(item.name) + '</div>' +
-                '<div class="b-status">' + statusHtml + '</div>' +
+            '<div class="card-header stacked">' +
+                '<div class="card-title">' + escHtml(name) + '</div>' +
+                '<div class="thumb-container">' + imgTag(name) + '</div>' +
             '</div>' +
-            '<div class="b-count">' + (item.pend + item.cls) + '</div>';
-
-        delete existing[item.name];
+            '<div class="card-metric-large" data-role="count" style="color:#2dd4bf">0</div>';
+        grid.appendChild(card);
     });
-
-    Object.values(existing).forEach(c => c.remove());
 }
 
-// ── Render feed ──
-function renderFeed(events) {
-    const feedScroll = $id('feedScroll');
-    if (!events || events.length === 0) return;
+// ── Update confirmed cards ──
+function updateClassCards(confirmed) {
+    const grid = $id('classGrid');
+    const cards = grid.querySelectorAll('.stat-card');
 
-    const newEvents = events.slice(seenEventCount);
-    if (newEvents.length === 0) return;
-    seenEventCount = events.length;
+    cards.forEach(card => {
+        const name = card.dataset.cls;
+        const count = (confirmed || {})[name] || 0;
+        const el = card.querySelector('[data-role="count"]');
+        const prev = parseInt(el.textContent) || 0;
 
-    const emptyEl = feedScroll.querySelector('.empty');
-    if (emptyEl) emptyEl.remove();
-
-    newEvents.forEach(ev => {
-        const div = document.createElement('div');
-        const msg = ev.msg || '';
-        let type = '';
-        if (msg.includes('CONFIRMED')) type = 'confirmed';
-        else if (msg.includes('TENTATIVE')) type = 'tentative';
-        else if (msg.includes('SMOOTHED') || msg.includes('was ')) type = 'smoothed';
-        else if (msg.includes('REJECTED') || msg.includes('UNRELIABLE')) type = 'rejected';
-
-        div.className = 'feed-item' + (type ? ' ' + type : '');
-
-        const t = ev.ts ? new Date(ev.ts * 1000) : new Date();
-        const timeStr = t.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
-
-        let display = msg.replace(/(T\d+)/g, '<strong>$1</strong>');
-        const classNames = Object.keys(bagTypes);
-        if (classNames.length > 0) {
-            const classPattern = new RegExp('(' + classNames.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')', 'g');
-            display = display.replace(classPattern, '<strong>$1</strong>');
+        if (prev !== count) {
+            el.textContent = count;
+            if (!isFirstRender && count > prev) {
+                bump(el);
+                confirmFlash(card);
+            }
         }
-
-        div.innerHTML = '<span class="feed-time">' + timeStr + '</span><span class="feed-msg">' + display + '</span>';
-        feedScroll.appendChild(div);
     });
+}
 
-    while (feedScroll.children.length > 30) {
-        feedScroll.removeChild(feedScroll.firstChild);
+// ── Update processing card ──
+function updateProcessing(pendingTotal) {
+    const card = $id('processingCard');
+    const countEl = $id('procCount');
+    const spinner = $id('procSpinner');
+    const line = $id('connectLine');
+
+    const prev = parseInt(countEl.textContent) || 0;
+    // Preserve spinner span when updating count text
+    countEl.childNodes[0].textContent = pendingTotal;
+
+    if (pendingTotal > 0) {
+        card.classList.add('has-items');
+        spinner.classList.remove('hidden');
+        line.classList.add('active');
+    } else {
+        card.classList.remove('has-items');
+        spinner.classList.add('hidden');
+        line.classList.remove('active');
     }
-    feedScroll.scrollTop = feedScroll.scrollHeight;
+
+    if (!isFirstRender && prev > pendingTotal && pendingTotal >= 0) {
+        // Items moved from processing → confirmed
+        line.classList.remove('confirm-pulse');
+        void line.offsetWidth;
+        line.classList.add('confirm-pulse');
+    }
+
+    if (prev !== pendingTotal) {
+        bump(countEl);
+    }
 }
 
 // ── Main UI update ──
 function updateUI(data) {
     const ct = data.confirmed_total || 0;
-    const pt = data.pending_total || 0;
-    const jt = data.just_classified_total || 0;
-    const grandTotal = ct + pt + jt;
+    const pt = (data.pending_total || 0) + (data.just_classified_total || 0);
 
     // Hero
-    const heroTotal = $id('heroTotal');
     const heroConfirmed = $id('heroConfirmed');
-    const heroPipeline = $id('heroPipeline');
-    if (heroTotal.textContent !== String(grandTotal)) { heroTotal.textContent = grandTotal; bump(heroTotal); }
+    const heroPending = $id('heroPending');
     if (heroConfirmed.textContent !== String(ct)) { heroConfirmed.textContent = ct; bump(heroConfirmed); }
-    const pipelineCount = pt + jt;
-    if (heroPipeline.textContent !== String(pipelineCount)) { heroPipeline.textContent = pipelineCount; bump(heroPipeline); }
+    if (heroPending.textContent !== String(pt)) { heroPending.textContent = pt; bump(heroPending); }
 
-    $id('heroConfirmedBadge').textContent = 'Confirmed: ' + ct;
-    $id('heroPendingBadge').textContent = 'In Pipeline: ' + pipelineCount;
+    // Processing card
+    updateProcessing(pt);
 
-    // Window progress
-    const ws = data.window_status || {};
-    const sz = ws.size || 7;
-    const cur = ws.current_items || 0;
-    const next = ws.next_confirmation_in || sz;
-    $id('windowFill').style.width = Math.round((cur / sz) * 100) + '%';
-    $id('windowLabel').textContent = cur + ' / ' + sz + ' — next in ' + next + ' item' + (next !== 1 ? 's' : '');
-    $id('windowSize').textContent = sz;
-    $id('batchMeta').textContent = 'Smoothing window: ' + cur + ' / ' + sz;
+    // Confirmed type cards
+    updateClassCards(data.confirmed);
 
-    // Class cards (analytics style)
-    renderClassCards(data.confirmed, data.pending, data.just_classified);
-
-    // Current batch
-    renderBatch(data.pending, data.just_classified);
-
-    // Feed
-    renderFeed(data.recent_events);
-
-    // Stats
-    $id('smoothRate').textContent = ((data.smoothing_rate || 0) * 100).toFixed(1) + '%';
+    // Footer
     $id('lastUpdate').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
-    // Track previous confirmed for flash animation
+    // Track state
     prevConfirmed = Object.assign({}, data.confirmed || {});
     isFirstRender = false;
-    prevState = data;
 }
 
 // ── SSE ──
@@ -474,7 +322,7 @@ function connectSSE() {
     const es = new EventSource('/api/counts/stream');
     es.onopen = () => {
         $id('statusBadge').className = 'status-badge';
-        $id('statusText').textContent = 'Connected (live)';
+        $id('statusText').textContent = 'Connected';
     };
     es.onmessage = (e) => {
         try { updateUI(JSON.parse(e.data)); } catch(err) { console.warn('SSE parse error', err); }
@@ -489,14 +337,24 @@ function connectSSE() {
 
 // ── Init ──
 async function init() {
+    // Load bag types
     try {
         const resp = await fetch('/api/bag-types');
         if (resp.ok) {
             const types = await resp.json();
-            types.forEach(bt => { bagTypes[bt.name] = bt; });
+            types.forEach(bt => {
+                bagTypes[bt.name] = bt;
+                if (bt.name !== 'Rejected') allTypeNames.push(bt.name);
+            });
+            // Add Rejected last
+            if (bagTypes['Rejected']) allTypeNames.push('Rejected');
         }
     } catch(e) { console.warn('Failed to load bag types', e); }
 
+    // Build cards for all types
+    buildClassCards();
+
+    // Fetch initial state
     try {
         const resp = await fetch('/api/counts');
         if (resp.ok) updateUI(await resp.json());

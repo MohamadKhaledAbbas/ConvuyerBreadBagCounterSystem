@@ -135,7 +135,7 @@ def test_api_counts_endpoint():
 
 
 def test_counts_html_page():
-    """Test /counts HTML page renders with SSE code and visual elements."""
+    """Test /counts HTML page renders with SSE and simplified UX."""
     from src.endpoint.shared import init_shared_resources, cleanup_shared_resources
 
     init_shared_resources()
@@ -148,25 +148,28 @@ def test_counts_html_page():
         resp = client.get("/counts")
         assert resp.status_code == 200
         body = resp.text
-        assert "Live Pipeline Counts" in body
+        assert "Live Counts" in body
         assert "EventSource" in body
-        assert "Smoothing" in body
         assert "/api/counts/stream" in body
         assert "Confirmed" in body
-        assert "Pending" in body
-        # Analytics-style redesign elements
+        # Simplified UX elements
         assert "/api/bag-types" in body, "Should fetch bag types for thumbnails"
-        assert "Live Event Feed" in body, "Should have live event feed"
-        assert "renderClassCards" in body, "Should have analytics-style class card rendering"
-        assert "renderBatch" in body, "Should have current batch rendering"
-        assert "grayscale" in body, "Pending items should use grayscale overlay"
-        assert "feed-item" in body, "Should have feed item styling"
-        assert "hero-card" in body, "Should have hero section like analytics"
-        assert "Current Batch" in body, "Should have current batch section"
+        assert "buildClassCards" in body, "Should build all-type cards on init"
+        assert "updateClassCards" in body, "Should update confirmed counts"
+        assert "processing-card" in body, "Should have processing bridge card"
+        assert "connect-line" in body, "Should have connecting line"
+        assert "hero-card" in body, "Should have hero section"
         assert "stat-card" in body, "Should use analytics-style stat cards"
-        assert "count-breakdown" in body, "Should show per-class breakdown"
         assert "confirm-flash" in body, "Should have confirmation animation"
-        print("PASS: /counts page renders with analytics-style layout and live features")
+        assert "confirm-pulse" in body, "Should have line pulse animation"
+        # Removed elements should NOT be present
+        assert "Live Event Feed" not in body, "Should not have live events feed"
+        assert "feed-item" not in body, "Should not have feed item styling"
+        assert "Smoothing Window" not in body, "Should not show smoothing window"
+        assert "window-fill" not in body, "Should not have smoothing progress bar"
+        assert "renderBatch" not in body, "Should not have batch item rendering"
+        assert "count-breakdown" not in body, "Should not show per-class pending breakdown"
+        print("PASS: /counts page renders with simplified UX and processing bridge")
     finally:
         cleanup_shared_resources()
 
