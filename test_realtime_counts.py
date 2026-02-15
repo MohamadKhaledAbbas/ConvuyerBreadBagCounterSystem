@@ -135,7 +135,7 @@ def test_api_counts_endpoint():
 
 
 def test_counts_html_page():
-    """Test /counts HTML page renders with SSE, batch totals, current batch type, and per-class breakdown."""
+    """Test /counts HTML page renders with SSE, batch totals, processing bar, and per-class breakdown."""
     from src.endpoint.shared import init_shared_resources, cleanup_shared_resources
 
     init_shared_resources()
@@ -156,12 +156,12 @@ def test_counts_html_page():
         assert "/api/bag-types" in body, "Should fetch bag types for thumbnails"
         assert "buildClassCards" in body, "Should build all-type cards on init"
         assert "updateClassCards" in body, "Should update cards with batch counts"
-        assert "processing-card" in body, "Should have processing bridge card"
-        assert "connect-line" in body, "Should have connecting line"
+        assert "processing-bar" in body, "Should have compact processing bar"
+        assert "connect-arrow" in body, "Should have connecting arrow"
         assert "hero-card" in body, "Should have hero section"
         assert "stat-card" in body, "Should use analytics-style stat cards"
         assert "confirm-flash" in body, "Should have confirmation animation"
-        assert "confirm-pulse" in body, "Should have line pulse animation"
+        assert "confirm-pulse" in body, "Should have arrow pulse animation"
         # Current batch hero metric
         assert "Current Batch" in body, "Should show current batch total"
         assert "heroBatch" in body, "Should have batch total hero element"
@@ -171,22 +171,23 @@ def test_counts_html_page():
         assert "confirmed-part" in body, "Should show confirmed portion"
         assert "pending-part" in body, "Should show pending portion"
         assert "allPending" in body, "JS should merge pending + just_classified"
-        # Current batch type card
+        # Processing bar elements
         assert "current_batch_type" in body, "Should reference current_batch_type from data"
-        assert "batchName" in body, "Should have batch type name element"
-        assert "batchImg" in body, "Should have batch type image element"
-        assert "batchCountValue" in body, "Should have per-type count element"
-        assert "batchBreakdown" in body, "Should have per-type breakdown"
+        assert "procName" in body, "Should have batch type name element"
+        assert "procImg" in body, "Should have batch type image element"
+        assert "procCountValue" in body, "Should have per-type count element"
+        assert "procBreakdown" in body, "Should have per-type breakdown"
         assert "Now Processing" in body, "Should show 'Now Processing' label"
         assert "prevBatchType" in body, "JS should track batch type changes"
-        assert "batchIdle" in body, "Should have idle state"
-        assert "batchActive" in body, "Should have active state"
+        assert "procIdle" in body, "Should have idle state"
+        assert "procActive" in body, "Should have active state"
+        assert "updateProcessingBar" in body, "Should have processing bar updater"
         # Removed elements should NOT be present
         assert "Live Event Feed" not in body, "Should not have live events feed"
         assert "feed-item" not in body, "Should not have feed item styling"
         assert "Smoothing Window" not in body, "Should not show smoothing window"
         assert "window-fill" not in body, "Should not have smoothing progress bar"
-        print("PASS: /counts page renders with current batch type card, batch totals, and per-class breakdown")
+        print("PASS: /counts page renders with compact processing bar, batch totals, and per-class breakdown")
     finally:
         cleanup_shared_resources()
 
@@ -242,7 +243,9 @@ def test_pipeline_state_with_events():
     assert empty["recent_events"] == []
     assert "current_batch_type" in empty
     assert empty["current_batch_type"] is None
-    print("PASS: empty state includes recent_events and current_batch_type")
+    assert "last_classified_type" in empty
+    assert empty["last_classified_type"] is None
+    print("PASS: empty state includes recent_events, current_batch_type, and last_classified_type")
 
     # Round-trip with events
     fd, tf = tempfile.mkstemp(suffix=".json")
@@ -286,6 +289,79 @@ def test_sse_stream_endpoint():
     print("PASS: /api/counts/stream and /api/bag-types routes are registered")
 
 
+def test_high_confidence_outlier_smoothing():
+    """Test that a single high-confidence outlier is smoothed when batch dominance is strong."""
+    from src.tracking.BidirectionalSmoother import BidirectionalSmoother
+
+    smoother = BidirectionalSmoother(window_size=7, min_window_dominance=0.7)
+
+    # Fill window with 6 Black_Orange, then 1 Blue_Yellow with high confidence
+    # Simulates: black, black, black, blue(1.00), black, black, black
+    results = []
+    for i in range(1, 4):
+        r = smoother.add_classification(i, "Black_Orange", 0.95, 0.9, 5)
+        if r:
+            results.append(r)
+
+    # Add a high-confidence outlier
+    r = smoother.add_classification(4, "Blue_Yellow", 1.00, 1.0, 5)
+    if r:
+        results.append(r)
+
+    for i in range(5, 8):
+        r = smoother.add_classification(i, "Black_Orange", 0.95, 0.9, 5)
+        if r:
+            results.append(r)
+
+    # The first confirmed item (index 0) should be Black_Orange
+    assert len(results) >= 1, "Should have at least one confirmed result"
+    assert results[0].class_name == "Black_Orange", \
+        f"First confirmed should be Black_Orange, got {results[0].class_name}"
+
+    # Flush remaining to check if the blue outlier (track 4) was smoothed
+    flushed = smoother.flush_remaining()
+    all_records = results + flushed
+
+    # Find the record for track_id=4 (the blue outlier)
+    track4 = [r for r in all_records if r.track_id == 4]
+    assert len(track4) == 1, "Should have exactly one record for track 4"
+    assert track4[0].class_name == "Black_Orange", \
+        f"High-confidence outlier should be smoothed to Black_Orange, got {track4[0].class_name}"
+    assert track4[0].smoothed is True, "Outlier should be marked as smoothed"
+    assert track4[0].original_class == "Blue_Yellow", "Original class should be preserved"
+    print("PASS: high-confidence single outlier is smoothed when batch dominance is strong")
+
+
+def test_smoother_get_dominant_class():
+    """Test BidirectionalSmoother.get_dominant_class() returns the majority class."""
+    from src.tracking.BidirectionalSmoother import BidirectionalSmoother
+
+    smoother = BidirectionalSmoother(window_size=7)
+
+    # Empty window
+    assert smoother.get_dominant_class() is None
+    print("PASS: get_dominant_class returns None for empty window")
+
+    # Add items
+    smoother.add_classification(1, "Red_Yellow", 0.95, 0.9, 5)
+    smoother.add_classification(2, "Red_Yellow", 0.90, 0.8, 4)
+    smoother.add_classification(3, "Blue_Yellow", 0.85, 0.7, 3)
+
+    dominant = smoother.get_dominant_class()
+    assert dominant == "Red_Yellow", f"Dominant should be Red_Yellow, got {dominant}"
+    print("PASS: get_dominant_class returns correct majority class")
+
+    # Rejected items should be excluded
+    smoother2 = BidirectionalSmoother(window_size=7)
+    smoother2.add_classification(1, "Rejected", 0.10, 0.1, 0)
+    smoother2.add_classification(2, "Rejected", 0.10, 0.1, 0)
+    smoother2.add_classification(3, "Green_Yellow", 0.85, 0.7, 3)
+
+    dominant2 = smoother2.get_dominant_class()
+    assert dominant2 == "Green_Yellow", f"Dominant should be Green_Yellow (Rejected excluded), got {dominant2}"
+    print("PASS: get_dominant_class excludes Rejected class")
+
+
 if __name__ == "__main__":
     test_pipeline_state_module()
     test_smoother_pending_summary()
@@ -294,4 +370,6 @@ if __name__ == "__main__":
     test_api_bag_types_endpoint()
     test_pipeline_state_with_events()
     test_sse_stream_endpoint()
+    test_high_confidence_outlier_smoothing()
+    test_smoother_get_dominant_class()
     print("\n=== All tests PASSED ===")

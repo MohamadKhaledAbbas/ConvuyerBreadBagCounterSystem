@@ -20,9 +20,10 @@ import os
 import signal
 import threading
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, Dict, Callable
+from typing import Optional, Dict, Callable, List
 
 import cv2
 import numpy as np
@@ -228,8 +229,12 @@ class ConveyorCounterApp:
         self._last_tracks = []
         self._last_debug_info = {}
 
-        # Current batch type tracking (most recent classified type)
+        # Current batch type tracking (stable: based on rolling window majority)
         self._current_batch_type: Optional[str] = None
+        self._batch_type_window: List[str] = []
+        self._batch_type_window_size: int = 7
+        # Last individual classification (may flicker; used for fine-grained display)
+        self._last_classified_type: Optional[str] = None
 
         # Memory monitoring
         self._last_memory_log_time: float = 0.0
@@ -503,11 +508,22 @@ class ConveyorCounterApp:
         self.state.last_classification = f"T{track_id}:{class_name}({confidence:.2f})"
         self.state.add_event(f"CLASSIFY T{track_id}->{class_name} ({confidence:.2f}) rois={non_rejected_rois}")
 
-        # Track current batch type for real-time UI
-        self._current_batch_type = class_name
+        # Track last individual classification
+        self._last_classified_type = class_name
+
+        # Stable batch type from rolling window majority
+        # Only reliable, non-Rejected classifications inform the batch type
+        # so a single misclassification doesn't cause the display to flicker.
+        min_trusted_rois = 3
+        if non_rejected_rois >= min_trusted_rois and class_name != 'Rejected':
+            self._batch_type_window.append(class_name)
+            if len(self._batch_type_window) > self._batch_type_window_size:
+                self._batch_type_window.pop(0)
+            counter = Counter(self._batch_type_window)
+            dominant, _ = counter.most_common(1)[0]
+            self._current_batch_type = dominant
 
         # Check if classification is reliable (needs >= 3 non-rejected ROIs)
-        min_trusted_rois = 3
         original_class = class_name
 
         if non_rejected_rois < min_trusted_rois and class_name != 'Rejected':
@@ -726,7 +742,8 @@ class ConveyorCounterApp:
                     "next_confirmation_in": next_confirmation_in
                 },
                 "recent_events": recent_events,
-                "current_batch_type": self._current_batch_type
+                "current_batch_type": self._current_batch_type,
+                "last_classified_type": self._last_classified_type
             }
             write_pipeline_state(state)
         except Exception as e:

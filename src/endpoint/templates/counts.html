@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Live Counts — Conveyor Counter</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/analytics.css?v=6">
+    <link rel="stylesheet" href="/static/css/analytics.css?v=7">
     <style>
         /* ── Overrides on analytics.css ── */
         main { padding-top: 1.5rem; }
@@ -26,116 +26,92 @@
         /* Section label */
         .section-label { font-size:.8rem; font-weight:700; text-transform:uppercase; letter-spacing:.1em; color:var(--text-muted); margin-bottom:12px; display:flex; align-items:center; gap:8px }
 
-        /* ── Processing card (now shows current batch type) ── */
-        .processing-section { margin: 2rem 0 0; display:flex; flex-direction:column; align-items:center; gap:0 }
-
-        .processing-card {
-            background: rgba(30,41,59,.6);
-            border: 1px dashed rgba(148,163,184,.3);
+        /* ── Now-processing bar ── */
+        .processing-bar {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            background: rgba(30,41,59,.55);
+            border: 1px dashed rgba(148,163,184,.25);
             border-radius: var(--radius-lg);
-            padding: 1.5rem 2rem;
-            text-align: center;
-            position: relative;
+            padding: 12px 20px;
+            margin: 1.2rem 0 1.8rem;
             transition: all .4s ease;
-            min-width: 280px;
-            max-width: 380px;
+            min-height: 60px;
         }
-        .processing-card.has-items {
-            border-color: rgba(56,189,248,.4);
-            background: rgba(30,41,59,.75);
+        .processing-bar.active {
+            border-color: rgba(56,189,248,.35);
+            background: rgba(30,41,59,.7);
         }
 
-        /* Current batch type header */
-        .batch-header { display:flex; align-items:center; gap:12px; margin-bottom:.75rem; justify-content:center }
-        .batch-thumb {
-            width: 56px; height: 56px;
-            border-radius: var(--radius-lg);
+        .proc-thumb {
+            width: 44px; height: 44px;
+            border-radius: 10px;
             overflow: hidden;
             border: 2px solid rgba(148,163,184,.2);
-            transition: border-color .4s;
             flex-shrink: 0;
+            transition: border-color .4s;
         }
-        .processing-card.has-items .batch-thumb { border-color: rgba(56,189,248,.4) }
-        .batch-thumb img { width:100%; height:100%; object-fit:cover; }
-        .batch-thumb.placeholder { display:flex; align-items:center; justify-content:center; background:rgba(30,41,59,.5); font-size:1.5rem }
-        .batch-name { font-size:.9rem; font-weight:700; color:var(--text-primary); transition:color .3s }
-        .batch-sublabel { font-size:.72rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:.06em; font-weight:600 }
+        .processing-bar.active .proc-thumb { border-color: rgba(56,189,248,.35) }
+        .proc-thumb img { width:100%; height:100%; object-fit:cover; }
 
-        /* Batch count display */
-        .batch-count-row { display:flex; align-items:baseline; justify-content:center; gap:6px; margin:.5rem 0 }
-        .batch-count-value {
-            font-size: 2.8rem;
+        .proc-info { flex:1; min-width:0 }
+        .proc-label { font-size:.68rem; text-transform:uppercase; letter-spacing:.08em; font-weight:700; color:var(--text-muted); line-height:1 }
+        .proc-name { font-size:1rem; font-weight:700; color:var(--text-primary); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+
+        .proc-count-block { text-align:right; flex-shrink:0 }
+        .proc-count-value {
+            font-size: 2rem;
             font-weight: 800;
             color: var(--text-muted);
-            transition: color .3s;
             font-variant-numeric: tabular-nums;
             line-height: 1;
+            transition: color .3s;
         }
-        .processing-card.has-items .batch-count-value { color: #e2e8f0; }
-        .batch-count-unit { font-size:.8rem; color:var(--text-muted); font-weight:600 }
+        .processing-bar.active .proc-count-value { color: #e2e8f0 }
+        .proc-count-unit { font-size:.7rem; color:var(--text-muted); font-weight:600; display:block; text-align:right }
 
-        .batch-breakdown { font-size:.72rem; color:var(--text-muted); margin-top:4px; font-variant-numeric:tabular-nums; display:flex; gap:8px; justify-content:center }
-        .batch-breakdown .confirmed-part { color:rgba(45,212,191,.7) }
-        .batch-breakdown .pending-part { color:rgba(56,189,248,.7) }
+        .proc-breakdown { font-size:.68rem; color:var(--text-muted); font-variant-numeric:tabular-nums; display:flex; gap:8px; justify-content:flex-end; margin-top:2px }
+        .proc-breakdown .confirmed-part { color:rgba(45,212,191,.7) }
+        .proc-breakdown .pending-part { color:rgba(56,189,248,.7) }
 
-        .processing-status { display:flex; align-items:center; justify-content:center; gap:6px; margin-top:.5rem; font-size:.75rem; color:var(--text-muted); font-weight:600; text-transform:uppercase; letter-spacing:.06em }
+        .proc-status { display:flex; align-items:center; gap:6px; flex-shrink:0 }
 
         /* Idle state */
-        .processing-card .idle-state { color:var(--text-muted); font-size:.85rem }
-        .processing-card .idle-state .idle-icon { font-size:2rem; margin-bottom:.4rem }
+        .proc-idle { color:var(--text-muted); font-size:.82rem; display:flex; align-items:center; gap:8px }
 
-        /* Spinner for processing */
+        /* Spinner */
         .spinner {
             display: inline-block;
-            width: 20px; height: 20px;
+            width: 18px; height: 18px;
             border: 2.5px solid rgba(148,163,184,.2);
             border-top-color: #38bdf8;
             border-radius: 50%;
             animation: spin 1s linear infinite;
-            vertical-align: middle;
-            margin-left: 6px;
+            flex-shrink: 0;
         }
+        .spinner.sm { width:14px; height:14px; border-width:2px }
         .spinner.hidden { display:none }
         @keyframes spin { to { transform:rotate(360deg) } }
 
-        /* Connecting line */
-        .connect-line {
-            width: 2px;
-            height: 40px;
-            background: rgba(148,163,184,.15);
-            position: relative;
-            transition: background .4s;
+        /* ── Connecting arrow ── */
+        .connect-arrow {
+            display: flex;
+            justify-content: center;
+            margin: -6px 0 8px;
+            color: rgba(148,163,184,.25);
+            font-size: 1rem;
+            transition: color .4s;
         }
-        .connect-line.active { background: rgba(56,189,248,.35) }
-        .connect-line .line-dot {
-            position: absolute;
-            width: 8px; height: 8px;
-            border-radius: 50%;
-            background: #38bdf8;
-            left: 50%; top: 0;
-            transform: translateX(-50%);
-            opacity: 0;
-            transition: opacity .3s;
-        }
-        .connect-line.active .line-dot {
-            opacity: 1;
-            animation: flowDown 1.2s ease-in-out infinite;
-        }
-        @keyframes flowDown {
-            0% { top:0; opacity:0 }
-            30% { opacity:1 }
-            70% { opacity:1 }
-            100% { top:calc(100% - 8px); opacity:0 }
-        }
+        .connect-arrow.active { color: rgba(56,189,248,.4) }
 
-        /* Confirmed transition flash on line */
-        @keyframes confirmPulse {
-            0% { background: rgba(45,212,191,.6); box-shadow: 0 0 12px rgba(45,212,191,.4) }
-            100% { background: rgba(148,163,184,.15); box-shadow: none }
+        @keyframes confirmArrowPulse {
+            0% { color: rgba(45,212,191,.7) }
+            100% { color: rgba(148,163,184,.25) }
         }
-        .connect-line.confirm-pulse { animation: confirmPulse .8s ease; width: 3px }
+        .connect-arrow.confirm-pulse { animation: confirmArrowPulse .8s ease }
 
-        /* Card confirmed count */
+        /* Card metric */
         .card-metric-large { font-variant-numeric: tabular-nums; }
 
         /* Card batch sub-info */
@@ -186,39 +162,37 @@
         </div>
     </section>
 
-    <!-- Processing bridge — shows current batch type -->
-    <div class="processing-section">
-        <div class="processing-card" id="processingCard">
-            <!-- Idle state (no batch yet) -->
-            <div id="batchIdle" class="idle-state">
-                <div class="idle-icon">📦</div>
-                <div>Waiting for classifications…</div>
-            </div>
-            <!-- Active batch state -->
-            <div id="batchActive" style="display:none">
-                <div class="batch-sublabel">Now Processing</div>
-                <div class="batch-header">
-                    <div class="batch-thumb" id="batchThumb">
-                        <img id="batchImg" src="" alt="Current batch type">
-                    </div>
-                    <div>
-                        <div class="batch-name" id="batchName">—</div>
-                    </div>
+    <!-- Now Processing bar — compact horizontal rectangle -->
+    <div class="processing-bar" id="processingBar">
+        <!-- Idle state -->
+        <div id="procIdle" class="proc-idle">
+            <span>📦</span>
+            <span>Waiting for classifications…</span>
+        </div>
+        <!-- Active state (hidden by default) -->
+        <div id="procActive" style="display:none;width:100%">
+            <div style="display:flex;align-items:center;gap:16px;width:100%">
+                <div class="proc-thumb" id="procThumb">
+                    <img id="procImg" src="" alt="Current batch type">
                 </div>
-                <div class="batch-count-row">
-                    <span class="batch-count-value" id="batchCountValue">0</span>
-                    <span class="batch-count-unit">bags</span>
+                <div class="proc-info">
+                    <div class="proc-label">Now Processing</div>
+                    <div class="proc-name" id="procName">—</div>
+                </div>
+                <div class="proc-count-block">
+                    <span class="proc-count-value" id="procCountValue">0</span>
+                    <span class="proc-count-unit">bags</span>
+                    <div class="proc-breakdown" id="procBreakdown"></div>
+                </div>
+                <div class="proc-status">
                     <span class="spinner hidden" id="procSpinner"></span>
-                </div>
-                <div class="batch-breakdown" id="batchBreakdown"></div>
-                <div class="processing-status" id="batchStatus">
-                    <span class="spinner hidden" id="statusSpinner"></span>
-                    <span id="statusLabel">Processing</span>
                 </div>
             </div>
         </div>
-        <div class="connect-line" id="connectLine"><div class="line-dot"></div></div>
     </div>
+
+    <!-- Connecting arrow -->
+    <div class="connect-arrow" id="connectArrow">▼</div>
 
     <!-- Confirmed class cards — all types, analytics-style -->
     <div class="section-label">Counts by Type</div>
@@ -327,86 +301,76 @@ function updateClassCards(confirmed, pending) {
     });
 }
 
-// ── Update processing card (shows current batch type) ──
+// ── Update processing bar ──
 let prevBatchType = null;
 
-function updateProcessing(data, allPending) {
-    const card = $id('processingCard');
-    const idleEl = $id('batchIdle');
-    const activeEl = $id('batchActive');
-    const line = $id('connectLine');
+function updateProcessingBar(data, allPending) {
+    const bar = $id('processingBar');
+    const idleEl = $id('procIdle');
+    const activeEl = $id('procActive');
+    const arrow = $id('connectArrow');
     const pendingTotal = (data.pending_total || 0) + (data.just_classified_total || 0);
     const batchType = data.current_batch_type;
 
     if (!batchType) {
-        // No batch yet
         idleEl.style.display = '';
         activeEl.style.display = 'none';
-        card.classList.remove('has-items');
-        line.classList.remove('active');
+        bar.classList.remove('active');
+        arrow.classList.remove('active');
         return;
     }
 
-    // Show active batch
+    // Show active state
     idleEl.style.display = 'none';
     activeEl.style.display = '';
 
     // Batch type changed?
     if (prevBatchType !== batchType) {
-        $id('batchName').textContent = batchType;
-        $id('batchImg').src = thumbUrl(batchType);
-        $id('batchImg').alt = batchType;
-        if (prevBatchType && !isFirstRender) {
-            // Animate batch switch
-            confirmFlash(card);
-        }
+        $id('procName').textContent = batchType;
+        $id('procImg').src = thumbUrl(batchType);
+        $id('procImg').alt = batchType;
+        if (prevBatchType && !isFirstRender) confirmFlash(bar);
         prevBatchType = batchType;
     }
 
     // Count for this type: confirmed + pending
     const conf = (data.confirmed || {})[batchType] || 0;
     const pend = (allPending || {})[batchType] || 0;
-    const batchTypeCount = conf + pend;
+    const typeCount = conf + pend;
 
-    const countEl = $id('batchCountValue');
+    const countEl = $id('procCountValue');
     const prev = parseInt(countEl.textContent) || 0;
-    if (prev !== batchTypeCount) {
-        countEl.textContent = batchTypeCount;
+    if (prev !== typeCount) {
+        countEl.textContent = typeCount;
         if (!isFirstRender) bump(countEl);
     }
 
     // Breakdown
-    const breakdownEl = $id('batchBreakdown');
+    const breakdownEl = $id('procBreakdown');
     if (pend > 0) {
-        breakdownEl.innerHTML = '<span class="confirmed-part">✓ ' + conf + ' confirmed</span>' +
-                                '<span class="pending-part">⏳ +' + pend + ' pending</span>';
+        breakdownEl.innerHTML = '<span class="confirmed-part">✓ ' + conf + '</span>' +
+                                '<span class="pending-part">⏳ +' + pend + '</span>';
     } else {
-        breakdownEl.innerHTML = '<span class="confirmed-part">✓ ' + conf + ' confirmed</span>';
+        breakdownEl.innerHTML = '<span class="confirmed-part">✓ ' + conf + '</span>';
     }
 
-    // Processing state
+    // Spinner + arrow active state
     const spinner = $id('procSpinner');
-    const statusSpinner = $id('statusSpinner');
-    const statusLabel = $id('statusLabel');
     if (pendingTotal > 0) {
-        card.classList.add('has-items');
+        bar.classList.add('active');
         spinner.classList.remove('hidden');
-        statusSpinner.classList.remove('hidden');
-        statusLabel.textContent = pendingTotal + ' bag' + (pendingTotal > 1 ? 's' : '') + ' in pipeline';
-        line.classList.add('active');
+        arrow.classList.add('active');
     } else {
-        card.classList.remove('has-items');
+        bar.classList.remove('active');
         spinner.classList.add('hidden');
-        statusSpinner.classList.add('hidden');
-        statusLabel.textContent = 'Idle';
-        line.classList.remove('active');
+        arrow.classList.remove('active');
     }
 
-    // Pulse line on confirmations
-    if (!isFirstRender && prev > 0 && batchTypeCount > prev) {
-        line.classList.remove('confirm-pulse');
-        void line.offsetWidth;
-        line.classList.add('confirm-pulse');
+    // Pulse arrow on confirmations
+    if (!isFirstRender && prev > 0 && typeCount > prev) {
+        arrow.classList.remove('confirm-pulse');
+        void arrow.offsetWidth;
+        arrow.classList.add('confirm-pulse');
     }
 }
 
@@ -420,19 +384,19 @@ function updateUI(data) {
     const heroBatch = $id('heroBatch');
     const heroConfirmed = $id('heroConfirmed');
     const heroPending = $id('heroPending');
-    if (heroBatch.textContent !== String(batchTotal)) { heroBatch.textContent = batchTotal; bump(heroBatch); }
-    if (heroConfirmed.textContent !== String(ct)) { heroConfirmed.textContent = ct; bump(heroConfirmed); }
-    if (heroPending.textContent !== String(pt)) { heroPending.textContent = pt; bump(heroPending); }
+    if (heroBatch.textContent !== String(batchTotal)) { heroBatch.textContent = batchTotal; if (!isFirstRender) bump(heroBatch); }
+    if (heroConfirmed.textContent !== String(ct)) { heroConfirmed.textContent = ct; if (!isFirstRender) bump(heroConfirmed); }
+    if (heroPending.textContent !== String(pt)) { heroPending.textContent = pt; if (!isFirstRender) bump(heroPending); }
 
     // Merge pending + just_classified for per-class pending counts
     const allPending = {};
     for (const [cls, n] of Object.entries(data.pending || {})) { allPending[cls] = (allPending[cls] || 0) + n; }
     for (const [cls, n] of Object.entries(data.just_classified || {})) { allPending[cls] = (allPending[cls] || 0) + n; }
 
-    // Processing card (current batch type)
-    updateProcessing(data, allPending);
+    // Processing bar
+    updateProcessingBar(data, allPending);
 
-    // Confirmed type cards (with batch = confirmed + pending)
+    // Confirmed type cards
     updateClassCards(data.confirmed, allPending);
 
     // Footer
@@ -472,12 +436,10 @@ async function init() {
                 bagTypes[bt.name] = bt;
                 if (bt.name !== 'Rejected') allTypeNames.push(bt.name);
             });
-            // Add Rejected last
             if (bagTypes['Rejected']) allTypeNames.push('Rejected');
         }
     } catch(e) { console.warn('Failed to load bag types', e); }
 
-    // Build cards for all types
     buildClassCards();
 
     // Fetch initial state
