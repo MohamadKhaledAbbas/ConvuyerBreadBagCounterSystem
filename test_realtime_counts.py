@@ -150,19 +150,23 @@ def test_counts_html_page():
         body = resp.text
         assert "Live Pipeline Counts" in body
         assert "EventSource" in body
-        assert "Smoothing Window" in body
+        assert "Smoothing" in body
         assert "/api/counts/stream" in body
         assert "Confirmed" in body
         assert "Pending" in body
-        assert "Just Classified" in body
-        # New: verify visual enhancements
+        # Analytics-style redesign elements
         assert "/api/bag-types" in body, "Should fetch bag types for thumbnails"
         assert "Live Event Feed" in body, "Should have live event feed"
-        assert "renderConfirmed" in body, "Should have card rendering for confirmed"
-        assert "renderPending" in body, "Should have card rendering for pending"
+        assert "renderClassCards" in body, "Should have analytics-style class card rendering"
+        assert "renderBatch" in body, "Should have current batch rendering"
         assert "grayscale" in body, "Pending items should use grayscale overlay"
         assert "feed-item" in body, "Should have feed item styling"
-        print("PASS: /counts page renders with SSE, thumbnails, and live feed")
+        assert "hero-card" in body, "Should have hero section like analytics"
+        assert "Current Batch" in body, "Should have current batch section"
+        assert "stat-card" in body, "Should use analytics-style stat cards"
+        assert "count-breakdown" in body, "Should show per-class breakdown"
+        assert "confirm-flash" in body, "Should have confirmation animation"
+        print("PASS: /counts page renders with analytics-style layout and live features")
     finally:
         cleanup_shared_resources()
 

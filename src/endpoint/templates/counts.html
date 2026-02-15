@@ -5,136 +5,112 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Live Counts — Conveyor Counter</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/analytics.css?v=5">
     <style>
-        :root {
-            --bg-deep: #0f172a;
-            --glass-bg: rgba(30, 41, 59, 0.7);
-            --glass-border: rgba(255,255,255,0.08);
-            --glass-hover: rgba(30, 41, 59, 0.9);
-            --text-primary: #f8fafc;
-            --text-secondary: #94a3b8;
-            --text-muted: #64748b;
-            --accent: #38bdf8;
-            --green: #2dd4bf;
-            --green-glow: rgba(45,212,191,0.15);
-            --amber: #fbbf24;
-            --amber-glow: rgba(251,191,36,0.12);
-            --red: #f87171;
-            --radius: 16px;
-            --radius-sm: 10px;
-        }
-        *{margin:0;padding:0;box-sizing:border-box}
-        body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:var(--bg-deep);color:var(--text-primary);min-height:100vh}
-        .container{max-width:1300px;margin:0 auto;padding:24px 20px 48px}
+        /* ── Overrides & additions on top of analytics.css ── */
+        main { padding-top: 1.5rem; }
 
-        /* Header */
-        .page-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:12px}
-        .page-header h1{font-size:1.5rem;font-weight:700;display:flex;align-items:center;gap:8px}
-        .status-badge{display:inline-flex;align-items:center;gap:6px;padding:5px 14px;border-radius:20px;font-size:.78rem;font-weight:600;background:rgba(45,212,191,.12);color:var(--green);border:1px solid rgba(45,212,191,.25)}
-        .status-badge .dot{width:8px;height:8px;border-radius:50%;background:var(--green);animation:pulse 2s infinite}
-        .status-badge.disconnected{background:rgba(248,113,113,.12);color:var(--red);border-color:rgba(248,113,113,.25)}
-        .status-badge.disconnected .dot{background:var(--red);animation:none}
-        @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+        /* Page header with live badge */
+        .page-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1.5rem; flex-wrap:wrap; gap:12px }
+        .page-header h1 { font-size:1.5rem; font-weight:700; color:var(--text-primary); margin:0 }
+        .status-badge { display:inline-flex; align-items:center; gap:6px; padding:5px 14px; border-radius:20px; font-size:.78rem; font-weight:600; background:rgba(45,212,191,.12); color:#2dd4bf; border:1px solid rgba(45,212,191,.25) }
+        .status-badge .dot { width:8px; height:8px; border-radius:50%; background:#2dd4bf; animation:pulse 2s infinite }
+        .status-badge.disconnected { background:rgba(248,113,113,.12); color:#f87171; border-color:rgba(248,113,113,.25) }
+        .status-badge.disconnected .dot { background:#f87171; animation:none }
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
 
-        /* Pipeline bar */
-        .pipeline-bar{display:flex;align-items:stretch;background:var(--glass-bg);border:1px solid var(--glass-border);border-radius:var(--radius);overflow:hidden;margin-bottom:24px}
-        .pipe-stage{flex:1;text-align:center;padding:16px 12px;position:relative;transition:background .3s}
-        .pipe-stage:not(:last-child)::after{content:'';position:absolute;right:0;top:20%;height:60%;width:1px;background:var(--glass-border)}
-        .pipe-stage:hover{background:rgba(255,255,255,.03)}
-        .pipe-label{font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:var(--text-muted);margin-bottom:4px;font-weight:600}
-        .pipe-count{font-size:1.6rem;font-weight:800;transition:color .3s}
-        .pipe-stage.classified .pipe-count{color:var(--amber)}
-        .pipe-stage.pending .pipe-count{color:var(--accent)}
-        .pipe-stage.confirmed .pipe-count{color:var(--green)}
-        .pipe-arrow{display:flex;align-items:center;color:var(--text-muted);font-size:1.1rem;padding:0 2px;flex-shrink:0}
+        /* Hero card additions for live counts */
+        .hero-card { grid-template-columns: 1fr 1fr 1fr; }
+        @media(max-width:768px) { .hero-card { grid-template-columns:1fr; } }
 
-        /* Window progress */
-        .window-bar{margin-bottom:28px;padding:12px 20px;background:var(--glass-bg);border:1px solid var(--glass-border);border-radius:var(--radius-sm)}
-        .window-meta{display:flex;justify-content:space-between;font-size:.8rem;margin-bottom:6px}
-        .window-meta .label{color:var(--text-muted)}
-        .window-meta .value{color:var(--accent);font-weight:700}
-        .window-track{height:6px;background:rgba(255,255,255,.06);border-radius:3px;overflow:hidden}
-        .window-fill{height:100%;background:linear-gradient(90deg,var(--accent),var(--green));border-radius:3px;transition:width .5s ease}
+        /* Stacked bar inside class cards */
+        .count-bar { display:flex; height:8px; border-radius:4px; overflow:hidden; margin:0.6rem 0 0.3rem; background:rgba(255,255,255,.06) }
+        .count-bar .seg-confirmed { background:#2dd4bf; transition:width .5s ease }
+        .count-bar .seg-pending { background:#38bdf8; transition:width .5s ease }
+        .count-bar .seg-classified { background:#fbbf24; transition:width .5s ease }
 
-        /* Two-column layout */
-        .main-grid{display:grid;grid-template-columns:1fr 380px;gap:24px;align-items:start}
-        @media(max-width:960px){.main-grid{grid-template-columns:1fr}}
+        .count-breakdown { display:flex; gap:0.75rem; margin:0.6rem 0 0.2rem; padding:0.6rem; background:rgba(15,23,42,.4); border-radius:var(--radius-md); justify-content:space-around }
+        .cb-item { display:flex; flex-direction:column; align-items:center; gap:0.15rem }
+        .cb-label { font-size:.6rem; font-weight:700; text-transform:uppercase; letter-spacing:.08em; opacity:.85 }
+        .cb-value { font-size:1.2rem; font-weight:700 }
+        .cb-item.confirmed .cb-label, .cb-item.confirmed .cb-value { color:#2dd4bf }
+        .cb-item.pending .cb-label, .cb-item.pending .cb-value { color:#38bdf8 }
+        .cb-item.classified .cb-label, .cb-item.classified .cb-value { color:#fbbf24 }
 
-        /* Section titles */
-        .section-title{font-size:.85rem;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--text-muted);margin-bottom:14px;display:flex;align-items:center;gap:8px}
+        /* Current batch section */
+        .batch-section { margin-top:2rem }
+        .batch-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem; flex-wrap:wrap; gap:0.5rem }
+        .batch-title { font-size:1.2rem; font-weight:700; color:var(--text-primary); display:flex; align-items:center; gap:0.5rem }
+        .batch-title .live-dot { width:10px; height:10px; border-radius:50%; background:#2dd4bf; display:inline-block; animation:pulse 1.5s infinite }
+        .batch-meta { font-size:.85rem; color:var(--text-secondary) }
 
-        /* ===== Confirmed Class Cards ===== */
-        .class-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px;margin-bottom:28px}
-        .class-card{background:var(--glass-bg);border:1px solid var(--glass-border);border-radius:var(--radius);padding:14px;display:flex;flex-direction:column;align-items:center;transition:all .25s;position:relative;overflow:hidden}
-        .class-card:hover{border-color:var(--green);transform:translateY(-3px);box-shadow:0 8px 24px rgba(0,0,0,.3)}
-        .class-card .thumb{width:80px;height:80px;border-radius:12px;overflow:hidden;border:2px solid var(--green);margin-bottom:10px;flex-shrink:0;position:relative;background:#1e293b}
-        .class-card .thumb img{width:100%;height:100%;object-fit:cover}
-        .class-card .name{font-size:.82rem;color:var(--text-secondary);margin-bottom:6px;text-align:center;font-weight:500}
-        .class-card .count-value{font-size:1.8rem;font-weight:800;color:var(--green)}
-        .class-card .confirmed-badge{position:absolute;top:8px;right:8px;background:rgba(45,212,191,.2);color:var(--green);font-size:.6rem;font-weight:700;padding:2px 8px;border-radius:10px;text-transform:uppercase;letter-spacing:.05em}
+        /* Window progress (inside batch) */
+        .window-bar { margin-bottom:1rem; padding:12px 20px; background:var(--glass-bg); border:1px solid var(--glass-border); border-radius:var(--radius-md) }
+        .window-meta { display:flex; justify-content:space-between; font-size:.8rem; margin-bottom:6px }
+        .window-meta .wlabel { color:var(--text-muted) }
+        .window-meta .wvalue { color:#38bdf8; font-weight:700 }
+        .window-track { height:6px; background:rgba(255,255,255,.06); border-radius:3px; overflow:hidden }
+        .window-fill { height:100%; background:linear-gradient(90deg,#38bdf8,#2dd4bf); border-radius:3px; transition:width .5s ease }
 
-        /* ===== Pending Class Cards ===== */
-        .pending-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:28px}
-        .pending-card{background:var(--glass-bg);border:1px solid rgba(56,189,248,.2);border-radius:var(--radius-sm);padding:12px;display:flex;align-items:center;gap:12px;transition:all .25s}
-        .pending-card:hover{border-color:var(--accent)}
-        .pending-card .thumb{width:48px;height:48px;border-radius:10px;overflow:hidden;border:2px solid rgba(56,189,248,.3);flex-shrink:0;position:relative;background:#1e293b}
-        .pending-card .thumb img{width:100%;height:100%;object-fit:cover;filter:grayscale(60%) brightness(.7);transition:filter .3s}
-        .pending-card:hover .thumb img{filter:grayscale(30%) brightness(.85)}
-        .pending-card .thumb::after{content:'⏳';position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:1rem;background:rgba(15,23,42,.45)}
-        .pending-card .info{flex:1;min-width:0}
-        .pending-card .name{font-size:.78rem;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        .pending-card .count-value{font-size:1.15rem;font-weight:700;color:var(--accent)}
+        /* Batch item cards */
+        .batch-grid { display:flex; flex-direction:column; gap:0.8rem }
+        .batch-item { display:flex; align-items:center; gap:1rem; padding:1rem 1.25rem; background:var(--glass-bg); border:1px solid var(--glass-border); border-radius:var(--radius-md); transition:all .3s }
+        .batch-item:hover { border-color:#38bdf8; background:rgba(30,41,59,.9) }
+        .batch-item .b-thumb { width:52px; height:52px; border-radius:var(--radius-md); overflow:hidden; flex-shrink:0; position:relative; background:#0f172a }
+        .batch-item .b-thumb img { width:100%; height:100%; object-fit:cover }
+        .batch-item.is-pending .b-thumb img { filter:grayscale(50%) brightness(.75) }
+        .batch-item.is-pending .b-thumb::after { content:'⏳'; position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:1.1rem; background:rgba(15,23,42,.4) }
+        .batch-item .b-info { flex:1; min-width:0 }
+        .batch-item .b-name { font-size:.95rem; font-weight:600; color:var(--text-primary) }
+        .batch-item .b-status { font-size:.75rem; margin-top:2px }
+        .batch-item.is-confirmed .b-thumb { border:2px solid #2dd4bf }
+        .batch-item.is-confirmed .b-status { color:#2dd4bf }
+        .batch-item.is-pending .b-thumb { border:2px solid rgba(56,189,248,.4) }
+        .batch-item.is-pending .b-status { color:#38bdf8 }
+        .batch-item .b-count { font-size:1.3rem; font-weight:700; flex-shrink:0 }
+        .batch-item.is-confirmed .b-count { color:#2dd4bf }
+        .batch-item.is-pending .b-count { color:#38bdf8 }
 
-        /* Classified (tentative) section */
-        .classified-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:28px}
-        .classified-card{background:var(--glass-bg);border:1px solid rgba(251,191,36,.15);border-radius:var(--radius-sm);padding:12px;display:flex;align-items:center;gap:12px;transition:all .25s}
-        .classified-card:hover{border-color:var(--amber)}
-        .classified-card .thumb{width:48px;height:48px;border-radius:10px;overflow:hidden;border:2px solid rgba(251,191,36,.25);flex-shrink:0;position:relative;background:#1e293b}
-        .classified-card .thumb img{width:100%;height:100%;object-fit:cover;filter:grayscale(80%) brightness(.55);transition:filter .3s}
-        .classified-card:hover .thumb img{filter:grayscale(50%) brightness(.7)}
-        .classified-card .thumb::after{content:'⚡';position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:1rem;background:rgba(15,23,42,.5)}
-        .classified-card .info{flex:1;min-width:0}
-        .classified-card .name{font-size:.78rem;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        .classified-card .count-value{font-size:1.15rem;font-weight:700;color:var(--amber)}
+        /* Live feed panel */
+        .feed-panel { background:var(--glass-bg); border:1px solid var(--glass-border); border-radius:var(--radius-lg); padding:1.25rem; max-height:500px; display:flex; flex-direction:column; margin-top:2rem }
+        .feed-scroll { flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:6px; padding-right:4px }
+        .feed-scroll::-webkit-scrollbar { width:4px }
+        .feed-scroll::-webkit-scrollbar-thumb { background:#38bdf8; border-radius:2px }
+        .feed-item { padding:10px 12px; border-radius:var(--radius-md); background:rgba(15,23,42,.5); border-left:3px solid var(--text-muted); font-size:.78rem; line-height:1.5; animation:feedIn .3s ease; display:flex; gap:10px; align-items:flex-start }
+        .feed-item.confirmed { border-left-color:#2dd4bf; background:rgba(45,212,191,.06) }
+        .feed-item.tentative { border-left-color:#fbbf24; background:rgba(251,191,36,.05) }
+        .feed-item.smoothed { border-left-color:#a78bfa; background:rgba(167,139,250,.06) }
+        .feed-item.rejected { border-left-color:#f87171; background:rgba(248,113,113,.05) }
+        .feed-time { color:var(--text-muted); font-variant-numeric:tabular-nums; white-space:nowrap; font-size:.72rem; margin-top:1px }
+        .feed-msg { color:var(--text-secondary); word-break:break-word; flex:1 }
+        .feed-msg strong { color:var(--text-primary); font-weight:600 }
+        @keyframes feedIn { from{opacity:0;transform:translateY(-6px)} to{opacity:1;transform:translateY(0)} }
 
-        /* Empty state */
-        .empty{color:var(--text-muted);font-size:.85rem;padding:16px 0;font-style:italic}
+        /* Two-column for batch + feed */
+        .bottom-grid { display:grid; grid-template-columns:1fr 380px; gap:1.5rem; align-items:start }
+        @media(max-width:960px) { .bottom-grid { grid-template-columns:1fr } }
 
-        /* ===== Live Event Feed ===== */
-        .feed-panel{background:var(--glass-bg);border:1px solid var(--glass-border);border-radius:var(--radius);padding:16px;max-height:620px;display:flex;flex-direction:column}
-        .feed-scroll{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:6px;padding-right:4px}
-        .feed-scroll::-webkit-scrollbar{width:4px}
-        .feed-scroll::-webkit-scrollbar-thumb{background:var(--accent);border-radius:2px}
-        .feed-item{padding:10px 12px;border-radius:var(--radius-sm);background:rgba(15,23,42,.5);border-left:3px solid var(--text-muted);font-size:.78rem;line-height:1.5;animation:feedIn .3s ease;display:flex;gap:10px;align-items:flex-start}
-        .feed-item.confirmed{border-left-color:var(--green);background:rgba(45,212,191,.06)}
-        .feed-item.tentative{border-left-color:var(--amber);background:rgba(251,191,36,.05)}
-        .feed-item.smoothed{border-left-color:#a78bfa;background:rgba(167,139,250,.06)}
-        .feed-item.rejected{border-left-color:var(--red);background:rgba(248,113,113,.05)}
-        .feed-time{color:var(--text-muted);font-variant-numeric:tabular-nums;white-space:nowrap;font-size:.72rem;margin-top:1px}
-        .feed-msg{color:var(--text-secondary);word-break:break-word;flex:1}
-        .feed-msg strong{color:var(--text-primary);font-weight:600}
-        @keyframes feedIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
+        /* Stats footer */
+        .stats-row { display:flex; gap:20px; flex-wrap:wrap; padding:14px 20px; background:var(--glass-bg); border:1px solid var(--glass-border); border-radius:var(--radius-md); font-size:.82rem; margin-top:1.5rem }
+        .stat-pair { display:flex; gap:6px; align-items:center }
+        .stat-pair .slabel { color:var(--text-muted) }
+        .stat-pair .sval { color:#38bdf8; font-weight:700 }
 
-        /* Stats bar */
-        .stats-row{display:flex;gap:20px;flex-wrap:wrap;padding:14px 20px;background:var(--glass-bg);border:1px solid var(--glass-border);border-radius:var(--radius-sm);font-size:.82rem;margin-top:8px}
-        .stat{display:flex;gap:6px;align-items:center}
-        .stat .label{color:var(--text-muted)}
-        .stat .val{color:var(--accent);font-weight:700}
-        .stat .updated{color:var(--text-muted);margin-left:auto}
+        /* Section separator */
+        .section-label { font-size:.8rem; font-weight:700; text-transform:uppercase; letter-spacing:.1em; color:var(--text-muted); margin-bottom:12px; display:flex; align-items:center; gap:8px }
 
         /* Animations */
-        @keyframes countBump{0%{transform:scale(1)}50%{transform:scale(1.12)}100%{transform:scale(1)}}
-        .bump{animation:countBump .3s ease}
+        @keyframes countBump { 0%{transform:scale(1)} 50%{transform:scale(1.12)} 100%{transform:scale(1)} }
+        .bump { animation:countBump .3s ease }
+        @keyframes confirmFlash { 0%{box-shadow:0 0 0 0 rgba(45,212,191,.5)} 100%{box-shadow:0 0 0 12px rgba(45,212,191,0)} }
+        .confirm-flash { animation:confirmFlash .6s ease }
 
-        @media(max-width:720px){
-            .pipeline-bar{flex-wrap:wrap}
-            .pipe-arrow{display:none}
-            .class-grid{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
-        }
+        .empty { color:var(--text-muted); font-size:.85rem; padding:16px 0; font-style:italic }
     </style>
 </head>
 <body>
-<div class="container">
+
+<main>
     <!-- Header -->
     <div class="page-header">
         <h1>📊 Live Pipeline Counts</h1>
@@ -144,62 +120,62 @@
         </div>
     </div>
 
-    <!-- Pipeline flow bar -->
-    <div class="pipeline-bar">
-        <div class="pipe-stage classified">
-            <div class="pipe-label">⚡ Classified</div>
-            <div class="pipe-count" id="pipeClassified">0</div>
-        </div>
-        <div class="pipe-arrow">→</div>
-        <div class="pipe-stage pending">
-            <div class="pipe-label">🔄 Smoothing</div>
-            <div class="pipe-count" id="pipePending">0</div>
-        </div>
-        <div class="pipe-arrow">→</div>
-        <div class="pipe-stage confirmed">
-            <div class="pipe-label">✓ Confirmed</div>
-            <div class="pipe-count" id="pipeConfirmed">0</div>
-        </div>
-    </div>
-
-    <!-- Smoothing window progress -->
-    <div class="window-bar">
-        <div class="window-meta">
-            <span class="label">Smoothing Window</span>
-            <span class="value" id="windowLabel">0 / 7 — next in 7</span>
-        </div>
-        <div class="window-track">
-            <div class="window-fill" id="windowFill" style="width:0%"></div>
-        </div>
-    </div>
-
-    <!-- Main two-column layout -->
-    <div class="main-grid">
-        <!-- Left: Count cards -->
-        <div class="left-col">
-            <!-- Confirmed counts -->
-            <div class="section-title">✓ Confirmed &amp; Persisted</div>
-            <div class="class-grid" id="confirmedGrid">
-                <div class="empty" id="confirmedEmpty">Waiting for confirmed counts…</div>
+    <!-- Hero section — Total overview like analytics -->
+    <section class="hero-section">
+        <div class="hero-card">
+            <div class="hero-metric primary">
+                <div class="hero-label">Total Bags (All Stages)</div>
+                <div class="hero-value" id="heroTotal">0</div>
+                <div class="hero-breakdown">
+                    <span class="tier-badge high-tier" id="heroConfirmedBadge">Confirmed: 0</span>
+                    <span class="tier-badge low-tier" id="heroPendingBadge">Pending: 0</span>
+                </div>
             </div>
-
-            <!-- Pending counts -->
-            <div class="section-title">⏳ Pending — In Smoothing Window</div>
-            <div class="pending-grid" id="pendingGrid">
-                <div class="empty" id="pendingEmpty">No items pending</div>
+            <div class="hero-metric">
+                <div class="hero-label">Confirmed</div>
+                <div class="hero-value" id="heroConfirmed" style="color:#2dd4bf">0</div>
             </div>
-
-            <!-- Tentative / Just Classified -->
-            <div class="section-title">⚡ Just Classified — Tentative</div>
-            <div class="classified-grid" id="classifiedGrid">
-                <div class="empty" id="classifiedEmpty">No recent classifications</div>
+            <div class="hero-metric">
+                <div class="hero-label">In Pipeline</div>
+                <div class="hero-value" id="heroPipeline" style="color:#38bdf8">0</div>
             </div>
         </div>
+    </section>
 
-        <!-- Right: Live event feed -->
-        <div class="right-col">
+    <!-- Classification cards — analytics style with live counts -->
+    <div class="section-label">Per-Class Breakdown</div>
+    <section class="grid-container" id="classGrid">
+        <div class="empty" id="classGridEmpty">Waiting for data…</div>
+    </section>
+
+    <!-- Bottom: Current Batch + Live Feed -->
+    <div class="bottom-grid">
+        <!-- Current Batch -->
+        <div class="batch-section">
+            <div class="batch-header">
+                <div class="batch-title"><span class="live-dot"></span> Current Batch</div>
+                <div class="batch-meta" id="batchMeta">Smoothing window: 0 / 7</div>
+            </div>
+
+            <div class="window-bar">
+                <div class="window-meta">
+                    <span class="wlabel">Smoothing Progress</span>
+                    <span class="wvalue" id="windowLabel">0 / 7 — next in 7 items</span>
+                </div>
+                <div class="window-track">
+                    <div class="window-fill" id="windowFill" style="width:0%"></div>
+                </div>
+            </div>
+
+            <div class="batch-grid" id="batchGrid">
+                <div class="empty" id="batchEmpty">No items in current batch</div>
+            </div>
+        </div>
+
+        <!-- Live Event Feed -->
+        <div>
             <div class="feed-panel">
-                <div class="section-title" style="margin-bottom:10px">📡 Live Event Feed</div>
+                <div class="section-label" style="margin-bottom:10px">📡 Live Event Feed</div>
                 <div class="feed-scroll" id="feedScroll">
                     <div class="empty">Waiting for events…</div>
                 </div>
@@ -207,39 +183,22 @@
         </div>
     </div>
 
-    <!-- Stats -->
+    <!-- Stats footer -->
     <div class="stats-row">
-        <div class="stat"><span class="label">Smoothing Rate:</span><span class="val" id="smoothRate">0%</span></div>
-        <div class="stat"><span class="label">Window Size:</span><span class="val" id="windowSize">7</span></div>
-        <div class="stat updated" id="lastUpdate" style="margin-left:auto;color:var(--text-muted)">—</div>
+        <div class="stat-pair"><span class="slabel">Smoothing Rate:</span><span class="sval" id="smoothRate">0%</span></div>
+        <div class="stat-pair"><span class="slabel">Window Size:</span><span class="sval" id="windowSize">7</span></div>
+        <div class="stat-pair" id="lastUpdate" style="margin-left:auto;color:var(--text-muted)">—</div>
     </div>
-</div>
+</main>
 
 <script>
 // ── State ──
-let bagTypes = {};  // name → {thumb, arabic_name, ...}
+let bagTypes = {};
 let prevState = {};
+let prevConfirmed = {};
 let seenEventCount = 0;
 
-// ── Elements ──
 const $id = id => document.getElementById(id);
-const statusBadge = $id('statusBadge');
-const statusText  = $id('statusText');
-const pipeClassified = $id('pipeClassified');
-const pipePending    = $id('pipePending');
-const pipeConfirmed  = $id('pipeConfirmed');
-const windowFillEl = $id('windowFill');
-const windowLabel  = $id('windowLabel');
-const confirmedGrid   = $id('confirmedGrid');
-const pendingGrid     = $id('pendingGrid');
-const classifiedGrid  = $id('classifiedGrid');
-const confirmedEmpty  = $id('confirmedEmpty');
-const pendingEmpty    = $id('pendingEmpty');
-const classifiedEmpty = $id('classifiedEmpty');
-const feedScroll   = $id('feedScroll');
-const smoothRate   = $id('smoothRate');
-const windowSizeEl = $id('windowSize');
-const lastUpdate   = $id('lastUpdate');
 
 // ── Helpers ──
 function bump(el) {
@@ -248,10 +207,15 @@ function bump(el) {
     el.classList.add('bump');
 }
 
+function confirmFlash(el) {
+    el.classList.remove('confirm-flash');
+    void el.offsetWidth;
+    el.classList.add('confirm-flash');
+}
+
 function thumbUrl(className) {
     const bt = bagTypes[className];
     if (bt && bt.thumb) return '/' + bt.thumb;
-    // Fallback placeholder
     const letter = className ? className.charAt(0) : '?';
     return 'https://placehold.co/100x100/1e293b/FFF?text=' + encodeURIComponent(letter);
 }
@@ -261,139 +225,171 @@ function imgTag(className) {
     return '<img src="' + thumbUrl(className) + '" alt="' + className + '" loading="lazy" onerror="this.src=\'https://placehold.co/100x100/1e293b/FFF?text=' + encodeURIComponent(safe) + '\'">';
 }
 
-// ── Render confirmed cards ──
-function renderConfirmed(counts) {
-    if (!counts || Object.keys(counts).length === 0) {
-        confirmedEmpty.style.display = '';
-        Array.from(confirmedGrid.querySelectorAll('.class-card')).forEach(c => c.remove());
+function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+// ── Render analytics-style class cards ──
+function renderClassCards(confirmed, pending, justClassified) {
+    const grid = $id('classGrid');
+    const empty = $id('classGridEmpty');
+
+    // Merge all class names
+    const allClasses = new Set([
+        ...Object.keys(confirmed || {}),
+        ...Object.keys(pending || {}),
+        ...Object.keys(justClassified || {})
+    ]);
+
+    if (allClasses.size === 0) {
+        empty.style.display = '';
+        Array.from(grid.querySelectorAll('.stat-card')).forEach(c => c.remove());
         return;
     }
-    confirmedEmpty.style.display = 'none';
-    const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
-    const existing = {};
-    confirmedGrid.querySelectorAll('.class-card').forEach(card => {
-        existing[card.dataset.cls] = card;
-    });
+    empty.style.display = 'none';
 
-    sorted.forEach(([name, count]) => {
-        let card = existing[name];
+    // Sort by total count descending
+    const sorted = [...allClasses].map(name => ({
+        name,
+        conf: (confirmed || {})[name] || 0,
+        pend: (pending || {})[name] || 0,
+        cls:  (justClassified || {})[name] || 0
+    })).sort((a, b) => (b.conf + b.pend + b.cls) - (a.conf + a.pend + a.cls));
+
+    const existing = {};
+    grid.querySelectorAll('.stat-card').forEach(card => { existing[card.dataset.cls] = card; });
+
+    sorted.forEach(item => {
+        const total = item.conf + item.pend + item.cls;
+        let card = existing[item.name];
+        const wasConfirmed = prevConfirmed[item.name] || 0;
+        const justConfirmedMore = item.conf > wasConfirmed;
+
         if (!card) {
             card = document.createElement('div');
-            card.className = 'class-card';
-            card.dataset.cls = name;
+            card.className = 'stat-card';
+            card.dataset.cls = item.name;
             card.innerHTML =
-                '<span class="confirmed-badge">confirmed</span>' +
-                '<div class="thumb">' + imgTag(name) + '</div>' +
-                '<div class="name">' + name + '</div>' +
-                '<div class="count-value">' + count + '</div>';
-            confirmedGrid.appendChild(card);
+                '<div class="card-header stacked">' +
+                    '<div class="card-title">' + escHtml(item.name) + '</div>' +
+                    '<div class="thumb-container">' + imgTag(item.name) + '</div>' +
+                '</div>' +
+                '<div class="card-metric-large" data-role="total">' + total + '</div>' +
+                '<div class="count-bar">' +
+                    '<div class="seg-confirmed" data-role="bar-c" style="width:0%"></div>' +
+                    '<div class="seg-pending" data-role="bar-p" style="width:0%"></div>' +
+                    '<div class="seg-classified" data-role="bar-j" style="width:0%"></div>' +
+                '</div>' +
+                '<div class="count-breakdown">' +
+                    '<div class="cb-item confirmed"><span class="cb-label">Confirmed</span><span class="cb-value" data-role="cv-c">' + item.conf + '</span></div>' +
+                    '<div class="cb-item pending"><span class="cb-label">Pending</span><span class="cb-value" data-role="cv-p">' + item.pend + '</span></div>' +
+                    '<div class="cb-item classified"><span class="cb-label">Classified</span><span class="cb-value" data-role="cv-j">' + item.cls + '</span></div>' +
+                '</div>';
+            grid.appendChild(card);
         } else {
-            const cv = card.querySelector('.count-value');
-            if (cv.textContent !== String(count)) {
-                cv.textContent = count;
-                bump(cv);
-            }
+            // Update existing
+            const totalEl = card.querySelector('[data-role="total"]');
+            const cvC = card.querySelector('[data-role="cv-c"]');
+            const cvP = card.querySelector('[data-role="cv-p"]');
+            const cvJ = card.querySelector('[data-role="cv-j"]');
+
+            if (totalEl.textContent !== String(total)) { totalEl.textContent = total; bump(totalEl); }
+            if (cvC.textContent !== String(item.conf)) { cvC.textContent = item.conf; bump(cvC); }
+            if (cvP.textContent !== String(item.pend)) { cvP.textContent = item.pend; }
+            if (cvJ.textContent !== String(item.cls))  { cvJ.textContent = item.cls;  }
         }
-        delete existing[name];
+
+        // Update bar widths
+        if (total > 0) {
+            card.querySelector('[data-role="bar-c"]').style.width = (item.conf / total * 100) + '%';
+            card.querySelector('[data-role="bar-p"]').style.width = (item.pend / total * 100) + '%';
+            card.querySelector('[data-role="bar-j"]').style.width = (item.cls / total * 100) + '%';
+        }
+
+        // Flash on confirmation increase
+        if (justConfirmedMore) { confirmFlash(card); }
+
+        delete existing[item.name];
     });
+
     Object.values(existing).forEach(c => c.remove());
 }
 
-// ── Render pending cards ──
-function renderPending(counts) {
-    if (!counts || Object.keys(counts).length === 0) {
-        pendingEmpty.style.display = '';
-        Array.from(pendingGrid.querySelectorAll('.pending-card')).forEach(c => c.remove());
+// ── Render current batch items ──
+function renderBatch(pending, justClassified) {
+    const grid = $id('batchGrid');
+    const empty = $id('batchEmpty');
+
+    // Merge pending + justClassified for the batch view
+    const allNames = new Set([
+        ...Object.keys(pending || {}),
+        ...Object.keys(justClassified || {})
+    ]);
+
+    if (allNames.size === 0) {
+        empty.style.display = '';
+        Array.from(grid.querySelectorAll('.batch-item')).forEach(c => c.remove());
         return;
     }
-    pendingEmpty.style.display = 'none';
-    const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
-    const existing = {};
-    pendingGrid.querySelectorAll('.pending-card').forEach(card => {
-        existing[card.dataset.cls] = card;
-    });
+    empty.style.display = 'none';
 
-    sorted.forEach(([name, count]) => {
-        let card = existing[name];
+    const items = [...allNames].map(name => ({
+        name,
+        pend: (pending || {})[name] || 0,
+        cls: (justClassified || {})[name] || 0
+    })).sort((a, b) => (b.pend + b.cls) - (a.pend + a.cls));
+
+    const existing = {};
+    grid.querySelectorAll('.batch-item').forEach(card => { existing[card.dataset.cls] = card; });
+
+    items.forEach(item => {
+        let card = existing[item.name];
         if (!card) {
             card = document.createElement('div');
-            card.className = 'pending-card';
-            card.dataset.cls = name;
-            card.innerHTML =
-                '<div class="thumb">' + imgTag(name) + '</div>' +
-                '<div class="info">' +
-                    '<div class="name">' + name + '</div>' +
-                    '<div class="count-value">' + count + '</div>' +
-                '</div>';
-            pendingGrid.appendChild(card);
-        } else {
-            const cv = card.querySelector('.count-value');
-            if (cv.textContent !== String(count)) {
-                cv.textContent = count;
-                bump(cv);
-            }
+            card.dataset.cls = item.name;
+            grid.appendChild(card);
         }
-        delete existing[name];
-    });
-    Object.values(existing).forEach(c => c.remove());
-}
 
-// ── Render classified cards ──
-function renderClassified(counts) {
-    if (!counts || Object.keys(counts).length === 0) {
-        classifiedEmpty.style.display = '';
-        Array.from(classifiedGrid.querySelectorAll('.classified-card')).forEach(c => c.remove());
-        return;
-    }
-    classifiedEmpty.style.display = 'none';
-    const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
-    const existing = {};
-    classifiedGrid.querySelectorAll('.classified-card').forEach(card => {
-        existing[card.dataset.cls] = card;
+        const isPending = item.pend > 0;
+        const isClassified = item.cls > 0 && item.pend === 0;
+        card.className = 'batch-item' + (isPending ? ' is-pending' : ' is-confirmed');
+
+        let statusHtml = '';
+        if (item.pend > 0 && item.cls > 0) {
+            statusHtml = '<span style="color:#38bdf8">' + item.pend + ' in smoothing</span> · <span style="color:#fbbf24">' + item.cls + ' waiting</span>';
+        } else if (item.pend > 0) {
+            statusHtml = '<span style="color:#38bdf8">' + item.pend + ' in smoothing window — not yet confirmed</span>';
+        } else {
+            statusHtml = '<span style="color:#fbbf24">' + item.cls + ' classified — waiting for smoothing</span>';
+        }
+
+        card.innerHTML =
+            '<div class="b-thumb">' + imgTag(item.name) + '</div>' +
+            '<div class="b-info">' +
+                '<div class="b-name">' + escHtml(item.name) + '</div>' +
+                '<div class="b-status">' + statusHtml + '</div>' +
+            '</div>' +
+            '<div class="b-count">' + (item.pend + item.cls) + '</div>';
+
+        delete existing[item.name];
     });
 
-    sorted.forEach(([name, count]) => {
-        let card = existing[name];
-        if (!card) {
-            card = document.createElement('div');
-            card.className = 'classified-card';
-            card.dataset.cls = name;
-            card.innerHTML =
-                '<div class="thumb">' + imgTag(name) + '</div>' +
-                '<div class="info">' +
-                    '<div class="name">' + name + '</div>' +
-                    '<div class="count-value">' + count + '</div>' +
-                '</div>';
-            classifiedGrid.appendChild(card);
-        } else {
-            const cv = card.querySelector('.count-value');
-            if (cv.textContent !== String(count)) {
-                cv.textContent = count;
-                bump(cv);
-            }
-        }
-        delete existing[name];
-    });
     Object.values(existing).forEach(c => c.remove());
 }
 
 // ── Render feed ──
 function renderFeed(events) {
+    const feedScroll = $id('feedScroll');
     if (!events || events.length === 0) return;
 
-    // Only render new events
     const newEvents = events.slice(seenEventCount);
     if (newEvents.length === 0) return;
     seenEventCount = events.length;
 
-    // Remove empty placeholder
     const emptyEl = feedScroll.querySelector('.empty');
     if (emptyEl) emptyEl.remove();
 
     newEvents.forEach(ev => {
         const div = document.createElement('div');
         const msg = ev.msg || '';
-        // Determine type for styling
         let type = '';
         if (msg.includes('CONFIRMED')) type = 'confirmed';
         else if (msg.includes('TENTATIVE')) type = 'tentative';
@@ -405,8 +401,6 @@ function renderFeed(events) {
         const t = ev.ts ? new Date(ev.ts * 1000) : new Date();
         const timeStr = t.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
 
-        // Highlight track IDs and class names in the message
-        // Build class name pattern dynamically from loaded bag types
         let display = msg.replace(/(T\d+)/g, '<strong>$1</strong>');
         const classNames = Object.keys(bagTypes);
         if (classNames.length > 0) {
@@ -418,12 +412,9 @@ function renderFeed(events) {
         feedScroll.appendChild(div);
     });
 
-    // Keep max 30 entries
     while (feedScroll.children.length > 30) {
         feedScroll.removeChild(feedScroll.firstChild);
     }
-
-    // Auto-scroll to bottom
     feedScroll.scrollTop = feedScroll.scrollHeight;
 }
 
@@ -432,34 +423,45 @@ function updateUI(data) {
     const ct = data.confirmed_total || 0;
     const pt = data.pending_total || 0;
     const jt = data.just_classified_total || 0;
+    const grandTotal = ct + pt + jt;
 
-    // Pipeline counts
-    [pipeConfirmed, pipePending, pipeClassified].forEach((el, i) => {
-        const val = [ct, pt, jt][i];
-        if (el.textContent !== String(val)) { el.textContent = val; bump(el); }
-    });
+    // Hero
+    const heroTotal = $id('heroTotal');
+    const heroConfirmed = $id('heroConfirmed');
+    const heroPipeline = $id('heroPipeline');
+    if (heroTotal.textContent !== String(grandTotal)) { heroTotal.textContent = grandTotal; bump(heroTotal); }
+    if (heroConfirmed.textContent !== String(ct)) { heroConfirmed.textContent = ct; bump(heroConfirmed); }
+    const pipelineCount = pt + jt;
+    if (heroPipeline.textContent !== String(pipelineCount)) { heroPipeline.textContent = pipelineCount; bump(heroPipeline); }
+
+    $id('heroConfirmedBadge').textContent = 'Confirmed: ' + ct;
+    $id('heroPendingBadge').textContent = 'In Pipeline: ' + pipelineCount;
 
     // Window progress
     const ws = data.window_status || {};
     const sz = ws.size || 7;
     const cur = ws.current_items || 0;
     const next = ws.next_confirmation_in || sz;
-    windowFillEl.style.width = Math.round((cur / sz) * 100) + '%';
-    windowLabel.textContent = cur + ' / ' + sz + ' — next in ' + next + ' item' + (next !== 1 ? 's' : '');
-    windowSizeEl.textContent = sz;
+    $id('windowFill').style.width = Math.round((cur / sz) * 100) + '%';
+    $id('windowLabel').textContent = cur + ' / ' + sz + ' — next in ' + next + ' item' + (next !== 1 ? 's' : '');
+    $id('windowSize').textContent = sz;
+    $id('batchMeta').textContent = 'Smoothing window: ' + cur + ' / ' + sz;
 
-    // Cards
-    renderConfirmed(data.confirmed);
-    renderPending(data.pending);
-    renderClassified(data.just_classified);
+    // Class cards (analytics style)
+    renderClassCards(data.confirmed, data.pending, data.just_classified);
+
+    // Current batch
+    renderBatch(data.pending, data.just_classified);
 
     // Feed
     renderFeed(data.recent_events);
 
     // Stats
-    smoothRate.textContent = ((data.smoothing_rate || 0) * 100).toFixed(1) + '%';
-    lastUpdate.textContent = 'Updated ' + new Date().toLocaleTimeString();
+    $id('smoothRate').textContent = ((data.smoothing_rate || 0) * 100).toFixed(1) + '%';
+    $id('lastUpdate').textContent = 'Updated ' + new Date().toLocaleTimeString();
 
+    // Track previous confirmed for flash animation
+    prevConfirmed = Object.assign({}, data.confirmed || {});
     prevState = data;
 }
 
@@ -467,15 +469,15 @@ function updateUI(data) {
 function connectSSE() {
     const es = new EventSource('/api/counts/stream');
     es.onopen = () => {
-        statusBadge.className = 'status-badge';
-        statusText.textContent = 'Connected (live)';
+        $id('statusBadge').className = 'status-badge';
+        $id('statusText').textContent = 'Connected (live)';
     };
     es.onmessage = (e) => {
         try { updateUI(JSON.parse(e.data)); } catch(err) { console.warn('SSE parse error', err); }
     };
     es.onerror = () => {
-        statusBadge.className = 'status-badge disconnected';
-        statusText.textContent = 'Reconnecting…';
+        $id('statusBadge').className = 'status-badge disconnected';
+        $id('statusText').textContent = 'Reconnecting…';
         es.close();
         setTimeout(connectSSE, 3000);
     };
@@ -483,7 +485,6 @@ function connectSSE() {
 
 // ── Init ──
 async function init() {
-    // Load bag types for thumbnails
     try {
         const resp = await fetch('/api/bag-types');
         if (resp.ok) {
@@ -492,7 +493,6 @@ async function init() {
         }
     } catch(e) { console.warn('Failed to load bag types', e); }
 
-    // Initial data fetch
     try {
         const resp = await fetch('/api/counts');
         if (resp.ok) updateUI(await resp.json());
@@ -502,5 +502,6 @@ async function init() {
 }
 init();
 </script>
+
 </body>
 </html>
