@@ -228,6 +228,9 @@ class ConveyorCounterApp:
         self._last_tracks = []
         self._last_debug_info = {}
 
+        # Current batch type tracking (most recent classified type)
+        self._current_batch_type: Optional[str] = None
+
         # Memory monitoring
         self._last_memory_log_time: float = 0.0
         self._memory_log_interval: float = 60.0  # Log memory every 60 seconds
@@ -500,6 +503,9 @@ class ConveyorCounterApp:
         self.state.last_classification = f"T{track_id}:{class_name}({confidence:.2f})"
         self.state.add_event(f"CLASSIFY T{track_id}->{class_name} ({confidence:.2f}) rois={non_rejected_rois}")
 
+        # Track current batch type for real-time UI
+        self._current_batch_type = class_name
+
         # Check if classification is reliable (needs >= 3 non-rejected ROIs)
         min_trusted_rois = 3
         original_class = class_name
@@ -719,7 +725,8 @@ class ConveyorCounterApp:
                     "current_items": pending_total,
                     "next_confirmation_in": next_confirmation_in
                 },
-                "recent_events": recent_events
+                "recent_events": recent_events,
+                "current_batch_type": self._current_batch_type
             }
             write_pipeline_state(state)
         except Exception as e:

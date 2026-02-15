@@ -135,7 +135,7 @@ def test_api_counts_endpoint():
 
 
 def test_counts_html_page():
-    """Test /counts HTML page renders with SSE, batch totals, and per-class breakdown."""
+    """Test /counts HTML page renders with SSE, batch totals, current batch type, and per-class breakdown."""
     from src.endpoint.shared import init_shared_resources, cleanup_shared_resources
 
     init_shared_resources()
@@ -171,12 +171,22 @@ def test_counts_html_page():
         assert "confirmed-part" in body, "Should show confirmed portion"
         assert "pending-part" in body, "Should show pending portion"
         assert "allPending" in body, "JS should merge pending + just_classified"
+        # Current batch type card
+        assert "current_batch_type" in body, "Should reference current_batch_type from data"
+        assert "batchName" in body, "Should have batch type name element"
+        assert "batchImg" in body, "Should have batch type image element"
+        assert "batchCountValue" in body, "Should have per-type count element"
+        assert "batchBreakdown" in body, "Should have per-type breakdown"
+        assert "Now Processing" in body, "Should show 'Now Processing' label"
+        assert "prevBatchType" in body, "JS should track batch type changes"
+        assert "batchIdle" in body, "Should have idle state"
+        assert "batchActive" in body, "Should have active state"
         # Removed elements should NOT be present
         assert "Live Event Feed" not in body, "Should not have live events feed"
         assert "feed-item" not in body, "Should not have feed item styling"
         assert "Smoothing Window" not in body, "Should not show smoothing window"
         assert "window-fill" not in body, "Should not have smoothing progress bar"
-        print("PASS: /counts page renders with batch totals, per-class breakdown, and processing bridge")
+        print("PASS: /counts page renders with current batch type card, batch totals, and per-class breakdown")
     finally:
         cleanup_shared_resources()
 
@@ -226,11 +236,13 @@ def test_pipeline_state_with_events():
     """Test pipeline state includes recent_events field."""
     from src.endpoint.pipeline_state import write_state, read_state, _empty_state
 
-    # Empty state should have recent_events
+    # Empty state should have recent_events and current_batch_type
     empty = _empty_state()
     assert "recent_events" in empty
     assert empty["recent_events"] == []
-    print("PASS: empty state includes recent_events")
+    assert "current_batch_type" in empty
+    assert empty["current_batch_type"] is None
+    print("PASS: empty state includes recent_events and current_batch_type")
 
     # Round-trip with events
     fd, tf = tempfile.mkstemp(suffix=".json")
