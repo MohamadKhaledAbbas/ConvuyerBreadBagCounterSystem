@@ -135,7 +135,7 @@ def test_api_counts_endpoint():
 
 
 def test_counts_html_page():
-    """Test /counts HTML page renders with SSE and simplified UX."""
+    """Test /counts HTML page renders with SSE, batch totals, and per-class breakdown."""
     from src.endpoint.shared import init_shared_resources, cleanup_shared_resources
 
     init_shared_resources()
@@ -155,21 +155,28 @@ def test_counts_html_page():
         # Simplified UX elements
         assert "/api/bag-types" in body, "Should fetch bag types for thumbnails"
         assert "buildClassCards" in body, "Should build all-type cards on init"
-        assert "updateClassCards" in body, "Should update confirmed counts"
+        assert "updateClassCards" in body, "Should update cards with batch counts"
         assert "processing-card" in body, "Should have processing bridge card"
         assert "connect-line" in body, "Should have connecting line"
         assert "hero-card" in body, "Should have hero section"
         assert "stat-card" in body, "Should use analytics-style stat cards"
         assert "confirm-flash" in body, "Should have confirmation animation"
         assert "confirm-pulse" in body, "Should have line pulse animation"
+        # Current batch hero metric
+        assert "Current Batch" in body, "Should show current batch total"
+        assert "heroBatch" in body, "Should have batch total hero element"
+        assert "batchTotal" in body, "JS should compute batch total"
+        # Per-class batch info (confirmed + pending breakdown)
+        assert "card-batch-info" in body, "Should have per-class batch breakdown"
+        assert "confirmed-part" in body, "Should show confirmed portion"
+        assert "pending-part" in body, "Should show pending portion"
+        assert "allPending" in body, "JS should merge pending + just_classified"
         # Removed elements should NOT be present
         assert "Live Event Feed" not in body, "Should not have live events feed"
         assert "feed-item" not in body, "Should not have feed item styling"
         assert "Smoothing Window" not in body, "Should not show smoothing window"
         assert "window-fill" not in body, "Should not have smoothing progress bar"
-        assert "renderBatch" not in body, "Should not have batch item rendering"
-        assert "count-breakdown" not in body, "Should not show per-class pending breakdown"
-        print("PASS: /counts page renders with simplified UX and processing bridge")
+        print("PASS: /counts page renders with batch totals, per-class breakdown, and processing bridge")
     finally:
         cleanup_shared_resources()
 

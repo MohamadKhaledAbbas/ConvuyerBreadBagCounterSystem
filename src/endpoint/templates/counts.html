@@ -19,8 +19,8 @@
         .status-badge.disconnected .dot { background:#f87171; animation:none }
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
 
-        /* Hero with 2 cols */
-        .hero-card { grid-template-columns: 1fr 1fr; }
+        /* Hero with 3 cols */
+        .hero-card { grid-template-columns: 1fr 1fr 1fr; }
         @media(max-width:768px) { .hero-card { grid-template-columns:1fr; } }
 
         /* Section label */
@@ -118,6 +118,11 @@
         /* Card confirmed count */
         .card-metric-large { font-variant-numeric: tabular-nums; }
 
+        /* Card batch sub-info */
+        .card-batch-info { font-size:.72rem; color:var(--text-muted); margin-top:4px; font-variant-numeric:tabular-nums; display:flex; gap:8px; justify-content:center }
+        .card-batch-info .confirmed-part { color:rgba(45,212,191,.7) }
+        .card-batch-info .pending-part { color:rgba(148,163,184,.7) }
+
         /* Animations */
         @keyframes countBump { 0%{transform:scale(1)} 50%{transform:scale(1.12)} 100%{transform:scale(1)} }
         .bump { animation:countBump .3s ease }
@@ -144,9 +149,14 @@
     <section class="hero-section">
         <div class="hero-card">
             <div class="hero-metric primary">
+                <div class="hero-label">Current Batch</div>
+                <div class="hero-value" id="heroBatch" style="color:var(--text-primary)">0</div>
+                <div class="hero-sub">Total counted (confirmed + pending)</div>
+            </div>
+            <div class="hero-metric">
                 <div class="hero-label">Confirmed</div>
                 <div class="hero-value" id="heroConfirmed" style="color:#2dd4bf">0</div>
-                <div class="hero-sub" id="heroSub">Current batch</div>
+                <div class="hero-sub" style="color:var(--text-muted)">Persisted</div>
             </div>
             <div class="hero-metric">
                 <div class="hero-label">Processing</div>
@@ -167,7 +177,7 @@
     </div>
 
     <!-- Confirmed class cards — all types, analytics-style -->
-    <div class="section-label">Confirmed Counts by Type</div>
+    <div class="section-label">Counts by Type</div>
     <section class="grid-container" id="classGrid">
         <!-- Populated by JS on init -->
     </section>
@@ -233,28 +243,42 @@ function buildClassCards() {
                 '<div class="card-title">' + escHtml(name) + '</div>' +
                 '<div class="thumb-container">' + imgTag(name) + '</div>' +
             '</div>' +
-            '<div class="card-metric-large" data-role="count" style="color:#2dd4bf">0</div>';
+            '<div class="card-metric-large" data-role="count" style="color:#2dd4bf">0</div>' +
+            '<div class="card-batch-info" data-role="batch-info"></div>';
         grid.appendChild(card);
     });
 }
 
-// ── Update confirmed cards ──
-function updateClassCards(confirmed) {
+// ── Update confirmed cards with batch counts ──
+function updateClassCards(confirmed, pending) {
     const grid = $id('classGrid');
     const cards = grid.querySelectorAll('.stat-card');
 
     cards.forEach(card => {
         const name = card.dataset.cls;
-        const count = (confirmed || {})[name] || 0;
+        const conf = (confirmed || {})[name] || 0;
+        const pend = (pending || {})[name] || 0;
+        const batch = conf + pend;
         const el = card.querySelector('[data-role="count"]');
+        const infoEl = card.querySelector('[data-role="batch-info"]');
         const prev = parseInt(el.textContent) || 0;
 
-        if (prev !== count) {
-            el.textContent = count;
-            if (!isFirstRender && count > prev) {
+        if (prev !== batch) {
+            el.textContent = batch;
+            if (!isFirstRender && batch > prev) {
                 bump(el);
                 confirmFlash(card);
             }
+        }
+
+        // Show breakdown only when there are items
+        if (batch > 0 && pend > 0) {
+            infoEl.innerHTML = '<span class="confirmed-part">✓ ' + conf + ' confirmed</span>' +
+                               '<span class="pending-part">⏳ +' + pend + ' pending</span>';
+        } else if (batch > 0) {
+            infoEl.innerHTML = '<span class="confirmed-part">✓ ' + conf + ' confirmed</span>';
+        } else {
+            infoEl.innerHTML = '';
         }
     });
 }
@@ -295,18 +319,26 @@ function updateProcessing(pendingTotal) {
 function updateUI(data) {
     const ct = data.confirmed_total || 0;
     const pt = (data.pending_total || 0) + (data.just_classified_total || 0);
+    const batchTotal = ct + pt;
 
     // Hero
+    const heroBatch = $id('heroBatch');
     const heroConfirmed = $id('heroConfirmed');
     const heroPending = $id('heroPending');
+    if (heroBatch.textContent !== String(batchTotal)) { heroBatch.textContent = batchTotal; bump(heroBatch); }
     if (heroConfirmed.textContent !== String(ct)) { heroConfirmed.textContent = ct; bump(heroConfirmed); }
     if (heroPending.textContent !== String(pt)) { heroPending.textContent = pt; bump(heroPending); }
 
     // Processing card
     updateProcessing(pt);
 
-    // Confirmed type cards
-    updateClassCards(data.confirmed);
+    // Merge pending + just_classified for per-class pending counts
+    const allPending = {};
+    for (const [cls, n] of Object.entries(data.pending || {})) { allPending[cls] = (allPending[cls] || 0) + n; }
+    for (const [cls, n] of Object.entries(data.just_classified || {})) { allPending[cls] = (allPending[cls] || 0) + n; }
+
+    // Confirmed type cards (with batch = confirmed + pending)
+    updateClassCards(data.confirmed, allPending);
 
     // Footer
     $id('lastUpdate').textContent = 'Updated ' + new Date().toLocaleTimeString();
