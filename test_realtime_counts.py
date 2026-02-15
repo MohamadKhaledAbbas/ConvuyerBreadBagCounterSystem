@@ -171,6 +171,12 @@ def test_api_bag_types_endpoint():
     """Test /api/bag-types returns bag type metadata."""
     from src.endpoint.shared import init_shared_resources, cleanup_shared_resources
 
+    # Expected default bag types seeded by schema.sql
+    DEFAULT_BAG_TYPES = [
+        "Brown_Orange", "Red_Yellow", "Wheatberry", "Blue_Yellow",
+        "Green_Yellow", "Bran", "Black_Orange", "Purple_Yellow", "Rejected"
+    ]
+
     init_shared_resources()
     try:
         from fastapi.testclient import TestClient
@@ -182,12 +188,13 @@ def test_api_bag_types_endpoint():
         assert resp.status_code == 200
         data = resp.json()
         assert isinstance(data, list), "Should return a list"
-        assert len(data) >= 9, f"Should have at least 9 default bag types, got {len(data)}"
+        assert len(data) >= len(DEFAULT_BAG_TYPES), \
+            f"Should have at least {len(DEFAULT_BAG_TYPES)} default bag types, got {len(data)}"
 
-        # Check one bag type has the expected structure
+        # Check expected bag types are present
         names = {bt["name"] for bt in data}
-        assert "Brown_Orange" in names, "Should include Brown_Orange"
-        assert "Rejected" in names, "Should include Rejected"
+        for expected in DEFAULT_BAG_TYPES:
+            assert expected in names, f"Should include {expected}"
 
         # Check thumb paths are normalized to web paths
         for bt in data:

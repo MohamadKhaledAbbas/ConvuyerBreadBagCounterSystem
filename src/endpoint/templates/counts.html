@@ -406,9 +406,13 @@ function renderFeed(events) {
         const timeStr = t.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
 
         // Highlight track IDs and class names in the message
-        let display = msg
-            .replace(/(T\d+)/g, '<strong>$1</strong>')
-            .replace(/(Brown_Orange|Red_Yellow|Wheatberry|Blue_Yellow|Green_Yellow|Bran|Black_Orange|Purple_Yellow|Rejected)/g, '<strong>$1</strong>');
+        // Build class name pattern dynamically from loaded bag types
+        let display = msg.replace(/(T\d+)/g, '<strong>$1</strong>');
+        const classNames = Object.keys(bagTypes);
+        if (classNames.length > 0) {
+            const classPattern = new RegExp('(' + classNames.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')', 'g');
+            display = display.replace(classPattern, '<strong>$1</strong>');
+        }
 
         div.innerHTML = '<span class="feed-time">' + timeStr + '</span><span class="feed-msg">' + display + '</span>';
         feedScroll.appendChild(div);
