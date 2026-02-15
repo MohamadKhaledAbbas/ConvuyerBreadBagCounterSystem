@@ -5,6 +5,8 @@ Based on the working implementation from BreadBagCounterSystem.
 Optimized for NV12 input format as required by BPU models.
 """
 
+import os
+import re
 import cv2
 import numpy as np
 from typing import List, Tuple, Dict, Optional
@@ -50,13 +52,24 @@ class BpuClassifier(BaseClassifier):
         Args:
             model_path: Path to .bin model file
             classes: List of class names
-            input_size: Model input size (width, height)
+            input_size: Model input size (width, height). Auto-detected from
+                        model filename if it contains a _WxH_ pattern.
         """
         if not HAS_BPU:
             raise ImportError("hobot_dnn not available. BPU classifier requires RDK platform.")
         
         self.model_path = model_path
         self._class_names = classes
+
+        # Auto-detect input size from model filename (e.g., "..._256x256_nv12.bin")
+        parsed_size = self._parse_model_input_size(model_path)
+        if parsed_size is not None and parsed_size != input_size:
+            logger.warning(
+                f"[BpuClassifier] Model filename indicates {parsed_size[0]}x{parsed_size[1]} "
+                f"but default is {input_size[0]}x{input_size[1]}. Using model size."
+            )
+            input_size = parsed_size
+
         self.input_size = input_size
         self.input_w, self.input_h = input_size
 
@@ -66,6 +79,7 @@ class BpuClassifier(BaseClassifier):
 
         # Load model
         logger.info(f"[BpuClassifier] Loading model: {model_path}")
+        logger.info(f"[BpuClassifier] Input size: {self.input_w}x{self.input_h}")
         self.model = dnn.load(model_path)
 
         if not self.model:
@@ -79,6 +93,28 @@ class BpuClassifier(BaseClassifier):
             logger.debug(f"[BpuClassifier] Could not read model properties: {e}")
 
         logger.info(f"[BpuClassifier] Model loaded, classes: {len(classes)}")
+
+    @staticmethod
+    def _parse_model_input_size(model_path: str) -> Optional[Tuple[int, int]]:
+        """
+        Parse input size from model filename.
+
+        Matches pattern like '_256x256_' in filenames such as:
+        'yolo_small_classify_v15_bayese_256x256_nv12.bin'
+
+        Args:
+            model_path: Path to model file
+
+        Returns:
+            (width, height) tuple if found, None otherwise
+        """
+        basename = os.path.basename(model_path)
+        match = re.search(r'_(\d+)x(\d+)_', basename)
+        if match:
+            w, h = int(match.group(1)), int(match.group(2))
+            if 32 <= w <= 2048 and 32 <= h <= 2048:
+                return (w, h)
+        return None
     
     # Minimum ROI dimensions for meaningful classification
     MIN_ROI_SIZE = 10

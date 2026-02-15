@@ -5,6 +5,8 @@ Based on the working implementation from BreadBagCounterSystem.
 Optimized for YOLOv8 headless model output format.
 """
 
+import os
+import re
 import cv2
 import numpy as np
 from typing import Dict, List, Tuple, Optional
@@ -52,7 +54,8 @@ class BpuDetector(BaseDetector):
             model_path: Path to .bin model file
             confidence_threshold: Minimum confidence for detections
             nms_threshold: NMS IoU threshold
-            input_size: Model input size (width, height)
+            input_size: Model input size (width, height). Auto-detected from
+                        model filename if it contains a _WxH_ pattern.
             class_names: Optional dict mapping class_id to class_name
         """
         if not HAS_BPU:
@@ -61,6 +64,16 @@ class BpuDetector(BaseDetector):
         self.model_path = model_path
         self.confidence_threshold = confidence_threshold
         self.nms_threshold = nms_threshold
+
+        # Auto-detect input size from model filename (e.g., "..._640x640_nv12.bin")
+        parsed_size = self._parse_model_input_size(model_path)
+        if parsed_size is not None and parsed_size != input_size:
+            logger.warning(
+                f"[BpuDetector] Model filename indicates {parsed_size[0]}x{parsed_size[1]} "
+                f"but default is {input_size[0]}x{input_size[1]}. Using model size."
+            )
+            input_size = parsed_size
+
         self.input_size = input_size
         self.input_w, self.input_h = input_size
 
@@ -99,7 +112,29 @@ class BpuDetector(BaseDetector):
             grid = np.stack([xv.flatten(), yv.flatten()], axis=1)
             self.grids.append(grid)
 
-        logger.info(f"[BpuDetector] Model loaded, classes: {self.classes_num}")
+        logger.info(f"[BpuDetector] Model loaded, input size: {self.input_w}x{self.input_h}, classes: {self.classes_num}")
+
+    @staticmethod
+    def _parse_model_input_size(model_path: str) -> Optional[Tuple[int, int]]:
+        """
+        Parse input size from model filename.
+
+        Matches pattern like '_640x640_' in filenames such as:
+        'yolo_nano_detect_v12_bayese_640x640_nv12.bin'
+
+        Args:
+            model_path: Path to model file
+
+        Returns:
+            (width, height) tuple if found, None otherwise
+        """
+        basename = os.path.basename(model_path)
+        match = re.search(r'_(\d+)x(\d+)_', basename)
+        if match:
+            w, h = int(match.group(1)), int(match.group(2))
+            if 32 <= w <= 2048 and 32 <= h <= 2048:
+                return (w, h)
+        return None
 
     @property
     def class_names(self) -> Dict[int, str]:

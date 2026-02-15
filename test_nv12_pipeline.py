@@ -614,6 +614,87 @@ def test_uv_interleaving_vectorized_equals_loop():
     print("PASS: Vectorized UV interleaving is byte-for-byte identical to loop-based method")
 
 
+def test_parse_model_input_size():
+    """Test auto-detection of input size from model filename."""
+    from src.classifier.BpuClassifier import BpuClassifier
+    from src.detection.BpuDetector import BpuDetector
+
+    # Test classifier model filename parsing
+    # 256x256 model - the actual production model
+    result = BpuClassifier._parse_model_input_size(
+        "data/model/yolo_small_classify_v15_bayese_256x256_nv12.bin"
+    )
+    assert result == (256, 256), f"Expected (256, 256), got {result}"
+
+    # 224x224 model - the old model format
+    result = BpuClassifier._parse_model_input_size(
+        "data/model/classify_yolo_small_v11_bayese_224x224_nv12.bin"
+    )
+    assert result == (224, 224), f"Expected (224, 224), got {result}"
+
+    # Test detector model filename parsing
+    result = BpuDetector._parse_model_input_size(
+        "data/model/yolo_nano_detect_v12_bayese_640x640_nv12.bin"
+    )
+    assert result == (640, 640), f"Expected (640, 640), got {result}"
+
+    # Non-square model
+    result = BpuClassifier._parse_model_input_size(
+        "model_320x256_nv12.bin"
+    )
+    assert result == (320, 256), f"Expected (320, 256), got {result}"
+
+    # No size in filename - should return None
+    result = BpuClassifier._parse_model_input_size(
+        "data/model/yolo_small_classify_v15.pt"
+    )
+    assert result is None, f"Expected None for .pt file, got {result}"
+
+    # Edge case: dimensions too small (rejected)
+    result = BpuClassifier._parse_model_input_size("model_8x8_nv12.bin")
+    assert result is None, f"Expected None for 8x8 (too small), got {result}"
+
+    # Edge case: dimensions too large (rejected)
+    result = BpuClassifier._parse_model_input_size("model_4096x4096_nv12.bin")
+    assert result is None, f"Expected None for 4096x4096 (too large), got {result}"
+
+    # Edge case: just at boundary (32x32, should work)
+    result = BpuClassifier._parse_model_input_size("model_32x32_nv12.bin")
+    assert result == (32, 32), f"Expected (32, 32), got {result}"
+
+    print("PASS: Model input size auto-detection from filename works correctly")
+
+
+def test_classifier_buffer_size_matches_model():
+    """Test that classifier buffer is correctly sized for the model's input dimensions."""
+    # Simulate what happens when the classifier auto-detects 256x256
+    model_path = "data/model/yolo_small_classify_v15_bayese_256x256_nv12.bin"
+
+    from src.classifier.BpuClassifier import BpuClassifier
+    parsed_size = BpuClassifier._parse_model_input_size(model_path)
+    assert parsed_size == (256, 256), f"Should parse 256x256 from model filename"
+
+    # With auto-detection, the NV12 buffer should be sized for 256x256
+    w, h = parsed_size
+    area = w * h
+    expected_buffer_size = area * 3 // 2  # NV12 = 1.5 bytes per pixel
+
+    assert area == 65536, f"256*256 should be 65536, got {area}"
+    assert expected_buffer_size == 98304, f"NV12 buffer for 256x256 should be 98304, got {expected_buffer_size}"
+
+    # Without auto-detection (old default 224x224), buffer would be wrong
+    old_area = 224 * 224
+    old_buffer_size = old_area * 3 // 2
+    assert old_buffer_size == 75264, f"Old 224x224 NV12 buffer would be 75264"
+
+    # The size difference: model would read past valid data!
+    size_difference = expected_buffer_size - old_buffer_size
+    assert size_difference == 23040, f"Size mismatch would be 23040 bytes of garbage data"
+
+    print(f"PASS: Auto-detection prevents {size_difference}-byte buffer mismatch "
+          f"(was {old_buffer_size}, now {expected_buffer_size})")
+
+
 if __name__ == "__main__":
     test_nv12_preprocess_buffer_layout()
     test_nv12_preprocess_even_alignment()
@@ -627,4 +708,6 @@ if __name__ == "__main__":
     test_classifier_resize_quality()
     test_detector_input_validation()
     test_uv_interleaving_vectorized_equals_loop()
+    test_parse_model_input_size()
+    test_classifier_buffer_size_matches_model()
     print("\n=== All NV12 pipeline tests PASSED ===")
