@@ -67,6 +67,8 @@
         .batch-item.is-confirmed .b-status { color:#2dd4bf }
         .batch-item.is-pending .b-thumb { border:2px solid rgba(56,189,248,.4) }
         .batch-item.is-pending .b-status { color:#38bdf8 }
+        .batch-item .b-status .st-pending { color:#38bdf8 }
+        .batch-item .b-status .st-classified { color:#fbbf24 }
         .batch-item .b-count { font-size:1.3rem; font-weight:700; flex-shrink:0 }
         .batch-item.is-confirmed .b-count { color:#2dd4bf }
         .batch-item.is-pending .b-count { color:#38bdf8 }
@@ -196,6 +198,7 @@
 let bagTypes = {};
 let prevState = {};
 let prevConfirmed = {};
+let isFirstRender = true;
 let seenEventCount = 0;
 
 const $id = id => document.getElementById(id);
@@ -261,7 +264,7 @@ function renderClassCards(confirmed, pending, justClassified) {
         const total = item.conf + item.pend + item.cls;
         let card = existing[item.name];
         const wasConfirmed = prevConfirmed[item.name] || 0;
-        const justConfirmedMore = item.conf > wasConfirmed;
+        const justConfirmedMore = !isFirstRender && item.conf > wasConfirmed;
 
         if (!card) {
             card = document.createElement('div');
@@ -354,11 +357,11 @@ function renderBatch(pending, justClassified) {
 
         let statusHtml = '';
         if (item.pend > 0 && item.cls > 0) {
-            statusHtml = '<span style="color:#38bdf8">' + item.pend + ' in smoothing</span> · <span style="color:#fbbf24">' + item.cls + ' waiting</span>';
+            statusHtml = '<span class="st-pending">' + item.pend + ' in smoothing</span> · <span class="st-classified">' + item.cls + ' waiting</span>';
         } else if (item.pend > 0) {
-            statusHtml = '<span style="color:#38bdf8">' + item.pend + ' in smoothing window — not yet confirmed</span>';
+            statusHtml = '<span class="st-pending">' + item.pend + ' in smoothing window — not yet confirmed</span>';
         } else {
-            statusHtml = '<span style="color:#fbbf24">' + item.cls + ' classified — waiting for smoothing</span>';
+            statusHtml = '<span class="st-classified">' + item.cls + ' classified — waiting for smoothing</span>';
         }
 
         card.innerHTML =
@@ -462,6 +465,7 @@ function updateUI(data) {
 
     // Track previous confirmed for flash animation
     prevConfirmed = Object.assign({}, data.confirmed || {});
+    isFirstRender = false;
     prevState = data;
 }
 
