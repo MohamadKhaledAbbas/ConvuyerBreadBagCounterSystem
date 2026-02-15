@@ -21,7 +21,9 @@ def test_pipeline_state_module():
     """Test pipeline_state read/write."""
     from src.endpoint.pipeline_state import write_state, read_state
 
-    tf = tempfile.mktemp(suffix=".json")
+    fd, tf = tempfile.mkstemp(suffix=".json")
+    os.close(fd)
+    os.remove(tf)  # Remove so read_state can test missing file
     try:
         # Empty state when missing
         state = read_state(tf)
@@ -82,7 +84,8 @@ def test_smoother_pending_summary():
 
 def test_api_counts_endpoint():
     """Test /api/counts JSON endpoint."""
-    state_file = tempfile.mktemp(suffix=".json")
+    fd, state_file = tempfile.mkstemp(suffix=".json")
+    os.close(fd)
     old_env = os.environ.get("PIPELINE_STATE_FILE")
     os.environ["PIPELINE_STATE_FILE"] = state_file
 
