@@ -135,7 +135,7 @@ def test_api_counts_endpoint():
 
 
 def test_counts_html_page():
-    """Test /counts HTML page renders with SSE, batch totals, processing bar, and per-class breakdown (Arabic)."""
+    """Test /counts HTML page renders with batch timeline (current + previous), per-class breakdown (Arabic)."""
     from src.endpoint.shared import init_shared_resources, cleanup_shared_resources
 
     init_shared_resources()
@@ -152,47 +152,54 @@ def test_counts_html_page():
         assert 'lang="ar"' in body, "Should be Arabic"
         assert 'dir="rtl"' in body, "Should be RTL"
         assert "العد المباشر" in body, "Should have Arabic title"
-        assert "الدفعة الحالية" in body, "Should have Arabic batch label"
+        assert "الدفعة الحالية" in body, "Should have Arabic current batch label"
+        assert "الدفعة السابقة" in body, "Should have Arabic previous batch label"
         assert "مؤكد" in body, "Should have Arabic confirmed label"
         assert "قيد المعالجة" in body, "Should have Arabic processing label"
         assert "العدد حسب النوع" in body, "Should have Arabic section label"
-        assert "قيد التشغيل الآن" in body, "Should have Arabic 'Now Processing' label"
         # Core SSE and JS logic preserved
         assert "EventSource" in body
         assert "/api/counts/stream" in body
         assert "/api/bag-types" in body, "Should fetch bag types for thumbnails"
         assert "buildClassCards" in body, "Should build all-type cards on init"
         assert "updateClassCards" in body, "Should update cards with batch counts"
-        assert "processing-bar" in body, "Should have compact processing bar"
+        # Batch timeline structure
+        assert "batch-timeline" in body, "Should have batch timeline section"
+        assert "batch-card current" in body, "Should have current batch card"
+        assert "batch-card previous" in body, "Should have previous batch card"
+        assert "batch-connector" in body, "Should have batch connector"
+        assert "batchCurrent" in body, "Should have current batch element"
+        assert "batchPrevious" in body, "Should have previous batch element"
+        assert "curName" in body, "Should have current batch name element"
+        assert "curImg" in body, "Should have current batch image element"
+        assert "curCount" in body, "Should have current batch count element"
+        assert "prevName" in body, "Should have previous batch name element"
+        assert "prevImg" in body, "Should have previous batch image element"
+        assert "prevCount" in body, "Should have previous batch count element"
+        assert "batchIdle" in body, "Should have idle state"
+        assert "updateBatchTimeline" in body, "Should have batch timeline updater"
+        assert "previous_batch_type" in body, "JS should reference previous_batch_type"
+        assert "current_batch_type" in body, "JS should reference current_batch_type"
+        # Shared elements
         assert "connect-arrow" in body, "Should have connecting arrow"
         assert "hero-card" in body, "Should have hero section"
         assert "stat-card" in body, "Should use analytics-style stat cards"
         assert "confirm-flash" in body, "Should have confirmation animation"
-        assert "confirm-pulse" in body, "Should have arrow pulse animation"
         assert "heroBatch" in body, "Should have batch total hero element"
         assert "batchTotal" in body, "JS should compute batch total"
         assert "card-batch-info" in body, "Should have per-class batch breakdown"
         assert "confirmed-part" in body, "Should show confirmed portion"
         assert "pending-part" in body, "Should show pending portion"
         assert "allPending" in body, "JS should use pending counts"
-        # Verify no double-counting: pending_total must NOT be summed with just_classified_total
+        # Verify no double-counting
         assert "pending_total || 0) + (data.just_classified_total" not in body, \
             "Should not sum pending_total + just_classified_total (double-counting bug)"
-        assert "current_batch_type" in body, "Should reference current_batch_type from data"
-        assert "procName" in body, "Should have batch type name element"
-        assert "procImg" in body, "Should have batch type image element"
-        assert "procCountValue" in body, "Should have per-type count element"
-        assert "procBreakdown" in body, "Should have per-type breakdown"
-        assert "prevBatchType" in body, "JS should track batch type changes"
-        assert "procIdle" in body, "Should have idle state"
-        assert "procActive" in body, "Should have active state"
-        assert "updateProcessingBar" in body, "Should have processing bar updater"
         # Removed elements should NOT be present
         assert "Live Event Feed" not in body, "Should not have live events feed"
         assert "feed-item" not in body, "Should not have feed item styling"
         assert "Smoothing Window" not in body, "Should not show smoothing window"
         assert "window-fill" not in body, "Should not have smoothing progress bar"
-        print("PASS: /counts page renders with Arabic RTL layout, processing bar, batch totals")
+        print("PASS: /counts page renders with Arabic RTL, batch timeline (current + previous)")
     finally:
         cleanup_shared_resources()
 
@@ -242,15 +249,17 @@ def test_pipeline_state_with_events():
     """Test pipeline state includes recent_events field."""
     from src.endpoint.pipeline_state import write_state, read_state, _empty_state
 
-    # Empty state should have recent_events and current_batch_type
+    # Empty state should have recent_events, current_batch_type, and previous_batch_type
     empty = _empty_state()
     assert "recent_events" in empty
     assert empty["recent_events"] == []
     assert "current_batch_type" in empty
     assert empty["current_batch_type"] is None
+    assert "previous_batch_type" in empty
+    assert empty["previous_batch_type"] is None
     assert "last_classified_type" in empty
     assert empty["last_classified_type"] is None
-    print("PASS: empty state includes recent_events, current_batch_type, and last_classified_type")
+    print("PASS: empty state includes recent_events, current_batch_type, previous_batch_type, and last_classified_type")
 
     # Round-trip with events
     fd, tf = tempfile.mkstemp(suffix=".json")

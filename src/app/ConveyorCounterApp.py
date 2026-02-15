@@ -231,6 +231,7 @@ class ConveyorCounterApp:
 
         # Current batch type tracking (stable: based on rolling window majority)
         self._current_batch_type: Optional[str] = None
+        self._previous_batch_type: Optional[str] = None
         self._batch_type_window: List[str] = []
         self._batch_type_window_size: int = 7
         # Last individual classification (may flicker; used for fine-grained display)
@@ -521,6 +522,9 @@ class ConveyorCounterApp:
                 self._batch_type_window.pop(0)
             counter = Counter(self._batch_type_window)
             dominant, _ = counter.most_common(1)[0]
+            # Track previous batch on transition
+            if self._current_batch_type and dominant != self._current_batch_type:
+                self._previous_batch_type = self._current_batch_type
             self._current_batch_type = dominant
 
         # Check if classification is reliable (needs >= 3 non-rejected ROIs)
@@ -743,6 +747,7 @@ class ConveyorCounterApp:
                 },
                 "recent_events": recent_events,
                 "current_batch_type": self._current_batch_type,
+                "previous_batch_type": self._previous_batch_type,
                 "last_classified_type": self._last_classified_type
             }
             write_pipeline_state(state)

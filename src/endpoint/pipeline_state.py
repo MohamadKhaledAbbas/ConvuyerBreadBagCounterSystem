@@ -97,6 +97,7 @@ def _empty_state() -> Dict[str, Any]:
         },
         "recent_events": [],
         "current_batch_type": None,
+        "previous_batch_type": None,
         "last_classified_type": None,
         "_updated_at": 0
     }
