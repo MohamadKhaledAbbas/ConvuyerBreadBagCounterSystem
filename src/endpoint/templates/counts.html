@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>العد المباشر — عدّاد أكياس الخبز</title>
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/analytics.css?v=8">
+    <style>
+        /* ── RTL & Arabic font overrides ── */
+        body, main, .page-header h1, .hero-label, .hero-sub, .hero-value,
+        .batch-badge, .batch-type, .batch-sub, .batch-count-unit, .section-label,
+        .card-title, .card-batch-info, .status-badge, .batch-idle,
+        .footer-row { font-family: 'Cairo', 'Inter', sans-serif; }
+
+        main { padding-top: 1.5rem; direction: rtl; }
+
+        /* Header */
+        .page-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1.5rem; flex-wrap:wrap; gap:12px }
+        .page-header h1 { font-size:1.5rem; font-weight:700; color:var(--text-primary); margin:0 }
+        .status-badge { display:inline-flex; align-items:center; gap:6px; padding:5px 14px; border-radius:20px; font-size:.78rem; font-weight:600; background:rgba(45,212,191,.12); color:#2dd4bf; border:1px solid rgba(45,212,191,.25) }
+        .status-badge .dot { width:8px; height:8px; border-radius:50%; background:#2dd4bf; animation:pulse 2s infinite }
+        .status-badge.disconnected { background:rgba(248,113,113,.12); color:#f87171; border-color:rgba(248,113,113,.25) }
+        .status-badge.disconnected .dot { background:#f87171; animation:none }
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+        /* Hero with 3 cols */
+        .hero-card { grid-template-columns: 1fr 1fr 1fr; }
+        @media(max-width:768px) { .hero-card { grid-template-columns:1fr; } }
+
+        /* Section label */
+        .section-label { font-size:.8rem; font-weight:700; text-transform:uppercase; letter-spacing:.1em; color:var(--text-muted); margin-bottom:12px; display:flex; align-items:center; gap:8px }
+
+        /* ── Batch timeline — current + previous ── */
+        .batch-timeline {
+            margin: 1.2rem 0 1.8rem;
+            display: flex;
+            flex-direction: column;
+            align-items: stretch;
+            gap: 0;
+        }
+
+        .batch-card {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            background: rgba(30,41,59,.55);
+            border: 1px solid rgba(148,163,184,.15);
+            border-radius: var(--radius-lg);
+            padding: 16px 28px;
+            transition: all .4s ease;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .batch-card.current {
+            border-color: rgba(56,189,248,.4);
+            background: linear-gradient(135deg, rgba(30,41,59,.8), rgba(15,23,42,.85));
+            box-shadow: 0 4px 24px rgba(56,189,248,.08);
+        }
+        .batch-card.previous {
+            background: rgba(30,41,59,.35);
+            border-color: rgba(148,163,184,.12);
+            opacity: .75;
+        }
+
+        .batch-badge {
+            position: absolute;
+            top: -10px;
+            right: 20px;
+            background: #0ea5e9;
+            color: #fff;
+            font-size: .68rem;
+            font-weight: 700;
+            padding: 2px 12px;
+            border-radius: 10px;
+            letter-spacing: .04em;
+        }
+        .prev-badge { background: rgba(100,116,139,.7) }
+
+        .batch-inner {
+            display: flex;
+            direction: ltr;
+            align-items: center;
+            gap: 20px;
+            width: 100%;
+        }
+
+        .batch-thumb {
+            width: 60px; height: 60px;
+            border-radius: 12px;
+            overflow: hidden;
+            border: 2px solid rgba(148,163,184,.2);
+            flex-shrink: 0;
+        }
+        .batch-card.current .batch-thumb { border-color: rgba(56,189,248,.4); width: 68px; height: 68px }
+        .batch-thumb img { width:100%; height:100%; object-fit:cover; }
+
+        .batch-info { flex:1; min-width:0; text-align:left }
+        .batch-type { font-size:1.1rem; font-weight:700; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+        .batch-card.current .batch-type { font-size:1.2rem }
+        .batch-sub { font-size:.73rem; color:var(--text-muted); margin-top:2px; font-variant-numeric:tabular-nums; display:flex; gap:8px }
+        .batch-sub .confirmed-part { color:rgba(45,212,191,.7) }
+        .batch-sub .pending-part { color:rgba(56,189,248,.7) }
+
+        .batch-count-block { text-align:right; flex-shrink:0 }
+        .batch-count-value {
+            font-size: 2.8rem;
+            font-weight: 800;
+            color: var(--text-muted);
+            font-variant-numeric: tabular-nums;
+            line-height: 1;
+            transition: color .3s;
+            letter-spacing: -1px;
+        }
+        .batch-card.current .batch-count-value { font-size: 3.2rem; color: #f1f5f9 }
+        .batch-count-unit { font-size:.75rem; color:var(--text-muted); font-weight:600; display:block; text-align:right }
+
+        .batch-status { display:flex; align-items:center; gap:6px; flex-shrink:0 }
+
+        .batch-connector {
+            display: flex;
+            justify-content: center;
+            color: rgba(148,163,184,.25);
+            margin: -2px 0;
+            transition: color .4s;
+        }
+        .batch-connector.active { color: rgba(56,189,248,.35) }
+
+        @keyframes connectorPulse {
+            0% { color: rgba(45,212,191,.7) }
+            100% { color: rgba(148,163,184,.25) }
+        }
+        .batch-connector.confirm-pulse { animation: connectorPulse .8s ease }
+
+        .batch-idle { color:var(--text-muted); font-size:.82rem; display:flex; align-items:center; gap:8px; padding: 20px 0 }
+
+        /* Spinner */
+        .spinner {
+            display: inline-block;
+            width: 18px; height: 18px;
+            border: 2.5px solid rgba(148,163,184,.2);
+            border-top-color: #38bdf8;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            flex-shrink: 0;
+        }
+        .spinner.sm { width:14px; height:14px; border-width:2px }
+        .spinner.hidden { display:none }
+        @keyframes spin { to { transform:rotate(360deg) } }
+
+        /* ── Connecting arrow ── */
+        .connect-arrow {
+            display: flex;
+            justify-content: center;
+            margin: -6px 0 8px;
+            color: rgba(148,163,184,.25);
+            font-size: 1rem;
+            transition: color .4s;
+        }
+        .connect-arrow.active { color: rgba(56,189,248,.4) }
+
+        @keyframes confirmArrowPulse {
+            0% { color: rgba(45,212,191,.7) }
+            100% { color: rgba(148,163,184,.25) }
+        }
+        .connect-arrow.confirm-pulse { animation: confirmArrowPulse .8s ease }
+
+        /* Card metric */
+        .card-metric-large { font-variant-numeric: tabular-nums; }
+
+        /* Card batch sub-info */
+        .card-batch-info { font-size:.72rem; color:var(--text-muted); margin-top:4px; font-variant-numeric:tabular-nums; display:flex; gap:8px; justify-content:center }
+        .card-batch-info .confirmed-part { color:rgba(45,212,191,.7) }
+        .card-batch-info .pending-part { color:rgba(148,163,184,.7) }
+
+        /* Animations */
+        @keyframes countBump { 0%{transform:scale(1)} 50%{transform:scale(1.12)} 100%{transform:scale(1)} }
+        .bump { animation:countBump .3s ease }
+        @keyframes confirmFlash { 0%{box-shadow:0 0 0 0 rgba(45,212,191,.5)} 100%{box-shadow:0 0 0 14px rgba(45,212,191,0)} }
+        .confirm-flash { animation:confirmFlash .7s ease }
+
+        /* Footer */
+        .footer-row { display:flex; justify-content:flex-start; padding:12px 0; font-size:.78rem; color:var(--text-muted) }
+    </style>
+</head>
+<body>
+
+<main>
+    <!-- Header -->
+    <div class="page-header">
+        <h1>📊 العد المباشر</h1>
+        <div class="status-badge" id="statusBadge">
+            <span class="dot"></span>
+            <span id="statusText">جارٍ الاتصال…</span>
+        </div>
+    </div>
+
+    <!-- Hero — Batch totals -->
+    <section class="hero-section">
+        <div class="hero-card">
+            <div class="hero-metric primary">
+                <div class="hero-label">الدفعة الحالية</div>
+                <div class="hero-value" id="heroBatch" style="color:var(--text-primary)">0</div>
+                <div class="hero-sub">إجمالي العد (مؤكد + قيد المعالجة)</div>
+            </div>
+            <div class="hero-metric">
+                <div class="hero-label">مؤكد</div>
+                <div class="hero-value" id="heroConfirmed" style="color:#2dd4bf">0</div>
+                <div class="hero-sub" style="color:var(--text-muted)">تم الحفظ</div>
+            </div>
+            <div class="hero-metric">
+                <div class="hero-label">قيد المعالجة</div>
+                <div class="hero-value" id="heroPending" style="color:#94a3b8">0</div>
+                <div class="hero-sub" style="color:var(--text-muted)">لم يتم التأكيد بعد</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Recent batches — current + previous -->
+    <section class="batch-timeline" id="batchTimeline">
+        <!-- Current batch -->
+        <div class="batch-card current" id="batchCurrent">
+            <div class="batch-badge">الدفعة الحالية</div>
+            <div class="batch-inner">
+                <div class="batch-thumb" id="curThumb">
+                    <img id="curImg" src="" alt="">
+                </div>
+                <div class="batch-info">
+                    <div class="batch-type" id="curName">—</div>
+                    <div class="batch-sub" id="curSub"></div>
+                </div>
+                <div class="batch-count-block">
+                    <span class="batch-count-value" id="curCount">0</span>
+                    <span class="batch-count-unit">كيس</span>
+                </div>
+                <div class="batch-status" id="curStatus">
+                    <span class="spinner hidden" id="curSpinner"></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Connecting line -->
+        <div class="batch-connector" id="batchConnector">
+            <svg width="32" height="24" viewBox="0 0 32 24"><path d="M16 0 v24" stroke="currentColor" stroke-width="2" stroke-dasharray="4 3" fill="none"/></svg>
+        </div>
+
+        <!-- Previous batch -->
+        <div class="batch-card previous" id="batchPrevious" style="display:none">
+            <div class="batch-badge prev-badge">الدفعة السابقة</div>
+            <div class="batch-inner">
+                <div class="batch-thumb" id="prevThumb">
+                    <img id="prevImg" src="" alt="">
+                </div>
+                <div class="batch-info">
+                    <div class="batch-type" id="prevName">—</div>
+                    <div class="batch-sub" id="prevSub"></div>
+                </div>
+                <div class="batch-count-block">
+                    <span class="batch-count-value" id="prevCount">0</span>
+                    <span class="batch-count-unit">كيس</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Idle state (no batches yet) -->
+        <div class="batch-idle" id="batchIdle">
+            <span>📦</span>
+            <span>في انتظار التصنيفات…</span>
+        </div>
+    </section>
+
+    <!-- Connecting arrow to class cards -->
+    <div class="connect-arrow" id="connectArrow">▼</div>
+
+    <!-- Confirmed class cards — all types, analytics-style -->
+    <div class="section-label">العدد حسب النوع</div>
+    <section class="grid-container" id="classGrid">
+        <!-- Populated by JS on init -->
+    </section>
+
+    <!-- Footer -->
+    <div class="footer-row"><span id="lastUpdate">—</span></div>
+</main>
+
+<script>
+// ── State ──
+let bagTypes = {};
+let allTypeNames = [];
+let prevConfirmed = {};
+let isFirstRender = true;
+
+const $id = id => document.getElementById(id);
+
+// ── Helpers ──
+function bump(el) {
+    el.classList.remove('bump');
+    void el.offsetWidth;
+    el.classList.add('bump');
+}
+
+function confirmFlash(el) {
+    el.classList.remove('confirm-flash');
+    void el.offsetWidth;
+    el.classList.add('confirm-flash');
+}
+
+function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+function thumbUrl(className) {
+    const bt = bagTypes[className];
+    if (bt && bt.thumb) return '/' + bt.thumb;
+    const letter = className ? className.charAt(0) : '?';
+    return 'https://placehold.co/170x170/1e293b/64748b?text=' + encodeURIComponent(letter);
+}
+
+function imgTag(className) {
+    const safe = (className || '?').charAt(0);
+    return '<img src="' + thumbUrl(className) + '" alt="' + escHtml(className) + '" loading="lazy" onerror="this.src=\'https://placehold.co/170x170/1e293b/64748b?text=' + encodeURIComponent(safe) + '\'">';
+}
+
+// ── Build all type cards once (including zeros) ──
+function buildClassCards() {
+    const grid = $id('classGrid');
+    grid.innerHTML = '';
+
+    // Sort: non-Rejected first alphabetically, Rejected last
+    const sorted = [...allTypeNames].sort((a, b) => {
+        if (a === 'Rejected') return 1;
+        if (b === 'Rejected') return -1;
+        return a.localeCompare(b);
+    });
+
+    sorted.forEach(name => {
+        const card = document.createElement('div');
+        card.className = 'stat-card';
+        card.dataset.cls = name;
+        card.innerHTML =
+            '<div class="card-header stacked">' +
+                '<div class="card-title">' + escHtml(name) + '</div>' +
+                '<div class="thumb-container">' + imgTag(name) + '</div>' +
+            '</div>' +
+            '<div class="card-metric-large" data-role="count" style="color:#2dd4bf">0</div>' +
+            '<div class="card-batch-info" data-role="batch-info"></div>';
+        grid.appendChild(card);
+    });
+}
+
+// ── Update confirmed cards with batch counts ──
+function updateClassCards(confirmed, pending) {
+    const grid = $id('classGrid');
+    const cards = grid.querySelectorAll('.stat-card');
+
+    cards.forEach(card => {
+        const name = card.dataset.cls;
+        const conf = (confirmed || {})[name] || 0;
+        const pend = (pending || {})[name] || 0;
+        const batch = conf + pend;
+        const el = card.querySelector('[data-role="count"]');
+        const infoEl = card.querySelector('[data-role="batch-info"]');
+        const prev = parseInt(el.textContent) || 0;
+
+        if (prev !== batch) {
+            el.textContent = batch;
+            if (!isFirstRender && batch > prev) {
+                bump(el);
+                confirmFlash(card);
+            }
+        }
+
+        // Show breakdown only when there are items
+        if (batch > 0 && pend > 0) {
+            infoEl.innerHTML = '<span class="confirmed-part">✓ ' + conf + ' مؤكد</span>' +
+                               '<span class="pending-part">⏳ +' + pend + ' قيد الانتظار</span>';
+        } else if (batch > 0) {
+            infoEl.innerHTML = '<span class="confirmed-part">✓ ' + conf + ' مؤكد</span>';
+        } else {
+            infoEl.innerHTML = '';
+        }
+    });
+}
+
+// ── Update batch timeline (current + previous) ──
+let prevCurrentType = null;
+let prevPreviousType = null;
+
+function updateBatchTimeline(data, allPending) {
+    const idleEl = $id('batchIdle');
+    const curCard = $id('batchCurrent');
+    const prevCard = $id('batchPrevious');
+    const connector = $id('batchConnector');
+    const arrow = $id('connectArrow');
+    const pendingTotal = data.pending_total || 0;
+    const curType = data.current_batch_type;
+    const prType = data.previous_batch_type;
+
+    if (!curType) {
+        idleEl.style.display = '';
+        curCard.style.display = 'none';
+        prevCard.style.display = 'none';
+        connector.style.display = 'none';
+        arrow.classList.remove('active');
+        return;
+    }
+
+    // Show current batch
+    idleEl.style.display = 'none';
+    curCard.style.display = '';
+
+    // Current batch type changed?
+    if (prevCurrentType !== curType) {
+        $id('curName').textContent = curType;
+        $id('curImg').src = thumbUrl(curType);
+        $id('curImg').alt = curType;
+        if (prevCurrentType && !isFirstRender) confirmFlash(curCard);
+        prevCurrentType = curType;
+    }
+
+    // Current batch total = confirmed + pending for this type
+    const curConf = (data.confirmed || {})[curType] || 0;
+    const curPend = (allPending || {})[curType] || 0;
+    const curTotal = curConf + curPend;
+    const curCountEl = $id('curCount');
+    const prevCurVal = parseInt(curCountEl.textContent) || 0;
+    if (prevCurVal !== curTotal) {
+        curCountEl.textContent = curTotal;
+        if (!isFirstRender) bump(curCountEl);
+    }
+
+    // Current batch breakdown
+    const curSubEl = $id('curSub');
+    if (curPend > 0) {
+        curSubEl.innerHTML = '<span class="confirmed-part">✓ ' + curConf + ' مؤكد</span><span class="pending-part">⏳ +' + curPend + ' قيد الانتظار</span>';
+    } else {
+        curSubEl.innerHTML = '<span class="confirmed-part">✓ ' + curConf + ' مؤكد</span>';
+    }
+
+    // Spinner on current batch
+    const spinner = $id('curSpinner');
+    if (pendingTotal > 0) {
+        spinner.classList.remove('hidden');
+        arrow.classList.add('active');
+    } else {
+        spinner.classList.add('hidden');
+        arrow.classList.remove('active');
+    }
+
+    // Previous batch
+    if (prType && prType !== curType) {
+        prevCard.style.display = '';
+        connector.style.display = '';
+        connector.classList.toggle('active', pendingTotal > 0);
+
+        if (prevPreviousType !== prType) {
+            $id('prevName').textContent = prType;
+            $id('prevImg').src = thumbUrl(prType);
+            $id('prevImg').alt = prType;
+            prevPreviousType = prType;
+        }
+
+        const prConf = (data.confirmed || {})[prType] || 0;
+        const prPend = (allPending || {})[prType] || 0;
+        const prTotal = prConf + prPend;
+        const prevCountEl = $id('prevCount');
+        const prevPrVal = parseInt(prevCountEl.textContent) || 0;
+        if (prevPrVal !== prTotal) {
+            prevCountEl.textContent = prTotal;
+            if (!isFirstRender) bump(prevCountEl);
+        }
+
+        const prevSubEl = $id('prevSub');
+        if (prPend > 0) {
+            prevSubEl.innerHTML = '<span class="confirmed-part">✓ ' + prConf + ' مؤكد</span><span class="pending-part">⏳ +' + prPend + ' قيد الانتظار</span>';
+        } else {
+            prevSubEl.innerHTML = '<span class="confirmed-part">✓ ' + prConf + ' مؤكد</span>';
+        }
+    } else {
+        prevCard.style.display = 'none';
+        connector.style.display = 'none';
+    }
+
+    // Pulse connector on confirmations
+    if (!isFirstRender && prevCurVal > 0 && curTotal > prevCurVal) {
+        connector.classList.remove('confirm-pulse');
+        void connector.offsetWidth;
+        connector.classList.add('confirm-pulse');
+        arrow.classList.remove('confirm-pulse');
+        void arrow.offsetWidth;
+        arrow.classList.add('confirm-pulse');
+    }
+}
+
+// ── Main UI update ──
+function updateUI(data) {
+    const ct = data.confirmed_total || 0;
+    const pt = data.pending_total || 0;
+    const batchTotal = ct + pt;
+
+    // Hero
+    const heroBatch = $id('heroBatch');
+    const heroConfirmed = $id('heroConfirmed');
+    const heroPending = $id('heroPending');
+    if (heroBatch.textContent !== String(batchTotal)) { heroBatch.textContent = batchTotal; if (!isFirstRender) bump(heroBatch); }
+    if (heroConfirmed.textContent !== String(ct)) { heroConfirmed.textContent = ct; if (!isFirstRender) bump(heroConfirmed); }
+    if (heroPending.textContent !== String(pt)) { heroPending.textContent = pt; if (!isFirstRender) bump(heroPending); }
+
+    // Per-class pending counts from smoother (authoritative source)
+    const allPending = {};
+    for (const [cls, n] of Object.entries(data.pending || {})) { allPending[cls] = (allPending[cls] || 0) + n; }
+
+    // Batch timeline (current + previous)
+    updateBatchTimeline(data, allPending);
+
+    // Confirmed type cards
+    updateClassCards(data.confirmed, allPending);
+
+    // Footer
+    $id('lastUpdate').textContent = 'آخر تحديث ' + new Date().toLocaleTimeString('ar');
+
+    // Track state
+    prevConfirmed = Object.assign({}, data.confirmed || {});
+    isFirstRender = false;
+}
+
+// ── SSE ──
+function connectSSE() {
+    const es = new EventSource('/api/counts/stream');
+    es.onopen = () => {
+        $id('statusBadge').className = 'status-badge';
+        $id('statusText').textContent = 'متصل';
+    };
+    es.onmessage = (e) => {
+        try { updateUI(JSON.parse(e.data)); } catch(err) { console.warn('SSE parse error', err); }
+    };
+    es.onerror = () => {
+        $id('statusBadge').className = 'status-badge disconnected';
+        $id('statusText').textContent = 'جارٍ إعادة الاتصال…';
+        es.close();
+        setTimeout(connectSSE, 3000);
+    };
+}
+
+// ── Init ──
+async function init() {
+    // Load bag types
+    try {
+        const resp = await fetch('/api/bag-types');
+        if (resp.ok) {
+            const types = await resp.json();
+            types.forEach(bt => {
+                bagTypes[bt.name] = bt;
+                if (bt.name !== 'Rejected') allTypeNames.push(bt.name);
+            });
+            if (bagTypes['Rejected']) allTypeNames.push('Rejected');
+        }
+    } catch(e) { console.warn('Failed to load bag types', e); }
+
+    buildClassCards();
+
+    // Fetch initial state
+    try {
+        const resp = await fetch('/api/counts');
+        if (resp.ok) updateUI(await resp.json());
+    } catch(e) {}
+
+    connectSSE();
+}
+init();
+</script>
+
+</body>
+</html>

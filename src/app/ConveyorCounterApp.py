@@ -20,9 +20,10 @@ import os
 import signal
 import threading
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, Dict, Callable
+from typing import Optional, Dict, Callable, List
 
 import cv2
 import numpy as np
@@ -53,6 +54,7 @@ from src.endpoint.routes.snapshot import get_snapshot_writer, SnapshotWriter
 from src.frame_source.FrameSource import FrameSource
 from src.frame_source.FrameSourceFactory import FrameSourceFactory
 from src.logging.Database import DatabaseManager
+from src.endpoint.pipeline_state import write_state as write_pipeline_state
 from src.tracking.BidirectionalSmoother import BidirectionalSmoother, ClassificationRecord
 from src.tracking.ConveyorTracker import ConveyorTracker
 from src.utils.AppLogging import logger
@@ -226,6 +228,14 @@ class ConveyorCounterApp:
         self._last_detections = []
         self._last_tracks = []
         self._last_debug_info = {}
+
+        # Current batch type tracking (stable: based on rolling window majority)
+        self._current_batch_type: Optional[str] = None
+        self._previous_batch_type: Optional[str] = None
+        self._batch_type_window: List[str] = []
+        self._batch_type_window_size: int = 7
+        # Last individual classification (may flicker; used for fine-grained display)
+        self._last_classified_type: Optional[str] = None
 
         # Memory monitoring
         self._last_memory_log_time: float = 0.0
@@ -499,8 +509,25 @@ class ConveyorCounterApp:
         self.state.last_classification = f"T{track_id}:{class_name}({confidence:.2f})"
         self.state.add_event(f"CLASSIFY T{track_id}->{class_name} ({confidence:.2f}) rois={non_rejected_rois}")
 
-        # Check if classification is reliable (needs >= 3 non-rejected ROIs)
+        # Track last individual classification
+        self._last_classified_type = class_name
+
+        # Stable batch type from rolling window majority
+        # Only reliable, non-Rejected classifications inform the batch type
+        # so a single misclassification doesn't cause the display to flicker.
         min_trusted_rois = 3
+        if non_rejected_rois >= min_trusted_rois and class_name != 'Rejected':
+            self._batch_type_window.append(class_name)
+            if len(self._batch_type_window) > self._batch_type_window_size:
+                self._batch_type_window.pop(0)
+            counter = Counter(self._batch_type_window)
+            dominant, _ = counter.most_common(1)[0]
+            # Track previous batch on transition
+            if self._current_batch_type and dominant != self._current_batch_type:
+                self._previous_batch_type = self._current_batch_type
+            self._current_batch_type = dominant
+
+        # Check if classification is reliable (needs >= 3 non-rejected ROIs)
         original_class = class_name
 
         if non_rejected_rois < min_trusted_rois and class_name != 'Rejected':
@@ -546,6 +573,9 @@ class ConveyorCounterApp:
                 f"{confirmed_record.class_name} smoothed={confirmed_record.smoothed}"
             )
             self._record_confirmed_count(confirmed_record, best_roi)
+
+        # Publish pipeline state for real-time visibility
+        self._publish_pipeline_state()
 
     def _save_roi_by_class(self, roi: np.ndarray, record: ClassificationRecord):
         """
@@ -681,6 +711,48 @@ class ConveyorCounterApp:
                 self._on_count_callback(record)
             except Exception as e:
                 logger.error(f"[ConveyorCounterApp] Count callback error: {e}")
+
+    def _publish_pipeline_state(self):
+        """
+        Write current pipeline state to shared file for the FastAPI server.
+
+        Called after each classification or confirmation to keep the real-time
+        counts endpoint up to date.
+        """
+        try:
+            smoother_stats = self._smoother.get_statistics()
+            pending_summary = self._smoother.get_pending_summary()
+            pending_total = smoother_stats['pending_in_window']
+            window_size = self._smoother.window_size
+            next_confirmation_in = max(0, window_size - pending_total)
+
+            # Build recent events for live feed
+            raw_events = self.state.get_recent_events()
+            recent_events = [
+                {"ts": ts, "msg": msg} for ts, msg in raw_events
+            ]
+
+            state = {
+                "confirmed": self.state.get_counts_snapshot(),
+                "pending": pending_summary,
+                "just_classified": self.state.get_tentative_snapshot(),
+                "confirmed_total": self.state.total_counted,
+                "pending_total": pending_total,
+                "just_classified_total": self.state.tentative_total,
+                "smoothing_rate": smoother_stats['smoothing_rate'],
+                "window_status": {
+                    "size": window_size,
+                    "current_items": pending_total,
+                    "next_confirmation_in": next_confirmation_in
+                },
+                "recent_events": recent_events,
+                "current_batch_type": self._current_batch_type,
+                "previous_batch_type": self._previous_batch_type,
+                "last_classified_type": self._last_classified_type
+            }
+            write_pipeline_state(state)
+        except Exception as e:
+            logger.debug(f"[ConveyorCounterApp] Failed to publish pipeline state: {e}")
 
     def _maybe_capture_snapshot(
         self,

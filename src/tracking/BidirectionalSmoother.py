@@ -271,17 +271,26 @@ class BidirectionalSmoother:
             oldest_record.window_position = self._confirm_count
             return oldest_record
 
-        # Check if oldest record should be smoothed (low confidence outlier)
-        if (
-            self._is_low_confidence(oldest_record) and
-            oldest_record.class_name != dominant_class
-        ):
-            # Check if it's truly an outlier (only one of its class in window)
+        # Check if oldest record should be smoothed (outlier in dominant batch)
+        # On a conveyor, bags come in monotype batches. A small minority of
+        # different-class items against strong dominance is almost certainly
+        # misclassification, even with high confidence.
+        # Examples:
+        #   window=7:  [B,B,B,X(1.00),B,B,B] → X smoothed (1 outlier)
+        #   window=15: [B,B,B,B,B,B,B,B,B,X,B,X,B,B,B] → X smoothed (2 outliers)
+        if oldest_record.class_name != dominant_class:
             class_dist = self._get_window_distribution()
             class_count = class_dist.get(oldest_record.class_name, 0)
+            # Allow smoothing when the non-dominant class is a small minority
+            # (up to ~20% of window size, minimum 1).  This handles both small
+            # windows (size 7 → threshold 1) and larger ones (size 15 → threshold 3).
+            outlier_threshold = max(1, int(len(self.window_buffer) * 0.2))
 
-            # Override if single occurrence with low confidence
-            if class_count <= 1:
+            if class_count <= outlier_threshold:
+                reason = (
+                    "outlier_low_conf" if self._is_low_confidence(oldest_record)
+                    else "outlier_batch_override"
+                )
                 smoothed = ClassificationRecord(
                     track_id=oldest_record.track_id,
                     class_name=dominant_class,
@@ -298,7 +307,8 @@ class BidirectionalSmoother:
                     f"[SMOOTHING] T{oldest_record.track_id} SMOOTHED | "
                     f"{oldest_record.class_name}->{dominant_class} "
                     f"conf={oldest_record.confidence:.3f} dominance={dominance_ratio:.2f} "
-                    f"reason=outlier"
+                    f"class_count={class_count}/{len(self.window_buffer)} "
+                    f"threshold={outlier_threshold} reason={reason}"
                 )
                 return smoothed
 
@@ -465,6 +475,25 @@ class BidirectionalSmoother:
             'confirmed_count': self._confirm_count,
             'pending_in_window': len(self.window_buffer)
         }
+
+    def get_dominant_class(self) -> Optional[str]:
+        """Get the dominant (most frequent) class in the current window, excluding Rejected."""
+        if not self.window_buffer:
+            return None
+        dist: Dict[str, int] = {}
+        for rec in self.window_buffer:
+            if rec.class_name != 'Rejected':
+                dist[rec.class_name] = dist.get(rec.class_name, 0) + 1
+        if not dist:
+            return None
+        return max(dist, key=dist.get)
+
+    def get_pending_summary(self) -> Dict[str, int]:
+        """Get counts of pending items in the smoothing window grouped by class."""
+        summary: Dict[str, int] = {}
+        for record in self.window_buffer:
+            summary[record.class_name] = summary.get(record.class_name, 0) + 1
+        return summary
 
     def cleanup(self):
         """Clean up resources."""
