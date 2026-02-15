@@ -145,6 +145,11 @@ class BidirectionalSmoother:
         """
         Apply smoothing to the oldest item in the window using full window context.
 
+        Special handling for 'Rejected' class:
+        - 'Rejected' is ALWAYS overridden (we never want to miss counting a bag)
+        - If there's a dominant class in window, override to that class
+        - If no dominant class, override to 'Unknown' (still counts as a bag)
+
         Returns:
             The (potentially smoothed) oldest record
         """
@@ -155,58 +160,132 @@ class BidirectionalSmoother:
 
         # Need at least 2 items for meaningful smoothing
         if len(self.window_buffer) < 2:
+            # Special case: even with small window, convert Rejected to Unknown
+            if oldest_record.class_name == 'Rejected':
+                smoothed = ClassificationRecord(
+                    track_id=oldest_record.track_id,
+                    class_name='Unknown',
+                    confidence=oldest_record.confidence,
+                    vote_ratio=oldest_record.vote_ratio,
+                    timestamp=oldest_record.timestamp,
+                    window_position=self._confirm_count,
+                    smoothed=True,
+                    original_class='Rejected',
+                    non_rejected_rois=oldest_record.non_rejected_rois
+                )
+                self.smoothed_records += 1
+                logger.info(
+                    f"[SMOOTHING] T{oldest_record.track_id} SMOOTHED | "
+                    f"Rejected->Unknown reason=small_window_fallback"
+                )
+                return smoothed
+
             logger.info(
                 f"[SMOOTHING] T{oldest_record.track_id} | action=NO_SMOOTHING "
                 f"reason=window_too_small size={len(self.window_buffer)}"
             )
             return oldest_record
 
-        # Find dominant class using full window context
+        # Find dominant class using full window context (excluding 'Rejected' from consideration)
         weighted_dist = self._get_confidence_weighted_distribution()
-        total_weight = sum(weighted_dist.values())
+        # Remove 'Rejected' from distribution for dominant class calculation
+        weighted_dist_no_rejected = {k: v for k, v in weighted_dist.items() if k != 'Rejected'}
+        total_weight = sum(weighted_dist_no_rejected.values())
 
+        window_classes = [r.class_name for r in self.window_buffer]
+
+        # Handle case where all items are Rejected
         if total_weight == 0:
+            if oldest_record.class_name == 'Rejected':
+                # All items are Rejected - convert to Unknown
+                smoothed = ClassificationRecord(
+                    track_id=oldest_record.track_id,
+                    class_name='Unknown',
+                    confidence=oldest_record.confidence,
+                    vote_ratio=oldest_record.vote_ratio,
+                    timestamp=oldest_record.timestamp,
+                    window_position=self._confirm_count,
+                    smoothed=True,
+                    original_class='Rejected',
+                    non_rejected_rois=oldest_record.non_rejected_rois
+                )
+                self.smoothed_records += 1
+                logger.info(
+                    f"[SMOOTHING] T{oldest_record.track_id} SMOOTHED | "
+                    f"Rejected->Unknown reason=all_rejected_fallback"
+                )
+                return smoothed
+
             logger.info(
                 f"[SMOOTHING] T{oldest_record.track_id} | action=NO_SMOOTHING "
                 f"reason=zero_weight"
             )
             return oldest_record
 
-        dominant_class = max(weighted_dist, key=weighted_dist.get)
-        dominance_ratio = weighted_dist[dominant_class] / total_weight
+        dominant_class = max(weighted_dist_no_rejected, key=weighted_dist_no_rejected.get)
+        dominance_ratio = weighted_dist_no_rejected[dominant_class] / total_weight
 
-        window_classes = [r.class_name for r in self.window_buffer]
         logger.info(
             f"[SMOOTHING] WINDOW_ANALYSIS | size={len(self.window_buffer)} "
             f"classes={window_classes} dominant={dominant_class} "
             f"dominance={dominance_ratio:.2f}"
         )
 
+        # Special handling for 'Rejected' - ALWAYS override
+        if oldest_record.class_name == 'Rejected':
+            if dominance_ratio >= self.min_window_dominance:
+                # Override to dominant class
+                target_class = dominant_class
+                reason = 'rejected_to_dominant'
+            else:
+                # No clear dominant class - use Unknown so we still count it
+                target_class = 'Unknown'
+                reason = 'rejected_to_unknown_no_dominant'
+
+            smoothed = ClassificationRecord(
+                track_id=oldest_record.track_id,
+                class_name=target_class,
+                confidence=oldest_record.confidence,
+                vote_ratio=oldest_record.vote_ratio,
+                timestamp=oldest_record.timestamp,
+                window_position=self._confirm_count,
+                smoothed=True,
+                original_class='Rejected',
+                non_rejected_rois=oldest_record.non_rejected_rois
+            )
+            self.smoothed_records += 1
+            logger.info(
+                f"[SMOOTHING] T{oldest_record.track_id} SMOOTHED | "
+                f"Rejected->{target_class} dominance={dominance_ratio:.2f} "
+                f"reason={reason}"
+            )
+            return smoothed
+
+        # For non-Rejected classes: apply standard smoothing logic
         # Check if there's a clearly dominant class
         if dominance_ratio < self.min_window_dominance:
             logger.info(
                 f"[SMOOTHING] T{oldest_record.track_id} | action=NO_SMOOTHING "
                 f"reason=no_dominant_class best={dominant_class} ratio={dominance_ratio:.2f}"
             )
+            oldest_record.window_position = self._confirm_count
             return oldest_record
 
-        # Check if oldest record should be smoothed
+        # Check if oldest record should be smoothed (low confidence outlier)
         if (
             self._is_low_confidence(oldest_record) and
             oldest_record.class_name != dominant_class
         ):
             # Check if it's truly an outlier (only one of its class in window)
-            # Note: 'Rejected' will have class_count == 0 since it's excluded from distribution
             class_dist = self._get_window_distribution()
             class_count = class_dist.get(oldest_record.class_name, 0)
 
-            # Override if single occurrence (or 'Rejected' with count 0) with low confidence
+            # Override if single occurrence with low confidence
             if class_count <= 1:
-                # Single/zero occurrence with low confidence - override with dominant class
                 smoothed = ClassificationRecord(
                     track_id=oldest_record.track_id,
                     class_name=dominant_class,
-                    confidence=oldest_record.confidence,  # Keep original confidence
+                    confidence=oldest_record.confidence,
                     vote_ratio=oldest_record.vote_ratio,
                     timestamp=oldest_record.timestamp,
                     window_position=self._confirm_count,
@@ -215,18 +294,11 @@ class BidirectionalSmoother:
                     non_rejected_rois=oldest_record.non_rejected_rois
                 )
                 self.smoothed_records += 1
-
-                # Determine reason for smoothing
-                if oldest_record.class_name == 'Rejected':
-                    reason = 'rejected_override'
-                else:
-                    reason = 'outlier'
-
                 logger.info(
                     f"[SMOOTHING] T{oldest_record.track_id} SMOOTHED | "
                     f"{oldest_record.class_name}->{dominant_class} "
                     f"conf={oldest_record.confidence:.3f} dominance={dominance_ratio:.2f} "
-                    f"reason={reason}"
+                    f"reason=outlier"
                 )
                 return smoothed
 

@@ -79,6 +79,10 @@
 + data/classes/***
 + data/model/
 + data/model/***
+- data/model_converter/Calibration_Detect
+- data/model_converter/calibration_images
+- data/model_converter/Classify_Calibration
++ data/model_converter/***
 
 # + data/db/
 # + data/db/***
