@@ -5,6 +5,8 @@ Based on the working implementation from BreadBagCounterSystem.
 Optimized for NV12 input format as required by BPU models.
 """
 
+import os
+import re
 import cv2
 import numpy as np
 from typing import List, Tuple, Dict, Optional
@@ -50,13 +52,24 @@ class BpuClassifier(BaseClassifier):
         Args:
             model_path: Path to .bin model file
             classes: List of class names
-            input_size: Model input size (width, height)
+            input_size: Model input size (width, height). Auto-detected from
+                        model filename if it contains a _WxH_ pattern.
         """
         if not HAS_BPU:
             raise ImportError("hobot_dnn not available. BPU classifier requires RDK platform.")
         
         self.model_path = model_path
         self._class_names = classes
+
+        # Auto-detect input size from model filename (e.g., "..._256x256_nv12.bin")
+        parsed_size = self._parse_model_input_size(model_path)
+        if parsed_size is not None and parsed_size != input_size:
+            logger.warning(
+                f"[BpuClassifier] Model filename indicates {parsed_size[0]}x{parsed_size[1]} "
+                f"but default is {input_size[0]}x{input_size[1]}. Using model size."
+            )
+            input_size = parsed_size
+
         self.input_size = input_size
         self.input_w, self.input_h = input_size
 
@@ -66,6 +79,7 @@ class BpuClassifier(BaseClassifier):
 
         # Load model
         logger.info(f"[BpuClassifier] Loading model: {model_path}")
+        logger.info(f"[BpuClassifier] Input size: {self.input_w}x{self.input_h}")
         self.model = dnn.load(model_path)
 
         if not self.model:
@@ -79,19 +93,77 @@ class BpuClassifier(BaseClassifier):
             logger.debug(f"[BpuClassifier] Could not read model properties: {e}")
 
         logger.info(f"[BpuClassifier] Model loaded, classes: {len(classes)}")
+
+    @staticmethod
+    def _parse_model_input_size(model_path: str) -> Optional[Tuple[int, int]]:
+        """
+        Parse input size from model filename.
+
+        Matches pattern like '_256x256_' in filenames such as:
+        'yolo_small_classify_v15_bayese_256x256_nv12.bin'
+
+        Args:
+            model_path: Path to model file
+
+        Returns:
+            (width, height) tuple if found, None otherwise
+        """
+        basename = os.path.basename(model_path)
+        match = re.search(r'_(\d+)x(\d+)_', basename)
+        if match:
+            w, h = int(match.group(1)), int(match.group(2))
+            if 32 <= w <= 2048 and 32 <= h <= 2048:
+                return (w, h)
+        return None
     
+    # Minimum ROI dimensions for meaningful classification
+    MIN_ROI_SIZE = 10
+
+    def _validate_roi(self, roi: np.ndarray) -> Optional[str]:
+        """
+        Validate ROI image before processing.
+
+        Catches invalid inputs that would produce incorrect NV12 data
+        (e.g., grayscale images, tiny crops, wrong dtype).
+
+        Args:
+            roi: Input image to validate
+
+        Returns:
+            Error message string if invalid, None if valid
+        """
+        if roi is None:
+            return "ROI is None"
+
+        if not isinstance(roi, np.ndarray):
+            return f"ROI is not ndarray: {type(roi)}"
+
+        if roi.size == 0:
+            return "ROI is empty"
+
+        if len(roi.shape) != 3:
+            return f"ROI must be 3-channel BGR, got shape {roi.shape}"
+
+        if roi.shape[2] != 3:
+            return f"ROI must have 3 channels, got {roi.shape[2]}"
+
+        if roi.shape[0] < self.MIN_ROI_SIZE or roi.shape[1] < self.MIN_ROI_SIZE:
+            return f"ROI too small: {roi.shape[1]}x{roi.shape[0]} (min {self.MIN_ROI_SIZE}x{self.MIN_ROI_SIZE})"
+
+        return None
+
     def _preprocess(self, img: np.ndarray) -> np.ndarray:
         """
         Preprocess BGR image to NV12 format for BPU.
 
         Args:
-            img: BGR image (numpy array)
+            img: BGR image (numpy array, must be 3-channel)
 
         Returns:
             NV12 formatted buffer
         """
-        # Resize with INTER_NEAREST for speed (acceptable for classification)
-        resized = cv2.resize(img, (self.input_w, self.input_h), interpolation=cv2.INTER_NEAREST)
+        # Use INTER_LINEAR for classification quality (smooth upscaling of small ROIs)
+        resized = cv2.resize(img, (self.input_w, self.input_h), interpolation=cv2.INTER_LINEAR)
         return self._bgr2nv12(resized)
 
     def _bgr2nv12(self, bgr_img: np.ndarray) -> np.ndarray:
@@ -120,7 +192,7 @@ class BpuClassifier(BaseClassifier):
         self.nv12_buffer[self.area::2] = yuv420p[u_start:v_start]
         self.nv12_buffer[self.area + 1::2] = yuv420p[v_start:]
 
-        return self.nv12_buffer
+        return np.ascontiguousarray(self.nv12_buffer)
 
     def _postprocess(self, output: np.ndarray) -> Tuple[int, str, float, np.ndarray]:
         """
@@ -166,8 +238,10 @@ class BpuClassifier(BaseClassifier):
             logger.error("[BpuClassifier] Model not loaded!")
             return ClassificationResult(class_id=-1, class_name="Unknown", confidence=0.0)
 
-        if roi is None or roi.size == 0:
-            logger.error("[BpuClassifier] Invalid ROI!")
+        # Comprehensive input validation (prevents NV12 conversion of invalid images)
+        error = self._validate_roi(roi)
+        if error is not None:
+            logger.error(f"[BpuClassifier] Invalid ROI: {error}")
             return ClassificationResult(class_id=-1, class_name="Unknown", confidence=0.0)
 
         try:
@@ -210,7 +284,10 @@ class BpuClassifier(BaseClassifier):
         if self.model is None:
             return ClassificationResult(class_id=-1, class_name="Unknown", confidence=0.0), {"Unknown": 1.0}
 
-        if roi is None or roi.size == 0:
+        # Comprehensive input validation
+        error = self._validate_roi(roi)
+        if error is not None:
+            logger.error(f"[BpuClassifier] classify_with_probs invalid ROI: {error}")
             return ClassificationResult(class_id=-1, class_name="Unknown", confidence=0.0), {"Unknown": 1.0}
 
         try:

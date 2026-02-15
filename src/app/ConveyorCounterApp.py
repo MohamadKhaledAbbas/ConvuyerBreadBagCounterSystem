@@ -435,8 +435,17 @@ class ConveyorCounterApp:
         if frame.shape[:2] != (720, 1280):
             frame = cv2.resize(frame, (1280, 720))
 
+        # Get NV12 data from frame source for native BPU detection (avoids
+        # NV12→BGR→NV12 round-trip). Only Ros2FrameServer provides this.
+        nv12_data = None
+        frame_size = None
+        if hasattr(self._frame_source, 'get_last_nv12_data'):
+            nv12_data, frame_size = self._frame_source.get_last_nv12_data()
+
         # Use PipelineCore for all processing
-        detections, active_tracks, rois_collected = self._pipeline_core.process_frame(frame)
+        detections, active_tracks, rois_collected = self._pipeline_core.process_frame(
+            frame, nv12_data=nv12_data, frame_size=frame_size
+        )
 
         # Update state
         self.state.active_tracks = len(active_tracks)

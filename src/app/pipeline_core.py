@@ -92,19 +92,30 @@ class PipelineCore:
 
     def process_frame(
         self,
-        frame: np.ndarray
+        frame: np.ndarray,
+        nv12_data: Optional[np.ndarray] = None,
+        frame_size: Optional[Tuple[int, int]] = None
     ) -> Tuple[List[Detection], List[TrackedObject], int]:
         """
         Process a single frame through the pipeline.
 
         Args:
-            frame: Input BGR frame
+            frame: Input BGR frame (used for ROI extraction and fallback detection)
+            nv12_data: Optional raw NV12 frame for native BPU detection (avoids
+                       NV12→BGR→NV12 round-trip when available)
+            frame_size: Original (height, width) of the frame, required when nv12_data
+                        is provided
 
         Returns:
             Tuple of (detections, active_tracks, rois_collected)
         """
-        # 1. Detection
-        detections = self.detector.detect(frame)
+        # 1. Detection - use native NV12 path when available to avoid conversion overhead
+        if (nv12_data is not None
+                and frame_size is not None
+                and hasattr(self.detector, 'detect_nv12')):
+            detections = self.detector.detect_nv12(nv12_data, frame_size)
+        else:
+            detections = self.detector.detect(frame)
 
         # 2. Tracking - cast frame shape to proper type
         frame_h, frame_w = frame.shape[:2]
