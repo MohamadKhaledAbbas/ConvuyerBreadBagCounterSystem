@@ -681,14 +681,14 @@ class ConveyorCounterApp:
         # Log to database
         if self._db is not None:
             try:
-                # Optionally save ROI image for debugging
-                if roi is not None:
-                    roi_dir = os.path.join(self.tracking_config.spool_dir, "rois")
-                    os.makedirs(roi_dir, exist_ok=True)
-                    image_filename = f"track_{record.track_id}_{int(time.time() * 1000)}.jpg"
-                    image_path = os.path.join(roi_dir, image_filename)
-                    cv2.imwrite(image_path, roi)
-                    logger.debug(f"[ConveyorCounterApp] Saved ROI for debugging: {image_path}")
+                # # Optionally save ROI image for debugging
+                # if roi is not None:
+                #     roi_dir = os.path.join(self.tracking_config.spool_dir, "rois")
+                #     os.makedirs(roi_dir, exist_ok=True)
+                #     image_filename = f"track_{record.track_id}_{int(time.time() * 1000)}.jpg"
+                #     image_path = os.path.join(roi_dir, image_filename)
+                #     cv2.imwrite(image_path, roi)
+                #     logger.debug(f"[ConveyorCounterApp] Saved ROI for debugging: {image_path}")
 
                 import json
                 self._db.add_event(

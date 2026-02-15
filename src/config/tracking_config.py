@@ -231,7 +231,7 @@ class TrackingConfig:
     bidirectional_smoothing_enabled: bool = _parse_bool_env("BIDIRECTIONAL_SMOOTHING_ENABLED", True)
     """Enable bidirectional context-aware smoothing."""
     
-    bidirectional_buffer_size: int = _parse_int_env("BIDIRECTIONAL_BUFFER_SIZE", 7)
+    bidirectional_buffer_size: int = _parse_int_env("BIDIRECTIONAL_BUFFER_SIZE", 15)
     """
     Buffer size for bidirectional smoothing (should be odd for symmetry).
     This is the STABILIZER that corrects misclassifications.
@@ -306,7 +306,7 @@ class TrackingConfig:
     roi_candidates_dir: str = _parse_str_env("ROI_CANDIDATES_DIR", "data/roi_candidates")
     """Directory for saved ROI candidates."""
     
-    save_rois_by_class: bool = _parse_bool_env("SAVE_ROIS_BY_CLASS", True)
+    save_rois_by_class: bool = _parse_bool_env("SAVE_ROIS_BY_CLASS", False)
     """Organize saved ROIs by classification result in subdirectories."""
 
     save_classified_rois: bool = _parse_bool_env("SAVE_CLASSIFIED_ROIS", True)
@@ -319,14 +319,14 @@ class TrackingConfig:
     classified_rois_dir: str = _parse_str_env("CLASSIFIED_ROIS_DIR", "data/classified_rois")
     """Directory for saving ROIs used in classification."""
 
-    classified_rois_retention_hours: float = _parse_float_env("CLASSIFIED_ROIS_RETENTION_HOURS", 24.0)
+    classified_rois_retention_hours: float = _parse_float_env("CLASSIFIED_ROIS_RETENTION_HOURS", 72.0)
     """
     Maximum age (hours) for classified ROI files before automatic deletion.
     Set to 0 to disable time-based retention (not recommended for production).
     Default: 24 hours.
     """
 
-    classified_rois_max_count: int = _parse_int_env("CLASSIFIED_ROIS_MAX_COUNT", 12_000)
+    classified_rois_max_count: int = _parse_int_env("CLASSIFIED_ROIS_MAX_COUNT", 40_000)
     """
     Maximum number of classified ROI files to retain.
     When exceeded, oldest files are deleted first.
@@ -334,10 +334,10 @@ class TrackingConfig:
     Default: 10000 files.
     """
 
-    classified_rois_purge_interval_minutes: float = _parse_float_env("CLASSIFIED_ROIS_PURGE_INTERVAL_MINUTES", 15.0)
+    classified_rois_purge_interval_minutes: float = _parse_float_env("CLASSIFIED_ROIS_PURGE_INTERVAL_MINUTES", 60.0)
     """
     How often to run the purge check (in minutes).
-    Default: 15 minutes.
+    Default: 60 minutes.
     """
 
     @property
