@@ -145,7 +145,71 @@ class BpuDetector(BaseDetector):
         self.nv12_buffer[self.area::2] = yuv_flat[u_start:v_start]
         self.nv12_buffer[self.area + 1::2] = yuv_flat[v_start:]
 
-        return self.nv12_buffer, x_scale, y_scale, x_shift, y_shift
+        return np.ascontiguousarray(self.nv12_buffer), x_scale, y_scale, x_shift, y_shift
+
+    def _preprocess_nv12(
+        self, nv12_data: np.ndarray, frame_size: Tuple[int, int]
+    ) -> Tuple[np.ndarray, float, float, int, int]:
+        """
+        Preprocess NV12 frame directly for BPU, avoiding BGR conversion.
+
+        Resizes Y and UV planes separately, then pads to model input size.
+        Eliminates the NV12→BGR→NV12 round-trip conversion.
+
+        Args:
+            nv12_data: Raw NV12 frame as 2D array (height*1.5, width)
+            frame_size: Original (height, width) of the frame
+
+        Returns:
+            Tuple of (nv12_buffer, x_scale, y_scale, x_shift, y_shift)
+        """
+        orig_h, orig_w = frame_size
+
+        x_scale = min(1.0 * self.input_h / orig_h, 1.0 * self.input_w / orig_w)
+        y_scale = x_scale
+
+        new_w = int(orig_w * x_scale) & ~1  # Ensure even for NV12
+        new_h = int(orig_h * y_scale) & ~1  # Ensure even for NV12
+
+        # Calculate padding with even alignment for UV plane compatibility
+        total_pad_x = self.input_w - new_w
+        total_pad_y = self.input_h - new_h
+        x_shift = (total_pad_x // 2) & ~1
+        y_shift = (total_pad_y // 2) & ~1
+        right_pad = total_pad_x - x_shift
+        bottom_pad = total_pad_y - y_shift
+
+        # Split NV12 into Y and UV planes
+        y_plane = nv12_data[:orig_h, :]           # (orig_h, orig_w)
+        uv_plane = nv12_data[orig_h:, :]          # (orig_h//2, orig_w)
+
+        # Resize Y plane (grayscale)
+        y_resized = cv2.resize(y_plane, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+
+        # Resize UV plane: reshape interleaved UVUV to 2-channel, resize, reshape back
+        uv_2ch = uv_plane.reshape(orig_h // 2, orig_w // 2, 2)
+        uv_resized = cv2.resize(uv_2ch, (new_w // 2, new_h // 2), interpolation=cv2.INTER_NEAREST)
+        uv_resized_flat = uv_resized.reshape(new_h // 2, new_w)
+
+        # Pad Y plane (127 = mid-gray luminance)
+        y_padded = cv2.copyMakeBorder(
+            y_resized, y_shift, bottom_pad, x_shift, right_pad,
+            cv2.BORDER_CONSTANT, value=127
+        )
+
+        # Pad UV plane (128 = neutral chroma for both U and V)
+        uv_padded = cv2.copyMakeBorder(
+            uv_resized_flat,
+            y_shift // 2, bottom_pad // 2,
+            x_shift, right_pad,
+            cv2.BORDER_CONSTANT, value=128
+        )
+
+        # Write into pre-allocated NV12 buffer
+        self.nv12_buffer[:self.area] = y_padded.reshape(-1)
+        self.nv12_buffer[self.area:] = uv_padded.reshape(-1)
+
+        return np.ascontiguousarray(self.nv12_buffer), x_scale, y_scale, x_shift, y_shift
 
     def _postprocess(
         self,
@@ -269,6 +333,55 @@ class BpuDetector(BaseDetector):
         
         # Post-process
         results = self._postprocess(output_arrays, x_scale, y_scale, x_shift, y_shift, orig_shape)
+
+        # Convert to Detection objects
+        detections = []
+        for class_id, score, x1, y1, x2, y2 in results:
+            class_name = self._class_names.get(class_id, f"class_{class_id}")
+            detections.append(Detection(
+                bbox=(int(x1), int(y1), int(x2), int(y2)),
+                confidence=score,
+                class_id=class_id,
+                class_name=class_name
+            ))
+
+        return detections
+
+    def detect_nv12(
+        self, nv12_data: np.ndarray, frame_size: Tuple[int, int]
+    ) -> List[Detection]:
+        """
+        Detect objects from a native NV12 frame, avoiding BGR conversion.
+
+        This eliminates the NV12→BGR→NV12 round-trip that occurs when the
+        frame source provides NV12 and the BPU model expects NV12.
+
+        Args:
+            nv12_data: Raw NV12 frame as 2D array (height*1.5, width)
+            frame_size: (height, width) of the original frame
+
+        Returns:
+            List of Detection objects
+        """
+        if self.quantize_model is None:
+            return []
+
+        orig_h, orig_w = frame_size
+        orig_shape = (orig_h, orig_w, 3)  # Virtual shape for postprocessing
+
+        # Preprocess NV12 directly (no BGR conversion)
+        input_data, x_scale, y_scale, x_shift, y_shift = self._preprocess_nv12(
+            nv12_data, frame_size
+        )
+
+        # Run inference
+        outputs = self.quantize_model[0].forward(input_data)
+        output_arrays = [out.buffer for out in outputs]
+
+        # Post-process
+        results = self._postprocess(
+            output_arrays, x_scale, y_scale, x_shift, y_shift, orig_shape
+        )
 
         # Convert to Detection objects
         detections = []

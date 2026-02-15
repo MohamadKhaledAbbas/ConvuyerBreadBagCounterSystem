@@ -120,7 +120,7 @@ class BpuClassifier(BaseClassifier):
         self.nv12_buffer[self.area::2] = yuv420p[u_start:v_start]
         self.nv12_buffer[self.area + 1::2] = yuv420p[v_start:]
 
-        return self.nv12_buffer
+        return np.ascontiguousarray(self.nv12_buffer)
 
     def _postprocess(self, output: np.ndarray) -> Tuple[int, str, float, np.ndarray]:
         """
