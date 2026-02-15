@@ -80,18 +80,54 @@ class BpuClassifier(BaseClassifier):
 
         logger.info(f"[BpuClassifier] Model loaded, classes: {len(classes)}")
     
+    # Minimum ROI dimensions for meaningful classification
+    MIN_ROI_SIZE = 10
+
+    def _validate_roi(self, roi: np.ndarray) -> Optional[str]:
+        """
+        Validate ROI image before processing.
+
+        Catches invalid inputs that would produce incorrect NV12 data
+        (e.g., grayscale images, tiny crops, wrong dtype).
+
+        Args:
+            roi: Input image to validate
+
+        Returns:
+            Error message string if invalid, None if valid
+        """
+        if roi is None:
+            return "ROI is None"
+
+        if not isinstance(roi, np.ndarray):
+            return f"ROI is not ndarray: {type(roi)}"
+
+        if roi.size == 0:
+            return "ROI is empty"
+
+        if len(roi.shape) != 3:
+            return f"ROI must be 3-channel BGR, got shape {roi.shape}"
+
+        if roi.shape[2] != 3:
+            return f"ROI must have 3 channels, got {roi.shape[2]}"
+
+        if roi.shape[0] < self.MIN_ROI_SIZE or roi.shape[1] < self.MIN_ROI_SIZE:
+            return f"ROI too small: {roi.shape[1]}x{roi.shape[0]} (min {self.MIN_ROI_SIZE}x{self.MIN_ROI_SIZE})"
+
+        return None
+
     def _preprocess(self, img: np.ndarray) -> np.ndarray:
         """
         Preprocess BGR image to NV12 format for BPU.
 
         Args:
-            img: BGR image (numpy array)
+            img: BGR image (numpy array, must be 3-channel)
 
         Returns:
             NV12 formatted buffer
         """
-        # Resize with INTER_NEAREST for speed (acceptable for classification)
-        resized = cv2.resize(img, (self.input_w, self.input_h), interpolation=cv2.INTER_NEAREST)
+        # Use INTER_LINEAR for classification quality (smooth upscaling of small ROIs)
+        resized = cv2.resize(img, (self.input_w, self.input_h), interpolation=cv2.INTER_LINEAR)
         return self._bgr2nv12(resized)
 
     def _bgr2nv12(self, bgr_img: np.ndarray) -> np.ndarray:
@@ -166,8 +202,10 @@ class BpuClassifier(BaseClassifier):
             logger.error("[BpuClassifier] Model not loaded!")
             return ClassificationResult(class_id=-1, class_name="Unknown", confidence=0.0)
 
-        if roi is None or roi.size == 0:
-            logger.error("[BpuClassifier] Invalid ROI!")
+        # Comprehensive input validation (prevents NV12 conversion of invalid images)
+        error = self._validate_roi(roi)
+        if error is not None:
+            logger.error(f"[BpuClassifier] Invalid ROI: {error}")
             return ClassificationResult(class_id=-1, class_name="Unknown", confidence=0.0)
 
         try:
@@ -210,7 +248,10 @@ class BpuClassifier(BaseClassifier):
         if self.model is None:
             return ClassificationResult(class_id=-1, class_name="Unknown", confidence=0.0), {"Unknown": 1.0}
 
-        if roi is None or roi.size == 0:
+        # Comprehensive input validation
+        error = self._validate_roi(roi)
+        if error is not None:
+            logger.error(f"[BpuClassifier] classify_with_probs invalid ROI: {error}")
             return ClassificationResult(class_id=-1, class_name="Unknown", confidence=0.0), {"Unknown": 1.0}
 
         try:

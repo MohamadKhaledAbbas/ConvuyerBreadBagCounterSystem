@@ -322,6 +322,14 @@ class BpuDetector(BaseDetector):
         if self.quantize_model is None:
             return []
 
+        if frame is None or not isinstance(frame, np.ndarray) or frame.size == 0:
+            logger.error("[BpuDetector] Invalid frame input")
+            return []
+
+        if len(frame.shape) != 3 or frame.shape[2] != 3:
+            logger.error(f"[BpuDetector] Frame must be 3-channel BGR, got shape {frame.shape}")
+            return []
+
         orig_shape = frame.shape
 
         # Preprocess
@@ -366,7 +374,19 @@ class BpuDetector(BaseDetector):
         if self.quantize_model is None:
             return []
 
+        if nv12_data is None or not isinstance(nv12_data, np.ndarray) or nv12_data.size == 0:
+            logger.error("[BpuDetector] Invalid NV12 data input")
+            return []
+
         orig_h, orig_w = frame_size
+
+        if nv12_data.shape[0] != orig_h * 3 // 2 or nv12_data.shape[1] != orig_w:
+            logger.error(
+                f"[BpuDetector] NV12 data shape {nv12_data.shape} does not match "
+                f"frame_size {frame_size} (expected ({orig_h * 3 // 2}, {orig_w}))"
+            )
+            return []
+
         orig_shape = (orig_h, orig_w, 3)  # Virtual shape for postprocessing
 
         # Preprocess NV12 directly (no BGR conversion)

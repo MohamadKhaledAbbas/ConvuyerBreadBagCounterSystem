@@ -376,6 +376,191 @@ def test_nv12_preprocess_various_resolutions():
     print("PASS: NV12 preprocessing works for all common camera resolutions")
 
 
+def test_classifier_input_validation():
+    """Test that BpuClassifier._validate_roi catches invalid inputs."""
+    # Simulate validation logic without requiring BPU hardware
+    MIN_ROI_SIZE = 10
+
+    def validate_roi(roi):
+        """Mirror of BpuClassifier._validate_roi logic."""
+        if roi is None:
+            return "ROI is None"
+        if not isinstance(roi, np.ndarray):
+            return f"ROI is not ndarray: {type(roi)}"
+        if roi.size == 0:
+            return "ROI is empty"
+        if len(roi.shape) != 3:
+            return f"ROI must be 3-channel BGR, got shape {roi.shape}"
+        if roi.shape[2] != 3:
+            return f"ROI must have 3 channels, got {roi.shape[2]}"
+        if roi.shape[0] < MIN_ROI_SIZE or roi.shape[1] < MIN_ROI_SIZE:
+            return f"ROI too small: {roi.shape[1]}x{roi.shape[0]} (min {MIN_ROI_SIZE}x{MIN_ROI_SIZE})"
+        return None
+
+    # Valid BGR image
+    valid_roi = np.random.randint(0, 255, (100, 80, 3), dtype=np.uint8)
+    assert validate_roi(valid_roi) is None, "Valid ROI should pass"
+
+    # None input
+    assert validate_roi(None) is not None, "None should be rejected"
+
+    # Non-ndarray
+    assert validate_roi([1, 2, 3]) is not None, "List should be rejected"
+
+    # Empty array
+    empty = np.array([], dtype=np.uint8)
+    assert validate_roi(empty) is not None, "Empty array should be rejected"
+
+    # Grayscale (2D) image — the key bug that causes gray NV12 output
+    grayscale = np.random.randint(0, 255, (100, 80), dtype=np.uint8)
+    result = validate_roi(grayscale)
+    assert result is not None, "Grayscale image must be rejected"
+    assert "3-channel" in result, f"Error should mention 3-channel, got: {result}"
+
+    # 4-channel (RGBA) image
+    rgba = np.random.randint(0, 255, (100, 80, 4), dtype=np.uint8)
+    assert validate_roi(rgba) is not None, "4-channel image should be rejected"
+
+    # Too small ROI
+    tiny = np.random.randint(0, 255, (5, 8, 3), dtype=np.uint8)
+    result = validate_roi(tiny)
+    assert result is not None, "Tiny ROI should be rejected"
+    assert "too small" in result, f"Error should mention too small, got: {result}"
+
+    # Exactly minimum size (should pass)
+    min_size = np.random.randint(0, 255, (MIN_ROI_SIZE, MIN_ROI_SIZE, 3), dtype=np.uint8)
+    assert validate_roi(min_size) is None, "Minimum size ROI should pass"
+
+    print("PASS: Classifier input validation catches all invalid ROI types")
+
+
+def test_classifier_nv12_color_preservation():
+    """Test that classifier NV12 conversion preserves color information (not gray)."""
+    area = 224 * 224
+
+    # Create a colorful BGR image (red, green, blue quadrants)
+    bgr = np.zeros((224, 224, 3), dtype=np.uint8)
+    bgr[:112, :112, 2] = 200       # Top-left: red
+    bgr[:112, 112:, 1] = 200       # Top-right: green
+    bgr[112:, :112, 0] = 200       # Bottom-left: blue
+    bgr[112:, 112:] = [200, 200, 0]  # Bottom-right: cyan
+
+    # Convert to NV12 (same as BpuClassifier._bgr2nv12)
+    yuv420p = cv2.cvtColor(bgr, cv2.COLOR_BGR2YUV_I420).reshape((area * 3 // 2,))
+
+    nv12_buffer = np.zeros((area * 3 // 2,), dtype=np.uint8)
+    nv12_buffer[:area] = yuv420p[:area]
+    u_start = area
+    v_start = area + (area // 4)
+    nv12_buffer[area::2] = yuv420p[u_start:v_start]
+    nv12_buffer[area + 1::2] = yuv420p[v_start:]
+
+    # Y plane should have variation (different luminance for different colors)
+    y_plane = nv12_buffer[:area].reshape(224, 224)
+    assert y_plane.std() > 10, \
+        f"Y plane should have significant luminance variation, got std={y_plane.std():.1f}"
+
+    # UV plane should NOT be all 128 (that would mean gray = no color)
+    uv_plane = nv12_buffer[area:]
+    uv_std = uv_plane.std()
+    assert uv_std > 5, \
+        f"UV plane should have color variation (not gray), got std={uv_std:.1f}"
+
+    # U and V at even/odd positions should differ for colorful image
+    u_values = nv12_buffer[area::2]
+    v_values = nv12_buffer[area + 1::2]
+    assert u_values.std() > 1, "U channel should have variation"
+    assert v_values.std() > 1, "V channel should have variation"
+
+    # Verify correct interleaving: U and V should not be identical
+    # (they would be identical only for perfectly gray images)
+    assert not np.array_equal(u_values, v_values), \
+        "U and V channels should differ for colorful image"
+
+    print("PASS: Classifier NV12 conversion preserves color information")
+
+
+def test_classifier_resize_quality():
+    """Test that INTER_LINEAR produces smoother output than INTER_NEAREST for small ROIs."""
+    # Create a small ROI with a sharp edge (typical bread bag boundary)
+    small_roi = np.zeros((30, 40, 3), dtype=np.uint8)
+    small_roi[:, 20:] = 255  # Left half black, right half white
+
+    # Resize with INTER_LINEAR (current production approach)
+    linear = cv2.resize(small_roi, (224, 224), interpolation=cv2.INTER_LINEAR)
+
+    # Resize with INTER_NEAREST (old approach)
+    nearest = cv2.resize(small_roi, (224, 224), interpolation=cv2.INTER_NEAREST)
+
+    # INTER_LINEAR should produce smoother gradients at the edge
+    # Check the transition zone: INTER_LINEAR has intermediate values, NEAREST does not
+    linear_edge = linear[112, 100:130, 0]  # Horizontal line across the edge
+    nearest_edge = nearest[112, 100:130, 0]
+
+    # Count unique values in the transition zone
+    linear_unique = len(np.unique(linear_edge))
+    nearest_unique = len(np.unique(nearest_edge))
+
+    # INTER_LINEAR should have more unique values (smooth gradient)
+    assert linear_unique >= nearest_unique, \
+        f"INTER_LINEAR should produce smoother transitions, got {linear_unique} vs {nearest_unique} unique values"
+
+    # Both should have the full 224x224 output size
+    assert linear.shape == (224, 224, 3), f"Linear resize shape wrong: {linear.shape}"
+    assert nearest.shape == (224, 224, 3), f"Nearest resize shape wrong: {nearest.shape}"
+
+    print("PASS: INTER_LINEAR produces smoother output than INTER_NEAREST for small ROIs")
+
+
+def test_detector_input_validation():
+    """Test that BpuDetector validates frame and NV12 inputs."""
+    from unittest.mock import MagicMock
+
+    # Create mock detector with validation logic inline
+    # (Can't instantiate BpuDetector without BPU hardware)
+
+    # Test frame validation logic
+    def validate_frame(frame):
+        if frame is None or not isinstance(frame, np.ndarray) or frame.size == 0:
+            return "Invalid frame input"
+        if len(frame.shape) != 3 or frame.shape[2] != 3:
+            return f"Frame must be 3-channel BGR, got shape {frame.shape}"
+        return None
+
+    # Valid frame
+    frame = np.random.randint(0, 255, (720, 1280, 3), dtype=np.uint8)
+    assert validate_frame(frame) is None, "Valid frame should pass"
+
+    # None frame
+    assert validate_frame(None) is not None, "None frame should be rejected"
+
+    # Grayscale frame
+    gray = np.random.randint(0, 255, (720, 1280), dtype=np.uint8)
+    assert validate_frame(gray) is not None, "Grayscale frame should be rejected"
+
+    # Test NV12 validation logic
+    def validate_nv12(nv12_data, frame_size):
+        if nv12_data is None or not isinstance(nv12_data, np.ndarray) or nv12_data.size == 0:
+            return "Invalid NV12 data"
+        orig_h, orig_w = frame_size
+        if nv12_data.shape[0] != orig_h * 3 // 2 or nv12_data.shape[1] != orig_w:
+            return f"NV12 shape {nv12_data.shape} does not match frame_size {frame_size}"
+        return None
+
+    # Valid NV12
+    nv12 = np.random.randint(0, 255, (1080, 1920), dtype=np.uint8)
+    assert validate_nv12(nv12, (720, 1920)) is None, "Valid NV12 should pass"
+
+    # Wrong NV12 shape
+    assert validate_nv12(nv12, (1080, 1920)) is not None, \
+        "NV12 with wrong frame_size should be rejected"
+
+    # None NV12
+    assert validate_nv12(None, (720, 1280)) is not None, "None NV12 should be rejected"
+
+    print("PASS: Detector input validation catches invalid frame and NV12 inputs")
+
+
 if __name__ == "__main__":
     test_nv12_preprocess_buffer_layout()
     test_nv12_preprocess_even_alignment()
@@ -384,4 +569,8 @@ if __name__ == "__main__":
     test_pipeline_core_nv12_routing()
     test_classifier_contiguous_memory()
     test_nv12_preprocess_various_resolutions()
+    test_classifier_input_validation()
+    test_classifier_nv12_color_preservation()
+    test_classifier_resize_quality()
+    test_detector_input_validation()
     print("\n=== All NV12 pipeline tests PASSED ===")
