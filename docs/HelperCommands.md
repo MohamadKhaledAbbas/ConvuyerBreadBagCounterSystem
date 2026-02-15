@@ -3,7 +3,7 @@ ffmpeg -rtsp_transport tcp \
   -i "rtsp://admin:a1234567@192.168.2.108:554/cam/realmonitor?channel=1&subtype=0" \
   -c:v copy -an \
   -f segment -segment_time 1800 -reset_timestamps 1 -strftime 1 \
-  "data/remote/output_%Y-%m-%d_%H-%M-%S.mkv"
+  "data/remote/output_%Y-%m-%d_%H-%M-%S.h264"
 
 
 rclone sync "/home/$USER/BreadCounting/data/remote" "pcloud:/BreadCounting/remote" --progress
@@ -32,7 +32,7 @@ docker run -it --rm -v "C:\0001_MyFiles\0016_Projects\0002_ProjectBased\0012_Con
 Run the model converter script inside the Docker container:
 
 ```bash
-python3 model_converter/mapper.py --onnx model/best_classify.onnx --cal-images model_converter/Classify_Calibration
+python3 model_converter/mapper.py --onnx model/yolo_small_classify_v14.onnx --cal-images model_converter/calibration_data_bgr
 ```
 
 - `model_converter/mapper.py` : Conversion script
@@ -42,3 +42,10 @@ python3 model_converter/mapper.py --onnx model/best_classify.onnx --cal-images m
 ---
 
 rsync -avz --progress --filter="merge rsync.rules" /mnt/c/0001_MyFiles/0016_Projects/0002_ProjectBased/0012_ConvuyerBreadBagCounterSystem/* sunrise@rdkboard:/home/sunrise/ConvuyerBreadCounting
+
+
+# Run mapper.py with RGB input type and calibration images:
+python3 model_converter/mapper_nv12.py \
+  --onnx model/yolo_small_classify_v14.onnx \
+  --cal-images model_converter/calibration_images \
+  --save-cache

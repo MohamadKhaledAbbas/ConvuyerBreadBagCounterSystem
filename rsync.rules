@@ -36,6 +36,7 @@
 - data/spool/
 - data/roi_candidates/
 - data/unknown/
+- data/dataset/
 
 # =============================================================================
 # INCLUDE: Essential application files
