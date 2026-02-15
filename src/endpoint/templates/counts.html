@@ -319,7 +319,7 @@ function updateProcessingBar(data, allPending) {
     const idleEl = $id('procIdle');
     const activeEl = $id('procActive');
     const arrow = $id('connectArrow');
-    const pendingTotal = (data.pending_total || 0) + (data.just_classified_total || 0);
+    const pendingTotal = data.pending_total || 0;
     const batchType = data.current_batch_type;
 
     if (!batchType) {
@@ -387,7 +387,7 @@ function updateProcessingBar(data, allPending) {
 // ── Main UI update ──
 function updateUI(data) {
     const ct = data.confirmed_total || 0;
-    const pt = (data.pending_total || 0) + (data.just_classified_total || 0);
+    const pt = data.pending_total || 0;
     const batchTotal = ct + pt;
 
     // Hero
@@ -398,10 +398,9 @@ function updateUI(data) {
     if (heroConfirmed.textContent !== String(ct)) { heroConfirmed.textContent = ct; if (!isFirstRender) bump(heroConfirmed); }
     if (heroPending.textContent !== String(pt)) { heroPending.textContent = pt; if (!isFirstRender) bump(heroPending); }
 
-    // Merge pending + just_classified for per-class pending counts
+    // Per-class pending counts from smoother (authoritative source)
     const allPending = {};
     for (const [cls, n] of Object.entries(data.pending || {})) { allPending[cls] = (allPending[cls] || 0) + n; }
-    for (const [cls, n] of Object.entries(data.just_classified || {})) { allPending[cls] = (allPending[cls] || 0) + n; }
 
     // Processing bar
     updateProcessingBar(data, allPending);
