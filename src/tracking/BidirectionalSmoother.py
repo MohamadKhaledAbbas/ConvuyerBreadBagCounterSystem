@@ -466,6 +466,13 @@ class BidirectionalSmoother:
             'pending_in_window': len(self.window_buffer)
         }
 
+    def get_pending_summary(self) -> Dict[str, int]:
+        """Get counts of pending items in the smoothing window grouped by class."""
+        summary: Dict[str, int] = {}
+        for record in self.window_buffer:
+            summary[record.class_name] = summary.get(record.class_name, 0) + 1
+        return summary
+
     def cleanup(self):
         """Clean up resources."""
         if self.window_buffer:

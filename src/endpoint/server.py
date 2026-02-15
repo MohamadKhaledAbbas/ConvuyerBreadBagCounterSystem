@@ -23,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from src.endpoint.routes import analytics
 from src.endpoint.routes import track_lifecycle
 from src.endpoint.routes import snapshot
+from src.endpoint.routes import counts
 from src.endpoint.shared import init_shared_resources, cleanup_shared_resources
 from src.utils.AppLogging import logger
 
@@ -71,6 +72,9 @@ app.include_router(track_lifecycle.router)
 
 # Include snapshot router for live camera feed
 app.include_router(snapshot.router)
+
+# Include counts router for real-time pipeline counts
+app.include_router(counts.router)
 
 
 @app.get("/health")
