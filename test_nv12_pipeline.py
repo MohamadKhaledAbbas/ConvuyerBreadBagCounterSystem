@@ -502,7 +502,7 @@ def test_classifier_resize_quality():
     nearest_unique = len(np.unique(nearest_edge))
 
     # INTER_LINEAR should have more unique values (smooth gradient)
-    assert linear_unique >= nearest_unique, \
+    assert linear_unique > nearest_unique, \
         f"INTER_LINEAR should produce smoother transitions, got {linear_unique} vs {nearest_unique} unique values"
 
     # Both should have the full 224x224 output size
