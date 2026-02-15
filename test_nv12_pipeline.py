@@ -561,6 +561,59 @@ def test_detector_input_validation():
     print("PASS: Detector input validation catches invalid frame and NV12 inputs")
 
 
+def test_uv_interleaving_vectorized_equals_loop():
+    """
+    DEFINITIVE PROOF: Vectorized numpy UV interleaving produces byte-for-byte
+    identical output to the previous loop-based approach.
+
+    Compares:
+      Loop (old):   for i in range(uv_size):
+                        buf[area + 2*i]     = yuv[u_start + i]   # U
+                        buf[area + 2*i + 1] = yuv[v_start + i]   # V
+
+      Vectorized:   buf[area::2]     = yuv[u_start:v_start]       # U at even
+                    buf[area + 1::2] = yuv[v_start:]               # V at odd
+
+    Both produce: U[0],V[0],U[1],V[1],U[2],V[2]... (standard NV12 UV interleaving)
+    """
+    # Test with both classifier (224×224) and detector (640×640) sizes,
+    # plus random images to catch any edge cases
+    test_sizes = [(224, 224), (640, 640), (128, 128), (320, 320)]
+
+    for h, w in test_sizes:
+        # Use a colorful random image (not gray) so U and V planes differ
+        bgr = np.random.randint(0, 255, (h, w, 3), dtype=np.uint8)
+        area = h * w
+        uv_size = area // 4
+
+        yuv420p = cv2.cvtColor(bgr, cv2.COLOR_BGR2YUV_I420).reshape(-1)
+        u_start = area
+        v_start = area + uv_size
+
+        # Method 1: Loop-based (the "previous correct" version from BreadBagCounterSystem)
+        nv12_loop = np.zeros((area * 3 // 2,), dtype=np.uint8)
+        nv12_loop[:area] = yuv420p[:area]
+        for i in range(uv_size):
+            nv12_loop[area + 2 * i] = yuv420p[u_start + i]          # U
+            nv12_loop[area + 2 * i + 1] = yuv420p[v_start + i]      # V
+
+        # Method 2: Vectorized numpy slicing (the current optimized version)
+        nv12_vec = np.zeros((area * 3 // 2,), dtype=np.uint8)
+        nv12_vec[:area] = yuv420p[:area]
+        nv12_vec[area::2] = yuv420p[u_start:v_start]                # U at even
+        nv12_vec[area + 1::2] = yuv420p[v_start:]                   # V at odd
+
+        # Assert byte-for-byte equality
+        assert np.array_equal(nv12_loop, nv12_vec), \
+            f"MISMATCH at {w}x{h}! Loop and vectorized UV interleaving differ."
+
+        # Verify the UV plane is not trivially all-zeros or all-same
+        assert nv12_vec[area:].std() > 0, \
+            f"UV plane should have variation for colorful image at {w}x{h}"
+
+    print("PASS: Vectorized UV interleaving is byte-for-byte identical to loop-based method")
+
+
 if __name__ == "__main__":
     test_nv12_preprocess_buffer_layout()
     test_nv12_preprocess_even_alignment()
@@ -573,4 +626,5 @@ if __name__ == "__main__":
     test_classifier_nv12_color_preservation()
     test_classifier_resize_quality()
     test_detector_input_validation()
+    test_uv_interleaving_vectorized_equals_loop()
     print("\n=== All NV12 pipeline tests PASSED ===")
