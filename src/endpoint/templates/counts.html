@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Live Counts — Conveyor Counter</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/analytics.css">
+    <link rel="stylesheet" href="/static/css/analytics.css?v=6">
     <style>
         /* ── Overrides on analytics.css ── */
         main { padding-top: 1.5rem; }
@@ -160,7 +160,7 @@
     <div class="processing-section">
         <div class="processing-card" id="processingCard">
             <div class="proc-icon">📦</div>
-            <div class="proc-count" id="procCount">0<span class="spinner hidden" id="procSpinner"></span></div>
+            <div class="proc-count"><span id="procCountValue">0</span><span class="spinner hidden" id="procSpinner"></span></div>
             <div class="proc-label">Bags being processed</div>
         </div>
         <div class="connect-line" id="connectLine"><div class="line-dot"></div></div>
@@ -262,13 +262,12 @@ function updateClassCards(confirmed) {
 // ── Update processing card ──
 function updateProcessing(pendingTotal) {
     const card = $id('processingCard');
-    const countEl = $id('procCount');
+    const countEl = $id('procCountValue');
     const spinner = $id('procSpinner');
     const line = $id('connectLine');
 
     const prev = parseInt(countEl.textContent) || 0;
-    // Preserve spinner span when updating count text
-    countEl.childNodes[0].textContent = pendingTotal;
+    countEl.textContent = pendingTotal;
 
     if (pendingTotal > 0) {
         card.classList.add('has-items');
