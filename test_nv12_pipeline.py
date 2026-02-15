@@ -650,17 +650,21 @@ def test_parse_model_input_size():
     )
     assert result is None, f"Expected None for .pt file, got {result}"
 
-    # Edge case: dimensions too small (rejected)
-    result = BpuClassifier._parse_model_input_size("model_8x8_nv12.bin")
-    assert result is None, f"Expected None for 8x8 (too small), got {result}"
+    # Edge case: just below minimum boundary (31x31, rejected)
+    result = BpuClassifier._parse_model_input_size("model_31x31_nv12.bin")
+    assert result is None, f"Expected None for 31x31 (below 32 minimum), got {result}"
 
-    # Edge case: dimensions too large (rejected)
-    result = BpuClassifier._parse_model_input_size("model_4096x4096_nv12.bin")
-    assert result is None, f"Expected None for 4096x4096 (too large), got {result}"
+    # Edge case: just above maximum boundary (2049x2049, rejected)
+    result = BpuClassifier._parse_model_input_size("model_2049x2049_nv12.bin")
+    assert result is None, f"Expected None for 2049x2049 (above 2048 maximum), got {result}"
 
-    # Edge case: just at boundary (32x32, should work)
+    # Edge case: at minimum boundary (32x32, should work)
     result = BpuClassifier._parse_model_input_size("model_32x32_nv12.bin")
     assert result == (32, 32), f"Expected (32, 32), got {result}"
+
+    # Edge case: at maximum boundary (2048x2048, should work)
+    result = BpuClassifier._parse_model_input_size("model_2048x2048_nv12.bin")
+    assert result == (2048, 2048), f"Expected (2048, 2048), got {result}"
 
     print("PASS: Model input size auto-detection from filename works correctly")
 
