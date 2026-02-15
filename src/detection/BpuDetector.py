@@ -168,8 +168,8 @@ class BpuDetector(BaseDetector):
         x_scale = min(1.0 * self.input_h / orig_h, 1.0 * self.input_w / orig_w)
         y_scale = x_scale
 
-        new_w = int(orig_w * x_scale) & ~1  # Ensure even for NV12
-        new_h = int(orig_h * y_scale) & ~1  # Ensure even for NV12
+        new_w = int(orig_w * x_scale) & ~1  # Round down to even for NV12 UV plane
+        new_h = int(orig_h * y_scale) & ~1  # Round down to even for NV12 UV plane
 
         # Calculate padding with even alignment for UV plane compatibility
         total_pad_x = self.input_w - new_w
