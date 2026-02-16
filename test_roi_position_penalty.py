@@ -148,7 +148,7 @@ def test_penalty_does_not_reject():
     upper_bbox = (100, 10, 200, 50)  # Very top of frame
     result = collector.collect_roi(track_id=1, frame=frame, bbox=upper_bbox)
 
-    assert result == True, "Upper half ROI should still be collected (soft penalty, not rejection)"
+    assert result, "Upper half ROI should still be collected (soft penalty, not rejection)"
     assert collector.collections[1].collected_count == 1
     assert collector.collections[1].best_roi_quality > 0, "Quality should be positive after penalty"
     print(f"✓ Upper half ROI collected with quality={collector.collections[1].best_roi_quality:.1f}")
