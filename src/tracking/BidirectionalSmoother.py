@@ -1,20 +1,17 @@
 """
-Bidirectional sliding window smoother.
+Three-phase deferred confirmation smoother.
 
-Ported from v1 BreadBagCounterSystem - this logic is kept as it handles
-low confidence classification scenarios by allowing window-level corrections.
+This implementation eliminates the warmup smoothing feedback loop by:
+1. Accumulating raw classifications without smoothing during warmup
+2. Deferring confirmation of the first center_index items (they had no future context)
+3. Releasing deferred items once batch identity is established via batch lock
 
-When a sliding window has low confidence classifications, this smoother can:
-1. Look at the overall window composition (using all items for context)
-2. Override individual low-confidence predictions
-3. Apply majority voting within confidence-weighted windows
-
-Sliding Window Approach:
-- Accumulate items until we have window_size (default 7) items
-- Once full, use ALL items for context analysis
-- Confirm/pop ONLY the oldest item (index 0)
-- Keep remaining items in buffer for next iteration
-- This gives each confirmed item full bidirectional context
+Key Design Rules:
+- No warmup smoothing (raw data preserved during accumulation)
+- Always use original_class for distribution calculations
+- Exclude both Rejected AND Unknown from dominance
+- Override ALL outliers once batch is locked
+- Conservative transition detection (≥70% dominance in EACH half)
 """
 
 import time
@@ -38,28 +35,23 @@ class ClassificationRecord:
     original_class: Optional[str] = None
     non_rejected_rois: int = 0  # Number of non-rejected ROIs (trustworthiness indicator)
 
+
 class BidirectionalSmoother:
     """
-    Sliding window classification smoother.
-
-    Key features:
-    1. Accumulates classifications into a sliding window
-    2. Identifies low-confidence predictions using full window context
-    3. Applies bidirectional smoothing based on surrounding items
-    4. Confirms oldest item when window is full, keeps rest for context
-
-    Sliding Window Logic:
-    - Window size is 7 by default (3 items before + target + 3 after)
-    - When window is full, analyze ALL 7 items for context
-    - Confirm ONLY the oldest item (index 0) - it now has full context
-    - Keep remaining 6 items in buffer
-    - When new item arrives (7 again), confirm next oldest
-
-    Smoothing rules:
-    - If the oldest item has low confidence and differs from dominant class,
-      it may be overridden based on window context
-    - Confidence threshold determines what counts as "low"
-    - Vote ratio threshold determines window dominance
+    Three-phase deferred confirmation smoother.
+    
+    Phase 1 — Accumulate (items 1 to window_size-1):
+        Store raw classifications with NO smoothing and NO confirmation
+        
+    Phase 2 — Steady State (items window_size onward):
+        Window is full. Center analysis confirms the oldest item.
+        BUT: the first center_index items are DEFERRED (held in _deferred_records)
+        because they were the "past" half with no future context when they entered.
+        
+    Phase 3 — Batch Lock (after batch_lock_count steady-state confirmations):
+        By now we've seen enough items to KNOW what the batch is with certainty.
+        Release all deferred items using the established batch identity.
+        ALL outliers are overridden to match the batch class.
     """
 
     def __init__(
@@ -70,19 +62,19 @@ class BidirectionalSmoother:
         window_timeout_seconds: float = 30.0,
         min_window_dominance: float = 0.7,
         min_trusted_rois: int = 3,
-        warmup_smoothing_enabled: bool = True
+        batch_lock_count: int = 10
     ):
         """
-        Initialize smoother.
+        Initialize three-phase smoother.
 
         Args:
             confidence_threshold: Below this, classification is considered uncertain
             vote_ratio_threshold: Below this, evidence ratio is considered weak
-            window_size: Sliding window size (default 21 = 10 before + center + 10 after, must be odd)
+            window_size: Sliding window size (must be odd, default 21)
             window_timeout_seconds: Force flush window after this duration of inactivity
             min_window_dominance: Min ratio for a class to be considered dominant
-            min_trusted_rois: Min non-rejected ROIs needed to trust classification (default 3)
-            warmup_smoothing_enabled: Enable in-place smoothing during warmup phase
+            min_trusted_rois: Min non-rejected ROIs needed to trust classification
+            batch_lock_count: Number of steady-state confirmations before batch lock (default 10)
         """
         # Validate window size
         if window_size < 3:
@@ -96,11 +88,18 @@ class BidirectionalSmoother:
         self.window_timeout_seconds = window_timeout_seconds
         self.min_window_dominance = min_window_dominance
         self.min_trusted_rois = min_trusted_rois
-        self.warmup_smoothing_enabled = warmup_smoothing_enabled
+        self.batch_lock_count = batch_lock_count
 
         # Sliding window buffer
         self.window_buffer: List[ClassificationRecord] = []
         self._last_activity_time: float = time.time()
+
+        # Deferred records (first center_index items that had no future context)
+        self._deferred_records: List[ClassificationRecord] = []
+        
+        # Steady state tracking
+        self._steady_state_confirms: int = 0
+        self._batch_locked: bool = False
 
         # Confirmed records history
         self.confirmed_records: List[ClassificationRecord] = []
@@ -112,14 +111,18 @@ class BidirectionalSmoother:
 
         logger.info(
             f"[BidirectionalSmoother] Initialized with confidence_threshold={confidence_threshold}, "
-            f"window_size={window_size} (center-based analysis mode), "
-            f"warmup_smoothing_enabled={warmup_smoothing_enabled}"
+            f"window_size={window_size}, batch_lock_count={batch_lock_count} "
+            f"(THREE-PHASE DEFERRED CONFIRMATION MODE)"
         )
 
     @property
     def center_index(self) -> int:
         """Get the center index of the window (e.g., 21 // 2 = 10)."""
         return self.window_size // 2
+
+    def _get_original_class(self, record: ClassificationRecord) -> str:
+        """Get the original class of a record (before any smoothing)."""
+        return record.original_class if record.original_class is not None else record.class_name
 
     def _is_low_confidence(self, record: ClassificationRecord) -> bool:
         """
@@ -128,57 +131,187 @@ class BidirectionalSmoother:
         A record is considered low confidence if:
         1. It's 'Rejected' (always low confidence)
         2. Confidence or vote_ratio is below threshold
-
-        Note: non_rejected_rois is checked separately during add_classification()
-        to determine if we should even trust the classification enough to add it.
         """
-        # 'Rejected' is always low confidence
         if record.class_name == 'Rejected':
             return True
 
-        # Standard confidence checks (this is what batch smoothing is for!)
         return (
             record.confidence < self.confidence_threshold or
             record.vote_ratio < self.vote_ratio_threshold
         )
 
-    def _get_window_distribution(self) -> Dict[str, int]:
-        """Get count of each class in current window."""
-        dist = defaultdict(int)
-        for rec in self.window_buffer:
-            dist[rec.class_name] += 1
-        return dict(dist)
-
-    def _get_confidence_weighted_distribution(self) -> Dict[str, float]:
-        """Get confidence-weighted class distribution in current window."""
-        dist = defaultdict(float)
-        for rec in self.window_buffer:
-            dist[rec.class_name] += rec.confidence
-        return dict(dist)
-
-    def _get_dominant_class(self, records: List[ClassificationRecord]) -> Optional[str]:
+    def _get_distribution_from_records(
+        self, 
+        records: List[ClassificationRecord], 
+        use_original: bool = True,
+        exclude_classes: Optional[List[str]] = None
+    ) -> Dict[str, float]:
         """
-        Get dominant class from a subset of records (exclude Rejected).
+        Get confidence-weighted class distribution from records.
         
         Args:
-            records: List of classification records to analyze
+            records: List of classification records
+            use_original: If True, use original_class; if False, use current class_name
+            exclude_classes: Classes to exclude from distribution (e.g., ['Rejected', 'Unknown'])
             
         Returns:
-            Class with highest confidence weight, or None if empty or all Rejected
+            Dict mapping class names to confidence weights
+        """
+        if exclude_classes is None:
+            exclude_classes = ['Rejected', 'Unknown']
+            
+        dist = defaultdict(float)
+        for rec in records:
+            class_name = self._get_original_class(rec) if use_original else rec.class_name
+            if class_name not in exclude_classes:
+                dist[class_name] += rec.confidence
+        return dict(dist)
+
+    def _get_dominant_class_from_records(
+        self, 
+        records: List[ClassificationRecord],
+        use_original: bool = True
+    ) -> Optional[str]:
+        """
+        Get dominant class from records (exclude Rejected and Unknown).
+        
+        Args:
+            records: List of classification records
+            use_original: If True, use original_class; if False, use current class_name
+            
+        Returns:
+            Class with highest confidence weight, or None if empty
         """
         if not records:
             return None
         
-        # Calculate confidence-weighted distribution (exclude Rejected)
-        dist = defaultdict(float)
-        for rec in records:
-            if rec.class_name != 'Rejected':
-                dist[rec.class_name] += rec.confidence
+        dist = self._get_distribution_from_records(records, use_original=use_original)
         
         if not dist:
             return None
         
         return max(dist, key=dist.get)
+
+    def _get_batch_identity(self) -> Dict:
+        """
+        Analyze confirmed records to determine batch identity.
+        
+        Returns:
+            Dict with keys:
+                - dominant_class: Most common class in confirmed records
+                - dominance_ratio: Ratio of dominant class (0.0-1.0)
+                - total_confirmed: Number of confirmed records analyzed
+        """
+        if not self.confirmed_records:
+            return {
+                'dominant_class': None,
+                'dominance_ratio': 0.0,
+                'total_confirmed': 0
+            }
+        
+        # Use original_class for batch identity to avoid feedback loops
+        dist = self._get_distribution_from_records(self.confirmed_records, use_original=True)
+        
+        if not dist:
+            return {
+                'dominant_class': None,
+                'dominance_ratio': 0.0,
+                'total_confirmed': len(self.confirmed_records)
+            }
+        
+        total_weight = sum(dist.values())
+        dominant_class = max(dist, key=dist.get)
+        dominance_ratio = dist[dominant_class] / total_weight if total_weight > 0 else 0.0
+        
+        return {
+            'dominant_class': dominant_class,
+            'dominance_ratio': dominance_ratio,
+            'total_confirmed': len(self.confirmed_records)
+        }
+
+    def _analyze_window_context(self) -> Dict:
+        """
+        Analyze the batch context of the current window centered on center_index.
+        
+        Returns:
+            Dict with keys:
+                - dominant_class: Most common class (exclude Rejected and Unknown)
+                - dominance_ratio: Ratio of dominant class (0.0-1.0)
+                - in_transition: Whether past/future have different dominants
+                - past_dominant: Dominant in past half (0 to center_index-1)
+                - future_dominant: Dominant in future half (center_index+1 to end)
+        """
+        if not self.window_buffer:
+            return {
+                'dominant_class': None,
+                'dominance_ratio': 0.0,
+                'in_transition': False,
+                'past_dominant': None,
+                'future_dominant': None
+            }
+        
+        # Get distribution using original_class (exclude Rejected and Unknown)
+        dist = self._get_distribution_from_records(self.window_buffer, use_original=True)
+        
+        # Calculate dominant class and ratio
+        if dist:
+            total_weight = sum(dist.values())
+            dominant_class = max(dist, key=dist.get)
+            dominance_ratio = dist[dominant_class] / total_weight if total_weight > 0 else 0.0
+        else:
+            dominant_class = None
+            dominance_ratio = 0.0
+            logger.info("[SMOOTHING] all_rejected_or_unknown_window | using_fallback=None")
+        
+        # Split window into past and future halves
+        center = self.center_index
+        past_records = self.window_buffer[:center] if center > 0 else []
+        future_records = self.window_buffer[center+1:] if center+1 < len(self.window_buffer) else []
+        
+        # Get dominant class for each half (use original_class)
+        past_dominant = None
+        future_dominant = None
+        
+        if len(past_records) >= 2:
+            past_dist = self._get_distribution_from_records(past_records, use_original=True)
+            if past_dist:
+                past_total = sum(past_dist.values())
+                past_dominant = max(past_dist, key=past_dist.get)
+                past_ratio = past_dist[past_dominant] / past_total if past_total > 0 else 0.0
+                # Require ≥70% dominance for valid half
+                if past_ratio < 0.7:
+                    past_dominant = None
+        
+        if len(future_records) >= 2:
+            future_dist = self._get_distribution_from_records(future_records, use_original=True)
+            if future_dist:
+                future_total = sum(future_dist.values())
+                future_dominant = max(future_dist, key=future_dist.get)
+                future_ratio = future_dist[future_dominant] / future_total if future_total > 0 else 0.0
+                # Require ≥70% dominance for valid half
+                if future_ratio < 0.7:
+                    future_dominant = None
+        
+        # Conservative transition detection: both halves must be valid and different
+        in_transition = (
+            past_dominant is not None and 
+            future_dominant is not None and 
+            past_dominant != future_dominant
+        )
+        
+        logger.info(
+            f"[SMOOTHING] CONTEXT_ANALYSIS | dominant={dominant_class} "
+            f"dominance={dominance_ratio:.2f} in_transition={in_transition} "
+            f"past_dominant={past_dominant} future_dominant={future_dominant}"
+        )
+        
+        return {
+            'dominant_class': dominant_class,
+            'dominance_ratio': dominance_ratio,
+            'in_transition': in_transition,
+            'past_dominant': past_dominant,
+            'future_dominant': future_dominant
+        }
 
     def _create_smoothed_record(
         self,
@@ -205,240 +338,163 @@ class BidirectionalSmoother:
             timestamp=original.timestamp,
             window_position=self._confirm_count,
             smoothed=True,
-            original_class=original.class_name,
+            original_class=self._get_original_class(original),
             non_rejected_rois=original.non_rejected_rois
         )
         self.smoothed_records += 1
         logger.info(
             f"[SMOOTHING] T{original.track_id} SMOOTHED | "
-            f"{original.class_name}->{new_class} conf={original.confidence:.3f} reason={reason}"
+            f"{self._get_original_class(original)}->{new_class} conf={original.confidence:.3f} reason={reason}"
         )
         return smoothed
 
-    def _analyze_batch_context(self) -> Dict:
-        """
-        Analyze the batch context of the current window centered on center_index.
-        
-        Returns:
-            Dict with keys:
-                - dominant_class: Most common class (exclude Rejected)
-                - dominance_ratio: Ratio of dominant class (0.0-1.0)
-                - in_transition: Whether past/future have different dominants
-                - past_dominant: Dominant in past half (0 to center_index-1)
-                - future_dominant: Dominant in future half (center_index+1 to end)
-        """
-        if not self.window_buffer:
-            return {
-                'dominant_class': None,
-                'dominance_ratio': 0.0,
-                'in_transition': False,
-                'past_dominant': None,
-                'future_dominant': None
-            }
-        
-        # Get confidence-weighted distribution (exclude Rejected)
-        weighted_dist = self._get_confidence_weighted_distribution()
-        weighted_dist_no_rejected = {k: v for k, v in weighted_dist.items() if k != 'Rejected'}
-        
-        # Calculate dominant class and ratio
-        if weighted_dist_no_rejected:
-            total_weight = sum(weighted_dist_no_rejected.values())
-            dominant_class = max(weighted_dist_no_rejected, key=weighted_dist_no_rejected.get)
-            dominance_ratio = weighted_dist_no_rejected[dominant_class] / total_weight if total_weight > 0 else 0.0
-        else:
-            # All items are Rejected - fallback
-            dominant_class = None
-            dominance_ratio = 0.0
-            logger.info("[SMOOTHING] all_rejected_window | using_fallback=Unknown")
-        
-        # Split window into past and future halves
-        center = self.center_index
-        past_records = self.window_buffer[:center] if center > 0 else []
-        future_records = self.window_buffer[center+1:] if center+1 < len(self.window_buffer) else []
-        
-        # Get dominant class for each half (minimum 2 items for meaningful analysis)
-        past_dominant = self._get_dominant_class(past_records) if len(past_records) >= 2 else None
-        future_dominant = self._get_dominant_class(future_records) if len(future_records) >= 2 else None
-        
-        # Detect transition (both halves must be valid and different)
-        in_transition = (
-            past_dominant is not None and 
-            future_dominant is not None and 
-            past_dominant != future_dominant
-        )
-        
-        logger.info(
-            f"[SMOOTHING] CONTEXT_ANALYSIS | dominant={dominant_class} "
-            f"dominance={dominance_ratio:.2f} in_transition={in_transition} "
-            f"past_dominant={past_dominant} future_dominant={future_dominant}"
-        )
-        
-        return {
-            'dominant_class': dominant_class,
-            'dominance_ratio': dominance_ratio,
-            'in_transition': in_transition,
-            'past_dominant': past_dominant,
-            'future_dominant': future_dominant
-        }
-
-    def _warmup_smooth_all(self):
-        """
-        Apply in-place smoothing to the warmup buffer.
-        
-        During warmup, clean up Rejected/outlier classifications IN-PLACE
-        to prevent bad context from polluting the center analysis.
-        
-        This does NOT confirm items, just updates them in buffer.
-        """
-        if not self.window_buffer:
-            return
-        
-        # Get confidence-weighted distribution (exclude Rejected)
-        weighted_dist = self._get_confidence_weighted_distribution()
-        weighted_dist_no_rejected = {k: v for k, v in weighted_dist.items() if k != 'Rejected'}
-        
-        # If all items are Rejected, use Unknown as fallback
-        if not weighted_dist_no_rejected:
-            # Smooth all Rejected to Unknown
-            for i, record in enumerate(self.window_buffer):
-                if record.class_name == 'Rejected':
-                    logger.info(
-                        f"[SMOOTHING] WARMUP_SMOOTH | T{record.track_id} "
-                        f"Rejected->Unknown buffer_pos={i} reason=all_rejected_fallback"
-                    )
-                    # Update in-place
-                    self.window_buffer[i] = ClassificationRecord(
-                        track_id=record.track_id,
-                        class_name='Unknown',
-                        confidence=record.confidence,
-                        vote_ratio=record.vote_ratio,
-                        timestamp=record.timestamp,
-                        window_position=None,  # Not confirmed yet
-                        smoothed=True,
-                        original_class='Rejected',
-                        non_rejected_rois=record.non_rejected_rois
-                    )
-            return
-        
-        # Calculate dominant class and outlier threshold
-        total_weight = sum(weighted_dist_no_rejected.values())
-        dominant_class = max(weighted_dist_no_rejected, key=weighted_dist_no_rejected.get)
-        dominance_ratio = weighted_dist_no_rejected[dominant_class] / total_weight if total_weight > 0 else 0.0
-        
-        # Get class counts for outlier detection
-        class_dist = self._get_window_distribution()
-        outlier_threshold = max(1, int(len(self.window_buffer) * 0.2))
-        
-        # Smooth items in-place
-        for i, record in enumerate(self.window_buffer):
-            original_class = record.class_name
-            should_smooth = False
-            reason = ""
-            
-            # Rule 1: Always smooth Rejected
-            if record.class_name == 'Rejected':
-                should_smooth = True
-                reason = 'rejected_to_dominant'
-            # Rule 2: Smooth outliers if dominant class is strong
-            elif (dominance_ratio >= self.min_window_dominance and 
-                  record.class_name != dominant_class):
-                class_count = class_dist.get(record.class_name, 0)
-                if class_count <= outlier_threshold:
-                    should_smooth = True
-                    reason = 'outlier_in_warmup'
-            
-            if should_smooth:
-                logger.info(
-                    f"[SMOOTHING] WARMUP_SMOOTH | T{record.track_id} "
-                    f"{original_class}->{dominant_class} buffer_pos={i} reason={reason}"
-                )
-                # Update in-place
-                self.window_buffer[i] = ClassificationRecord(
-                    track_id=record.track_id,
-                    class_name=dominant_class,
-                    confidence=record.confidence,
-                    vote_ratio=record.vote_ratio,
-                    timestamp=record.timestamp,
-                    window_position=None,  # Not confirmed yet
-                    smoothed=True,
-                    original_class=original_class,
-                    non_rejected_rois=record.non_rejected_rois
-                )
-
-    def _smooth_oldest_with_context(
+    def _smooth_record_with_context(
         self,
-        oldest_record: ClassificationRecord,
-        batch_context: Dict
+        record: ClassificationRecord,
+        context: Dict
     ) -> ClassificationRecord:
         """
-        Apply smoothing to the oldest record using batch context from center analysis.
+        Apply smoothing to a record using window context.
+        
+        After batch lock: ALL outliers are overridden to dominant class when 
+        dominance ≥ min_window_dominance, not just low-confidence ones.
         
         Args:
-            oldest_record: The oldest record in the window
-            batch_context: Context dict from _analyze_batch_context()
+            record: The record to potentially smooth
+            context: Context dict from _analyze_window_context()
             
         Returns:
             Smoothed or original record
         """
-        dominant_class = batch_context['dominant_class']
-        dominance_ratio = batch_context['dominance_ratio']
-        in_transition = batch_context['in_transition']
-        past_dominant = batch_context['past_dominant']
+        original_class = self._get_original_class(record)
+        dominant_class = context['dominant_class']
+        dominance_ratio = context['dominance_ratio']
+        in_transition = context['in_transition']
+        past_dominant = context['past_dominant']
         
         # Rule 1: Always Smooth Rejected
-        if oldest_record.class_name == 'Rejected':
+        if original_class == 'Rejected':
             if dominance_ratio >= self.min_window_dominance and dominant_class is not None:
                 target_class = dominant_class
                 reason = 'rejected_to_dominant'
             else:
                 target_class = 'Unknown'
                 reason = 'rejected_to_unknown'
-            return self._create_smoothed_record(oldest_record, target_class, reason)
+            return self._create_smoothed_record(record, target_class, reason)
         
-        # Rule 2: Handle Batch Transitions
+        # Rule 2: Handle Batch Transitions (conservative)
         if in_transition:
-            # Oldest is in "past" context - check if it matches past batch
-            if oldest_record.class_name == past_dominant:
+            # Record is in "past" context - check if it matches past batch
+            if original_class == past_dominant:
                 # Valid transition item - don't smooth
                 logger.info(
-                    f"[SMOOTHING] T{oldest_record.track_id} | "
+                    f"[SMOOTHING] T{record.track_id} | "
                     f"action=NO_SMOOTHING reason=valid_transition_item"
                 )
-                oldest_record.window_position = self._confirm_count
-                return oldest_record
+                record.window_position = self._confirm_count
+                return record
             else:
                 # Outlier during transition - smooth to past dominant
                 if past_dominant is not None:
                     return self._create_smoothed_record(
-                        oldest_record, past_dominant, 'transition_outlier'
+                        record, past_dominant, 'transition_outlier'
                     )
         
         # Rule 3: Check Dominance
         if dominance_ratio < self.min_window_dominance or dominant_class is None:
             # No clear dominant - don't smooth
             logger.info(
-                f"[SMOOTHING] T{oldest_record.track_id} | "
+                f"[SMOOTHING] T{record.track_id} | "
                 f"action=NO_SMOOTHING reason=no_clear_dominant"
             )
-            oldest_record.window_position = self._confirm_count
-            return oldest_record
+            record.window_position = self._confirm_count
+            return record
         
-        # Rule 4: Smooth Outliers in Stable Batch
-        if oldest_record.class_name != dominant_class:
-            class_dist = self._get_window_distribution()
-            class_count = class_dist.get(oldest_record.class_name, 0)
-            outlier_threshold = max(1, int(len(self.window_buffer) * 0.2))
-            
-            if class_count <= outlier_threshold:
-                reason = (
-                    "outlier_low_conf" if self._is_low_confidence(oldest_record)
-                    else "outlier_batch_override"
+        # Rule 4: Smooth Outliers
+        # After batch lock: ALL outliers are smoothed when batch dominance is strong
+        if original_class != dominant_class:
+            if self._batch_locked:
+                # Batch locked: override ALL outliers regardless of confidence
+                return self._create_smoothed_record(
+                    record, dominant_class, 'batch_locked_override'
                 )
-                return self._create_smoothed_record(oldest_record, dominant_class, reason)
+            else:
+                # Before batch lock: only smooth low-confidence outliers
+                if self._is_low_confidence(record):
+                    return self._create_smoothed_record(
+                        record, dominant_class, 'outlier_low_conf'
+                    )
         
         # No smoothing needed
-        oldest_record.window_position = self._confirm_count
-        return oldest_record
+        record.window_position = self._confirm_count
+        return record
+
+    def _resolve_deferred_records(self) -> List[ClassificationRecord]:
+        """
+        Resolve all deferred records using confirmed records as batch identity evidence.
+        
+        ALL outliers (including high-confidence) are overridden to batch class when 
+        batch dominance ≥ min_window_dominance.
+        
+        Returns:
+            List of resolved (confirmed) deferred records
+        """
+        if not self._deferred_records:
+            return []
+        
+        # Get batch identity from confirmed records
+        batch_identity = self._get_batch_identity()
+        dominant_class = batch_identity['dominant_class']
+        dominance_ratio = batch_identity['dominance_ratio']
+        
+        logger.info(
+            f"[SMOOTHING] RESOLVING_DEFERRED | count={len(self._deferred_records)} "
+            f"batch_class={dominant_class} dominance={dominance_ratio:.2f}"
+        )
+        
+        resolved = []
+        for record in self._deferred_records:
+            original_class = self._get_original_class(record)
+            
+            # Rule 1: Always smooth Rejected to batch class or Unknown
+            if original_class == 'Rejected':
+                if dominance_ratio >= self.min_window_dominance and dominant_class is not None:
+                    target_class = dominant_class
+                    reason = 'deferred_rejected_to_batch'
+                else:
+                    target_class = 'Unknown'
+                    reason = 'deferred_rejected_to_unknown'
+                resolved_record = self._create_smoothed_record(record, target_class, reason)
+            
+            # Rule 2: Override ALL outliers when batch dominance is strong
+            elif (dominance_ratio >= self.min_window_dominance and 
+                  dominant_class is not None and 
+                  original_class != dominant_class):
+                resolved_record = self._create_smoothed_record(
+                    record, dominant_class, 'deferred_batch_override'
+                )
+            
+            # Rule 3: Keep matching class as-is
+            else:
+                logger.info(
+                    f"[SMOOTHING] T{record.track_id} | "
+                    f"action=NO_SMOOTHING reason=deferred_matches_batch"
+                )
+                record.window_position = self._confirm_count
+                resolved_record = record
+            
+            self._confirm_count += 1
+            self.confirmed_records.append(resolved_record)
+            resolved.append(resolved_record)
+        
+        # Clear deferred records
+        self._deferred_records.clear()
+        
+        logger.info(
+            f"[SMOOTHING] DEFERRED_RESOLVED | count={len(resolved)}"
+        )
+        
+        return resolved
 
     def _confirm_oldest_using_center_analysis(self) -> ClassificationRecord:
         """
@@ -456,17 +512,18 @@ class BidirectionalSmoother:
             raise ValueError("Cannot confirm from empty window")
         
         # Analyze batch context centered on center_index
-        batch_context = self._analyze_batch_context()
+        context = self._analyze_window_context()
         
         # Get oldest record
         oldest_record = self.window_buffer[0]
         
-        # Apply smoothing using center context
-        confirmed = self._smooth_oldest_with_context(oldest_record, batch_context)
+        # Apply smoothing using context
+        confirmed = self._smooth_record_with_context(oldest_record, context)
         
         # Remove oldest from buffer
         self.window_buffer.pop(0)
         self._confirm_count += 1
+        self._steady_state_confirms += 1
         
         # Store in history
         self.confirmed_records.append(confirmed)
@@ -478,216 +535,10 @@ class BidirectionalSmoother:
         logger.info(
             f"[SMOOTHING] T{confirmed.track_id} CONFIRMED | "
             f"class={confirmed.class_name} smoothed={confirmed.smoothed} "
-            f"remaining_in_window={len(self.window_buffer)}"
+            f"remaining_in_window={len(self.window_buffer)} "
+            f"steady_state_confirms={self._steady_state_confirms}"
         )
         
-        return confirmed
-
-    def _apply_smoothing_to_oldest(self) -> ClassificationRecord:
-        """
-        Apply smoothing to the oldest item in the window using full window context.
-
-        Special handling for 'Rejected' class:
-        - 'Rejected' is ALWAYS overridden (we never want to miss counting a bag)
-        - If there's a dominant class in window, override to that class
-        - If no dominant class, override to 'Unknown' (still counts as a bag)
-
-        Returns:
-            The (potentially smoothed) oldest record
-        """
-        if not self.window_buffer:
-            raise ValueError("Cannot apply smoothing to empty window")
-
-        oldest_record = self.window_buffer[0]
-
-        # Need at least 2 items for meaningful smoothing
-        if len(self.window_buffer) < 2:
-            # Special case: even with small window, convert Rejected to Unknown
-            if oldest_record.class_name == 'Rejected':
-                smoothed = ClassificationRecord(
-                    track_id=oldest_record.track_id,
-                    class_name='Unknown',
-                    confidence=oldest_record.confidence,
-                    vote_ratio=oldest_record.vote_ratio,
-                    timestamp=oldest_record.timestamp,
-                    window_position=self._confirm_count,
-                    smoothed=True,
-                    original_class='Rejected',
-                    non_rejected_rois=oldest_record.non_rejected_rois
-                )
-                self.smoothed_records += 1
-                logger.info(
-                    f"[SMOOTHING] T{oldest_record.track_id} SMOOTHED | "
-                    f"Rejected->Unknown reason=small_window_fallback"
-                )
-                return smoothed
-
-            logger.info(
-                f"[SMOOTHING] T{oldest_record.track_id} | action=NO_SMOOTHING "
-                f"reason=window_too_small size={len(self.window_buffer)}"
-            )
-            return oldest_record
-
-        # Find dominant class using full window context (excluding 'Rejected' from consideration)
-        weighted_dist = self._get_confidence_weighted_distribution()
-        # Remove 'Rejected' from distribution for dominant class calculation
-        weighted_dist_no_rejected = {k: v for k, v in weighted_dist.items() if k != 'Rejected'}
-        total_weight = sum(weighted_dist_no_rejected.values())
-
-        window_classes = [r.class_name for r in self.window_buffer]
-
-        # Handle case where all items are Rejected
-        if total_weight == 0:
-            if oldest_record.class_name == 'Rejected':
-                # All items are Rejected - convert to Unknown
-                smoothed = ClassificationRecord(
-                    track_id=oldest_record.track_id,
-                    class_name='Unknown',
-                    confidence=oldest_record.confidence,
-                    vote_ratio=oldest_record.vote_ratio,
-                    timestamp=oldest_record.timestamp,
-                    window_position=self._confirm_count,
-                    smoothed=True,
-                    original_class='Rejected',
-                    non_rejected_rois=oldest_record.non_rejected_rois
-                )
-                self.smoothed_records += 1
-                logger.info(
-                    f"[SMOOTHING] T{oldest_record.track_id} SMOOTHED | "
-                    f"Rejected->Unknown reason=all_rejected_fallback"
-                )
-                return smoothed
-
-            logger.info(
-                f"[SMOOTHING] T{oldest_record.track_id} | action=NO_SMOOTHING "
-                f"reason=zero_weight"
-            )
-            return oldest_record
-
-        dominant_class = max(weighted_dist_no_rejected, key=weighted_dist_no_rejected.get)
-        dominance_ratio = weighted_dist_no_rejected[dominant_class] / total_weight
-
-        logger.info(
-            f"[SMOOTHING] WINDOW_ANALYSIS | size={len(self.window_buffer)} "
-            f"classes={window_classes} dominant={dominant_class} "
-            f"dominance={dominance_ratio:.2f}"
-        )
-
-        # Special handling for 'Rejected' - ALWAYS override
-        if oldest_record.class_name == 'Rejected':
-            if dominance_ratio >= self.min_window_dominance:
-                # Override to dominant class
-                target_class = dominant_class
-                reason = 'rejected_to_dominant'
-            else:
-                # No clear dominant class - use Unknown so we still count it
-                target_class = 'Unknown'
-                reason = 'rejected_to_unknown_no_dominant'
-
-            smoothed = ClassificationRecord(
-                track_id=oldest_record.track_id,
-                class_name=target_class,
-                confidence=oldest_record.confidence,
-                vote_ratio=oldest_record.vote_ratio,
-                timestamp=oldest_record.timestamp,
-                window_position=self._confirm_count,
-                smoothed=True,
-                original_class='Rejected',
-                non_rejected_rois=oldest_record.non_rejected_rois
-            )
-            self.smoothed_records += 1
-            logger.info(
-                f"[SMOOTHING] T{oldest_record.track_id} SMOOTHED | "
-                f"Rejected->{target_class} dominance={dominance_ratio:.2f} "
-                f"reason={reason}"
-            )
-            return smoothed
-
-        # For non-Rejected classes: apply standard smoothing logic
-        # Check if there's a clearly dominant class
-        if dominance_ratio < self.min_window_dominance:
-            logger.info(
-                f"[SMOOTHING] T{oldest_record.track_id} | action=NO_SMOOTHING "
-                f"reason=no_dominant_class best={dominant_class} ratio={dominance_ratio:.2f}"
-            )
-            oldest_record.window_position = self._confirm_count
-            return oldest_record
-
-        # Check if oldest record should be smoothed (outlier in dominant batch)
-        # On a conveyor, bags come in monotype batches. A small minority of
-        # different-class items against strong dominance is almost certainly
-        # misclassification, even with high confidence.
-        # Examples:
-        #   window=7:  [B,B,B,X(1.00),B,B,B] → X smoothed (1 outlier)
-        #   window=15: [B,B,B,B,B,B,B,B,B,X,B,X,B,B,B] → X smoothed (2 outliers)
-        if oldest_record.class_name != dominant_class:
-            class_dist = self._get_window_distribution()
-            class_count = class_dist.get(oldest_record.class_name, 0)
-            # Allow smoothing when the non-dominant class is a small minority
-            # (up to ~20% of window size, minimum 1).  This handles both small
-            # windows (size 7 → threshold 1) and larger ones (size 15 → threshold 3).
-            outlier_threshold = max(1, int(len(self.window_buffer) * 0.2))
-
-            if class_count <= outlier_threshold:
-                reason = (
-                    "outlier_low_conf" if self._is_low_confidence(oldest_record)
-                    else "outlier_batch_override"
-                )
-                smoothed = ClassificationRecord(
-                    track_id=oldest_record.track_id,
-                    class_name=dominant_class,
-                    confidence=oldest_record.confidence,
-                    vote_ratio=oldest_record.vote_ratio,
-                    timestamp=oldest_record.timestamp,
-                    window_position=self._confirm_count,
-                    smoothed=True,
-                    original_class=oldest_record.class_name,
-                    non_rejected_rois=oldest_record.non_rejected_rois
-                )
-                self.smoothed_records += 1
-                logger.info(
-                    f"[SMOOTHING] T{oldest_record.track_id} SMOOTHED | "
-                    f"{oldest_record.class_name}->{dominant_class} "
-                    f"conf={oldest_record.confidence:.3f} dominance={dominance_ratio:.2f} "
-                    f"class_count={class_count}/{len(self.window_buffer)} "
-                    f"threshold={outlier_threshold} reason={reason}"
-                )
-                return smoothed
-
-        # No smoothing needed
-        oldest_record.window_position = self._confirm_count
-        return oldest_record
-
-    def _confirm_oldest(self) -> ClassificationRecord:
-        """
-        Confirm and remove the oldest item from the window.
-
-        Uses full window context for smoothing decision, but only confirms/pops
-        the oldest item.
-
-        Returns:
-            The confirmed (potentially smoothed) record
-        """
-        # Apply smoothing using full window context
-        confirmed = self._apply_smoothing_to_oldest()
-
-        # Remove oldest from buffer
-        self.window_buffer.pop(0)
-        self._confirm_count += 1
-
-        # Store in history
-        self.confirmed_records.append(confirmed)
-
-        # Limit history
-        if len(self.confirmed_records) > 100:
-            self.confirmed_records = self.confirmed_records[-100:]
-
-        logger.info(
-            f"[SMOOTHING] T{confirmed.track_id} CONFIRMED | "
-            f"class={confirmed.class_name} smoothed={confirmed.smoothed} "
-            f"remaining_in_window={len(self.window_buffer)}"
-        )
-
         return confirmed
 
     def add_classification(
@@ -697,19 +548,14 @@ class BidirectionalSmoother:
         confidence: float,
         vote_ratio: float,
         non_rejected_rois: int = 0
-    ) -> Optional[ClassificationRecord]:
+    ) -> Optional[List[ClassificationRecord]]:
         """
-        Add a classification to the sliding window.
+        Add a classification to the three-phase smoother.
 
-        Two-phase processing:
-        - Phase 1 (Warmup): Accumulate items until window is full (items 1-20 for window_size=21)
-        - Phase 2 (Steady State): Confirm oldest using center analysis (items 21+)
-
-        Note: 'Rejected' class is now INCLUDED in the window.
-
-        Items with < min_trusted_rois are already converted to 'Rejected' by the caller
-        before reaching this method. The smoother then applies confidence-based smoothing
-        to override low-confidence items (including 'Rejected') based on window context.
+        Three-phase processing:
+        - Phase 1 (Accumulate): Items 1 to window_size-1, no smoothing, no confirmation
+        - Phase 2 (Steady State): Items window_size onward, confirm oldest (defer first center_index)
+        - Phase 3 (Batch Lock): After batch_lock_count confirmations, release deferred records
 
         Args:
             track_id: Track identifier
@@ -719,9 +565,12 @@ class BidirectionalSmoother:
             non_rejected_rois: Number of non-rejected ROIs (for logging/debugging)
 
         Returns:
-            A confirmed record if window was full, None otherwise
+            A list of confirmed records when:
+            - A single record is confirmed in steady state (returns list of 1)
+            - Deferred records are released at batch lock (returns list of N deferred + 1 current)
+            None during accumulation phase
         """
-        # Create record
+        # Create record with NO smoothing
         record = ClassificationRecord(
             track_id=track_id,
             class_name=class_name,
@@ -736,24 +585,55 @@ class BidirectionalSmoother:
         self._last_activity_time = time.time()
         self.total_records += 1
 
-        # Phase 1: Warmup - accumulate until window is full
+        # Phase 1: Accumulate - no smoothing, no confirmation
         if len(self.window_buffer) < self.window_size:
-            # Optional warmup smoothing to clean bad context
-            if self.warmup_smoothing_enabled:
-                self._warmup_smooth_all()
-            
             logger.debug(
-                f"[SMOOTHING] WARMUP | buffer={len(self.window_buffer)}/{self.window_size} "
-                f"status=accumulating"
+                f"[SMOOTHING] ACCUMULATE | buffer={len(self.window_buffer)}/{self.window_size} "
+                f"status=raw_accumulation (no smoothing)"
             )
             return None
         
-        # Phase 2: Steady state - confirm oldest using center analysis
+        # Phase 2: Steady State - confirm oldest
         logger.info(
             f"[SMOOTHING] STEADY_STATE | buffer={len(self.window_buffer)} "
             f"confirming_oldest_with_center_analysis"
         )
-        return self._confirm_oldest_using_center_analysis()
+        
+        # Check if we should defer this confirmation
+        if self._steady_state_confirms < self.center_index:
+            # Defer the oldest record (it had no future context when it entered)
+            oldest_record = self.window_buffer[0]
+            self.window_buffer.pop(0)
+            self._deferred_records.append(oldest_record)
+            self._steady_state_confirms += 1
+            
+            logger.info(
+                f"[SMOOTHING] T{oldest_record.track_id} DEFERRED | "
+                f"deferred_count={len(self._deferred_records)} "
+                f"reason=no_future_context_on_entry "
+                f"steady_state_confirms={self._steady_state_confirms}"
+            )
+            return None
+        
+        # Confirm oldest using center analysis
+        confirmed = self._confirm_oldest_using_center_analysis()
+        
+        # Check for batch lock
+        if not self._batch_locked and self._steady_state_confirms >= self.center_index + self.batch_lock_count:
+            self._batch_locked = True
+            logger.info(
+                f"[SMOOTHING] BATCH_LOCKED | steady_state_confirms={self._steady_state_confirms} "
+                f"releasing_deferred={len(self._deferred_records)}"
+            )
+            
+            # Resolve deferred records
+            resolved = self._resolve_deferred_records()
+            
+            # Return all resolved + current confirmation
+            return resolved + [confirmed]
+        
+        # Return single confirmation
+        return [confirmed]
 
     def check_timeout(self) -> List[ClassificationRecord]:
         """
@@ -765,7 +645,7 @@ class BidirectionalSmoother:
         Returns:
             List of confirmed records if timeout occurred, empty list otherwise
         """
-        if not self.window_buffer:
+        if not self.window_buffer and not self._deferred_records:
             return []
 
         elapsed = time.time() - self._last_activity_time
@@ -774,26 +654,34 @@ class BidirectionalSmoother:
 
         logger.info(
             f"[SMOOTHING] TIMEOUT | elapsed={elapsed:.1f}s "
-            f"pending={len(self.window_buffer)}"
+            f"pending={len(self.window_buffer)} deferred={len(self._deferred_records)}"
         )
 
         return self.flush_remaining()
 
     def flush_remaining(self) -> List[ClassificationRecord]:
         """
-        Flush all remaining items in the window with partial context.
+        Flush all remaining items (deferred and window buffer) with partial context.
 
-        Called on timeout or cleanup. Confirms items one by one,
-        each using whatever context remains in the window.
+        Called on timeout or cleanup. First resolves deferred records, then confirms 
+        items in window buffer one by one.
 
         Returns:
             List of all confirmed records
         """
         confirmed = []
 
+        # First, resolve any deferred records
+        if self._deferred_records:
+            logger.info(
+                f"[SMOOTHING] FLUSH_DEFERRED | count={len(self._deferred_records)}"
+            )
+            resolved = self._resolve_deferred_records()
+            confirmed.extend(resolved)
+
+        # Then flush window buffer
         while self.window_buffer:
             # For partial context (buffer < window_size), still use center analysis
-            # but log that it's using partial context
             if len(self.window_buffer) < self.window_size:
                 logger.info(
                     f"[SMOOTHING] FLUSH | buffer={len(self.window_buffer)} context=partial"
@@ -801,9 +689,9 @@ class BidirectionalSmoother:
             
             # Use center analysis even with partial window
             if self.window_buffer:
-                batch_context = self._analyze_batch_context()
+                context = self._analyze_window_context()
                 oldest_record = self.window_buffer[0]
-                record = self._smooth_oldest_with_context(oldest_record, batch_context)
+                record = self._smooth_record_with_context(oldest_record, context)
                 
                 # Remove oldest from buffer
                 self.window_buffer.pop(0)
@@ -841,8 +729,13 @@ class BidirectionalSmoother:
         return self.flush_remaining()
 
     def get_pending_records(self) -> List[ClassificationRecord]:
-        """Get records in current sliding window (not yet confirmed)."""
-        return self.window_buffer.copy()
+        """
+        Get all pending records (deferred + window buffer).
+        
+        Returns:
+            List of all records not yet confirmed
+        """
+        return self._deferred_records + self.window_buffer
 
     def get_statistics(self) -> Dict[str, any]:
         """Get smoothing statistics."""
@@ -854,31 +747,39 @@ class BidirectionalSmoother:
                 if self.total_records > 0 else 0.0
             ),
             'confirmed_count': self._confirm_count,
-            'pending_in_window': len(self.window_buffer)
+            'pending_in_window': len(self.window_buffer),
+            'deferred_count': len(self._deferred_records),
+            'batch_locked': self._batch_locked,
+            'steady_state_confirms': self._steady_state_confirms
         }
 
     def get_dominant_class(self) -> Optional[str]:
-        """Get the dominant (most frequent) class in the current window, excluding Rejected."""
-        if not self.window_buffer:
+        """
+        Get the dominant class from all pending records (deferred + window).
+        
+        Uses original_class and excludes Rejected and Unknown.
+        """
+        all_pending = self._deferred_records + self.window_buffer
+        if not all_pending:
             return None
-        dist: Dict[str, int] = {}
-        for rec in self.window_buffer:
-            if rec.class_name != 'Rejected':
-                dist[rec.class_name] = dist.get(rec.class_name, 0) + 1
-        if not dist:
-            return None
-        return max(dist, key=dist.get)
+        
+        return self._get_dominant_class_from_records(all_pending, use_original=True)
 
     def get_pending_summary(self) -> Dict[str, int]:
-        """Get counts of pending items in the smoothing window grouped by class."""
+        """
+        Get counts of pending items grouped by class.
+        
+        Includes both deferred and window buffer items.
+        """
         summary: Dict[str, int] = {}
-        for record in self.window_buffer:
+        all_pending = self._deferred_records + self.window_buffer
+        for record in all_pending:
             summary[record.class_name] = summary.get(record.class_name, 0) + 1
         return summary
 
     def cleanup(self):
         """Clean up resources."""
-        if self.window_buffer:
+        if self.window_buffer or self._deferred_records:
             # Flush remaining items
             self.flush_remaining()
 

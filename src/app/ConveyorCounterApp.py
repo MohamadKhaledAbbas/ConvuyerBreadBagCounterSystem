@@ -561,10 +561,10 @@ class ConveyorCounterApp:
             f"tentative_total={tentative_total} status=awaiting_batch_smoothing"
         )
 
-        # Add to smoother (thread-safe) - uses sliding window approach
-        # Returns a single confirmed record when window is full, None otherwise
+        # Add to smoother (thread-safe) - uses three-phase deferred confirmation
+        # Returns a list of confirmed records (can be multiple when deferred records are released)
         # Note: Low confidence items (including 'Rejected') will still be smoothed by window context
-        confirmed_record = self._smoother.add_classification(
+        confirmed_records = self._smoother.add_classification(
             track_id=track_id,
             class_name=class_name,
             confidence=confidence,
@@ -575,13 +575,14 @@ class ConveyorCounterApp:
         # Update pending smoothing count
         self.state.pending_smoothing = len(self._smoother.get_pending_records())
 
-        # Process if a record was confirmed (sliding window filled)
-        if confirmed_record:
-            self.state.add_event(
-                f"CONFIRMED (window full): T{confirmed_record.track_id}->"
-                f"{confirmed_record.class_name} smoothed={confirmed_record.smoothed}"
-            )
-            self._record_confirmed_count(confirmed_record, best_roi)
+        # Process if any records were confirmed
+        if confirmed_records:
+            for confirmed_record in confirmed_records:
+                self.state.add_event(
+                    f"CONFIRMED: T{confirmed_record.track_id}->"
+                    f"{confirmed_record.class_name} smoothed={confirmed_record.smoothed}"
+                )
+                self._record_confirmed_count(confirmed_record, best_roi)
 
         # Publish pipeline state for real-time visibility
         self._publish_pipeline_state()
