@@ -231,9 +231,10 @@ class TrackingConfig:
     bidirectional_smoothing_enabled: bool = _parse_bool_env("BIDIRECTIONAL_SMOOTHING_ENABLED", True)
     """Enable bidirectional context-aware smoothing."""
     
-    bidirectional_buffer_size: int = _parse_int_env("BIDIRECTIONAL_BUFFER_SIZE", 15)
+    bidirectional_buffer_size: int = _parse_int_env("BIDIRECTIONAL_BUFFER_SIZE", 21)
     """
-    Buffer size for bidirectional smoothing (should be odd for symmetry).
+    Buffer size for bidirectional smoothing (must be odd for center-based analysis).
+    Default is 21 (10 past + 1 center + 10 future) for center-based context smoothing.
     This is the STABILIZER that corrects misclassifications.
     - Classifications are shown immediately as TENTATIVE
     - After smoothing, they become CONFIRMED and persisted to DB
