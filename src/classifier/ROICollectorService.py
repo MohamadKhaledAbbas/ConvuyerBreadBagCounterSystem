@@ -28,6 +28,7 @@ class ROIQualityConfig:
     min_brightness: float = 30.0
     max_brightness: float = 225.0
     min_size: int = 20
+    upper_half_penalty: float = 0.5  # Quality multiplier for ROIs above half screen (Y axis)
 
 
 @dataclass
@@ -260,6 +261,16 @@ class ROICollectorService(IROICollector):
                 f"total_rejected={collection.rejected_count}"
             )
             return False
+
+        # Apply position penalty for ROIs in upper half of frame (Y axis)
+        bbox_center_y = (y1 + y2) / 2
+        if bbox_center_y < h / 2:
+            quality *= self.quality_config.upper_half_penalty
+            logger.debug(
+                f"[ROI_LIFECYCLE] T{track_id} UPPER_HALF_PENALTY | "
+                f"bbox_center_y={bbox_center_y:.0f} frame_h={h} "
+                f"penalty={self.quality_config.upper_half_penalty} quality={quality:.1f}"
+            )
 
         # Collect the ROI
         collection.add_roi(roi, quality)
