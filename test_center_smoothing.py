@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Test suite for forward-context smoothing in BidirectionalSmoother.
+Test suite for BidirectionalSmoother (originally tested center-based smoothing,
+now updated to test the forward-context replacement).
 
-This tests the forward-context implementation that replaced the old
-center-based approach. The smoother now uses items AFTER the oldest
-as forward context for smoothing decisions.
+This file preserves the original test structure and scenarios while
+adapting to the forward-context smoothing implementation.
 """
 
 import sys
