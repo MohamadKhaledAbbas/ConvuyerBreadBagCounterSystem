@@ -17,7 +17,7 @@ def test_initialization():
     smoother = BidirectionalSmoother()
     assert smoother.window_size == 21, f"Expected window_size=21, got {smoother.window_size}"
     assert smoother.center_index == 10, f"Expected center_index=10, got {smoother.center_index}"
-    assert smoother.warmup_smoothing_enabled == True, "Expected warmup_smoothing_enabled=True"
+    assert smoother.warmup_smoothing_enabled, "Expected warmup_smoothing_enabled=True"
     print("✓ Default initialization correct")
     
     # Test window size validation
@@ -149,7 +149,7 @@ def test_center_based_analysis():
     print(f"  Future dominant: {context['future_dominant']}")
     
     # Should detect transition
-    assert context['in_transition'] == True, "Should detect transition"
+    assert context['in_transition'], "Should detect transition"
     assert context['past_dominant'] == 'Blue_Yellow', "Past should be Blue_Yellow"
     assert context['future_dominant'] == 'Brown_Orange', "Future should be Brown_Orange"
     
