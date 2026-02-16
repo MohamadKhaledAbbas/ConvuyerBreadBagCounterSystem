@@ -1,11 +1,32 @@
 #!/usr/bin/env python3
 """
-Test suite for center-based context smoothing with analyze-center-confirm-oldest strategy.
+OBSOLETE: This test suite tests the OLD implementation with warmup smoothing.
 
-This tests the new implementation in BidirectionalSmoother.py
+The old implementation had a feedback loop bug where warmup smoothing corrupted batch classification.
+It has been replaced with a three-phase deferred confirmation architecture.
+
+See test_deferred_confirmation.py for tests of the new implementation.
+
+This file is kept for historical reference but these tests will not pass with the new implementation.
 """
 
 import sys
+print("\n" + "=" * 70)
+print("OBSOLETE TEST FILE")
+print("=" * 70)
+print("This test suite tests the OLD BidirectionalSmoother implementation")
+print("with warmup smoothing, which had a feedback loop bug.")
+print("")
+print("The implementation has been replaced with a three-phase deferred")
+print("confirmation architecture that eliminates the feedback loop.")
+print("")
+print("See test_deferred_confirmation.py for tests of the new implementation.")
+print("=" * 70)
+sys.exit(0)
+
+# OLD TESTS BELOW - NO LONGER VALID
+# ===================================
+
 from src.tracking.BidirectionalSmoother import BidirectionalSmoother
 
 
