@@ -3,6 +3,9 @@
 Test suite for three-phase deferred confirmation smoother.
 
 This tests the new implementation that eliminates the warmup smoothing feedback loop.
+
+Note: These tests use standalone Python assertions and print statements for simplicity.
+For CI/CD integration, consider converting to pytest or unittest framework.
 """
 
 import sys

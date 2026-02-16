@@ -617,14 +617,13 @@ class BidirectionalSmoother:
         
         # Check for batch lock BEFORE confirming
         # Batch locks when we've done batch_lock_count confirmations after deferral phase
-        # steady_state_confirms includes deferred count, so subtract center_index to get actual confirms
-        actual_confirms_after_deferral = self._steady_state_confirms - self.center_index
+        confirms_after_deferral = self._steady_state_confirms - self.center_index
         
-        if not self._batch_locked and actual_confirms_after_deferral >= self.batch_lock_count:
+        if not self._batch_locked and confirms_after_deferral >= self.batch_lock_count:
             self._batch_locked = True
             logger.info(
                 f"[SMOOTHING] BATCH_LOCKED | steady_state_confirms={self._steady_state_confirms} "
-                f"actual_confirms={actual_confirms_after_deferral} "
+                f"confirms_after_deferral={confirms_after_deferral} "
                 f"releasing_deferred={len(self._deferred_records)}"
             )
             
@@ -743,8 +742,8 @@ class BidirectionalSmoother:
         """
         return self._deferred_records + self.window_buffer
 
-    def get_statistics(self) -> Dict[str, any]:
-        """Get smoothing statistics."""
+    def get_statistics(self) -> Dict[str, any]:  # noqa: F821
+        """Get smoothing statistics. Note: using 'any' for Python 3.8 compatibility."""
         return {
             'total_records': self.total_records,
             'smoothed_records': self.smoothed_records,
