@@ -847,6 +847,28 @@ class ConveyorCounterApp:
         # Initialize components
         self._init_components()
         
+        # Reset pipeline state file to clear old data (ensures counts page shows only today's data)
+        initial_state = {
+            "confirmed": {},
+            "pending": {},
+            "just_classified": {},
+            "confirmed_total": 0,
+            "pending_total": 0,
+            "just_classified_total": 0,
+            "smoothing_rate": 0.0,
+            "window_status": {
+                "size": self._smoother.window_size if self._smoother else 7,
+                "current_items": 0,
+                "next_confirmation_in": self._smoother.window_size if self._smoother else 7
+            },
+            "recent_events": [],
+            "current_batch_type": None,
+            "previous_batch_type": None,
+            "last_classified_type": None
+        }
+        write_pipeline_state(initial_state)
+        logger.info("[ConveyorCounterApp] Pipeline state reset - counts page will show today's data only")
+
         self._running = True
         self._start_time = time.perf_counter()
         self._frame_count = 0
