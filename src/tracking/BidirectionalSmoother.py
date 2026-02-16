@@ -11,7 +11,7 @@ the dominant class is almost always the correct batch class.
 
 Smoothing Rules:
 1. Rejected is ALWAYS smoothed (to forward dominant or Unknown)
-2. Outliers in stable forward context are smoothed to dominant
+2. If forward context has dominant class (>= 70%), smooth all non-matching items
 3. No dominant in forward context → keep original classification
 
 Forward Context Approach:
@@ -64,7 +64,7 @@ class BidirectionalSmoother:
 
     Smoothing rules:
     - Rejected is ALWAYS overridden (we never want to miss counting a bag)
-    - If forward context has a dominant class, override outliers to that class
+    - If forward context has a dominant class (>= 70%), override ALL non-matching items
     - If no dominant class, override Rejected to 'Unknown' (still counts)
     """
 
@@ -232,8 +232,7 @@ class BidirectionalSmoother:
         2. If no meaningful forward context → keep original (unless Rejected)
         3. If no clear dominance in forward context → keep original
         4. If oldest matches forward dominant → keep (no smoothing needed)
-        5. If outlier in strong forward context → smooth to dominant
-        6. Otherwise → keep original
+        5. Otherwise → smooth to dominant (dominance >= threshold is sufficient)
 
         Returns:
             The (potentially smoothed) oldest record
@@ -309,25 +308,14 @@ class BidirectionalSmoother:
             oldest.window_position = self._confirm_count
             return oldest
 
-        # RULE 5: Outlier detection - smooth if record is rare in forward context
-        forward_class_count = sum(1 for r in forward if r.class_name == oldest.class_name)
-        outlier_threshold = max(1, int(len(forward) * 0.2))
-
-        if forward_class_count <= outlier_threshold:
-            reason = (
-                "outlier_low_conf" if self._is_low_confidence(oldest)
-                else "outlier_forward_smooth"
-            )
-            return self._create_smoothed_record(oldest, forward_dominant, reason)
-
-        # RULE 6: Not an outlier - significant presence in forward context, keep original
-        logger.info(
-            f"[SMOOTHING] T{oldest.track_id} | action=NO_SMOOTHING "
-            f"reason=significant_forward_presence "
-            f"class_count={forward_class_count}/{len(forward)}"
+        # RULE 5: Dominance is sufficient — smooth to dominant class.
+        # No outlier threshold needed: if forward context has >= 70% dominance,
+        # any non-matching item is a false positive (batches are 100-1000 items).
+        reason = (
+            "non_dominant_low_conf" if self._is_low_confidence(oldest)
+            else "non_dominant_forward_smooth"
         )
-        oldest.window_position = self._confirm_count
-        return oldest
+        return self._create_smoothed_record(oldest, forward_dominant, reason)
 
     def add_classification(
         self,

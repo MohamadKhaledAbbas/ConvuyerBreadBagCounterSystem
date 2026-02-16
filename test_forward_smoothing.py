@@ -556,6 +556,40 @@ def test_batch_switch_complete():
     print("✓ Complete batch switch test passed")
 
 
+def test_high_presence_outlier_smoothing():
+    """Test that non-dominant items are smoothed even with significant presence.
+
+    This is the exact scenario from the bug report: Purple_Yellow at 30% presence
+    in a Brown_Orange batch with 72% dominance. Previously, the outlier threshold
+    (20%) prevented smoothing when a misclassification accumulated multiple items.
+    Now, if dominance >= 70%, ALL non-matching items are smoothed.
+    """
+    print("\n=== Test 15: High Presence Outlier Smoothing ===")
+
+    smoother = BidirectionalSmoother(window_size=21)
+
+    # First item is Purple_Yellow (the one to be smoothed)
+    # Forward context: 14 Brown_Orange + 6 Purple_Yellow = 70% Brown_Orange dominance
+    items = [('Purple_Yellow', 0.75, 3)]
+    for _ in range(14):
+        items.append(('Brown_Orange', 0.9, 5))
+    for _ in range(6):
+        items.append(('Purple_Yellow', 0.75, 3))
+
+    for i, (cn, conf, rois) in enumerate(items):
+        result = smoother.add_classification(
+            track_id=i, class_name=cn, confidence=conf,
+            vote_ratio=0.85, non_rejected_rois=rois
+        )
+        if result:
+            assert result.class_name == 'Brown_Orange', f"Expected Brown_Orange, got {result.class_name}"
+            assert result.smoothed == True
+            assert result.original_class == 'Purple_Yellow'
+            print(f"✓ Purple_Yellow (30% presence) smoothed to Brown_Orange (72% dominant)")
+
+    print("✓ High presence outlier smoothing test passed")
+
+
 def run_all_tests():
     """Run all test cases."""
     print("\n" + "=" * 60)
@@ -577,6 +611,7 @@ def run_all_tests():
         test_statistics,
         test_long_running_batch,
         test_batch_switch_complete,
+        test_high_presence_outlier_smoothing,
     ]
 
     passed = 0
