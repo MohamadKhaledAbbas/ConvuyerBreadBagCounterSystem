@@ -5,18 +5,20 @@ Uses forward-context smoothing for classification correction on conveyor belt
 bread bag counting systems. Each item is confirmed using context from items
 that arrive AFTER it, providing reliable smoothing without bidirectional complexity.
 
+Batches on the conveyor are large (100-1000 items each), so the smoothing window
+(default 21) is purely a false-positive override mechanism. Within a window,
+the dominant class is almost always the correct batch class.
+
 Smoothing Rules:
 1. Rejected is ALWAYS smoothed (to forward dominant or Unknown)
 2. Outliers in stable forward context are smoothed to dominant
-3. Items at batch boundaries (matching recent confirmed batch) are preserved
-4. No dominant in forward context → keep original classification
+3. No dominant in forward context → keep original classification
 
 Forward Context Approach:
 - Accumulate items until we have window_size (default 21) items
 - When full, analyze items AFTER the oldest as forward context
 - Smooth oldest if needed, then confirm and remove it
 - Keep remaining items in buffer for next iteration
-- Smart batch boundary handling using confirmed history
 """
 
 import time
@@ -48,8 +50,11 @@ class BidirectionalSmoother:
     1. Accumulates classifications into a sliding window
     2. Uses forward context (items after oldest) for smoothing decisions
     3. Always smooths Rejected class to prevent missed counts
-    4. Smart batch boundary handling using confirmed history
-    5. Confirms oldest item when window is full, keeps rest for context
+    4. Confirms oldest item when window is full, keeps rest for context
+
+    Batches on the conveyor are large (100-1000 items each), so the
+    window (default 21) almost always sits within a single batch.
+    The window purely acts as a false-positive override mechanism.
 
     Forward Context Logic:
     - Accumulate window_size items (default 21)
@@ -60,7 +65,6 @@ class BidirectionalSmoother:
     Smoothing rules:
     - Rejected is ALWAYS overridden (we never want to miss counting a bag)
     - If forward context has a dominant class, override outliers to that class
-    - At batch boundaries, preserve items matching recent confirmed batch
     - If no dominant class, override Rejected to 'Unknown' (still counts)
     """
 
@@ -215,48 +219,21 @@ class BidirectionalSmoother:
                 return record.class_name
         return None
 
-    def _is_at_batch_boundary(self, record: ClassificationRecord) -> bool:
-        """
-        Check if a record is at a batch boundary (last item of previous batch).
-
-        Uses confirmed history: if recent confirmed items match the record's class,
-        the record is likely the tail end of the same batch and should be preserved
-        even if forward context has shifted to a new batch.
-
-        Args:
-            record: The record to check
-
-        Returns:
-            True if record appears to be at a batch boundary
-        """
-        if not self.confirmed_records:
-            return False
-
-        lookback = min(5, len(self.confirmed_records))
-        recent = self.confirmed_records[-lookback:]
-        recent_classes = [r.class_name for r in recent
-                         if r.class_name not in ('Rejected', 'Unknown')]
-
-        if not recent_classes:
-            return False
-
-        match_count = sum(1 for c in recent_classes if c == record.class_name)
-        return match_count >= len(recent_classes) * 0.5
-
     def _smooth_oldest_forward(self) -> ClassificationRecord:
         """
         Apply smoothing to the oldest record using forward context.
 
         Forward context = all items after the oldest in the window buffer.
+        Since batches are large (100-1000 items), the window almost always
+        sits within a single batch, making this purely a false-positive filter.
 
         Rules (in priority order):
         1. Rejected is ALWAYS smoothed (to forward dominant, confirmed history, or Unknown)
         2. If no meaningful forward context → keep original (unless Rejected)
         3. If no clear dominance in forward context → keep original
         4. If oldest matches forward dominant → keep (no smoothing needed)
-        5. If at batch boundary (matches recent confirmed batch) → preserve
-        6. If outlier in strong forward context → smooth to dominant
-        7. Otherwise → keep original
+        5. If outlier in strong forward context → smooth to dominant
+        6. Otherwise → keep original
 
         Returns:
             The (potentially smoothed) oldest record
@@ -332,16 +309,7 @@ class BidirectionalSmoother:
             oldest.window_position = self._confirm_count
             return oldest
 
-        # RULE 5: Batch boundary check - preserve end-of-batch items
-        if self._is_at_batch_boundary(oldest):
-            logger.info(
-                f"[SMOOTHING] T{oldest.track_id} | action=NO_SMOOTHING "
-                f"reason=batch_boundary class={oldest.class_name}"
-            )
-            oldest.window_position = self._confirm_count
-            return oldest
-
-        # RULE 6: Outlier detection - smooth if record is rare in forward context
+        # RULE 5: Outlier detection - smooth if record is rare in forward context
         forward_class_count = sum(1 for r in forward if r.class_name == oldest.class_name)
         outlier_threshold = max(1, int(len(forward) * 0.2))
 
@@ -352,7 +320,7 @@ class BidirectionalSmoother:
             )
             return self._create_smoothed_record(oldest, forward_dominant, reason)
 
-        # RULE 7: Not an outlier - significant presence in forward context, keep original
+        # RULE 6: Not an outlier - significant presence in forward context, keep original
         logger.info(
             f"[SMOOTHING] T{oldest.track_id} | action=NO_SMOOTHING "
             f"reason=significant_forward_presence "
