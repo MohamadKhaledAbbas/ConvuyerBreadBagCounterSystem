@@ -615,24 +615,30 @@ class BidirectionalSmoother:
             )
             return None
         
-        # Confirm oldest using center analysis
-        confirmed = self._confirm_oldest_using_center_analysis()
+        # Check for batch lock BEFORE confirming
+        # Batch locks when we've done batch_lock_count confirmations after deferral phase
+        # steady_state_confirms includes deferred count, so subtract center_index to get actual confirms
+        actual_confirms_after_deferral = self._steady_state_confirms - self.center_index
         
-        # Check for batch lock
-        if not self._batch_locked and self._steady_state_confirms >= self.center_index + self.batch_lock_count:
+        if not self._batch_locked and actual_confirms_after_deferral >= self.batch_lock_count:
             self._batch_locked = True
             logger.info(
                 f"[SMOOTHING] BATCH_LOCKED | steady_state_confirms={self._steady_state_confirms} "
+                f"actual_confirms={actual_confirms_after_deferral} "
                 f"releasing_deferred={len(self._deferred_records)}"
             )
             
             # Resolve deferred records
             resolved = self._resolve_deferred_records()
             
+            # Confirm current oldest
+            confirmed = self._confirm_oldest_using_center_analysis()
+            
             # Return all resolved + current confirmation
             return resolved + [confirmed]
         
-        # Return single confirmation
+        # Normal confirmation
+        confirmed = self._confirm_oldest_using_center_analysis()
         return [confirmed]
 
     def check_timeout(self) -> List[ClassificationRecord]:
