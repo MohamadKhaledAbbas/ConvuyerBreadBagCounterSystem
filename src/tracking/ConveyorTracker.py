@@ -629,15 +629,15 @@ class ConveyorTracker(ITracker):
 
     def _has_valid_travel_path(self, track: TrackedObject) -> bool:
         """
-        Check if track has a valid travel path using time-based validation.
+        Check if track has a valid travel path using adaptive time-based validation.
 
         A valid travel path means:
-        1. Track has been visible for minimum required duration (time-based)
+        1. Track has been visible for minimum required duration (adaptive based on entry position)
         2. Track is exiting through the top exit zone (valid direction)
         3. Track is NOT exiting through the bottom (invalid direction)
 
-        This approach is more robust than zone-based validation because:
-        - Works regardless of where the object first appears
+        This approach is more robust than fixed time thresholds because:
+        - Adapts to late detections (objects appearing mid-frame get shorter duration requirements)
         - Filters out noise/transient detections (too short duration)
         - Ensures objects traveled the expected path (exit from top)
 
@@ -668,8 +668,32 @@ class ConveyorTracker(ITracker):
             )
             return False
 
-        # Check 3: Track must have been visible for minimum duration (time-based)
-        min_travel_seconds = getattr(self.config, 'min_travel_duration_seconds', 2.0)
+        # Check 3: Track must have been visible for minimum duration (ADAPTIVE time-based)
+        # Calculate expected travel distance and adjust duration requirement
+        min_travel_seconds_base = getattr(self.config, 'min_travel_duration_seconds', 2.0)
+
+        # Adaptive duration based on entry position
+        # If track appeared mid-frame or higher, reduce duration requirement proportionally
+        if self.frame_height and track.entry_center_y is not None:
+            # Calculate where track started as a ratio (0=top, 1=bottom)
+            entry_ratio = track.entry_center_y / self.frame_height
+
+            # If track appeared in the upper half (entry_ratio < 0.5), it has less distance to travel
+            # Scale the minimum duration requirement proportionally
+            # Bottom entry (ratio=1.0): 100% of min duration required
+            # Mid entry (ratio=0.5): 50% of min duration required
+            # Top entry (ratio=0.3): 30% of min duration required
+            duration_scale = max(0.3, entry_ratio)  # Minimum 30% of base duration
+            min_travel_seconds = min_travel_seconds_base * duration_scale
+
+            logger.debug(
+                f"[ConveyorTracker] T{track.track_id} entry_y={track.entry_center_y} "
+                f"entry_ratio={entry_ratio:.2f} duration_scale={duration_scale:.2f} "
+                f"required_duration={min_travel_seconds:.2f}s"
+            )
+        else:
+            min_travel_seconds = min_travel_seconds_base
+
         track_duration = time.time() - track.created_at
 
         if track_duration < min_travel_seconds:

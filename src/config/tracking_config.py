@@ -143,9 +143,18 @@ class TrackingConfig:
 
     min_travel_duration_seconds: float = _parse_float_env("MIN_TRAVEL_DURATION_SECONDS", 2.0)
     """
-    Minimum time (seconds) a track must be visible to be considered valid.
-    This replaces zone-based validation with a more robust time-based approach.
-    Typical conveyor speeds require 2-3 seconds to cross the frame.
+    Base minimum time (seconds) a track must be visible to be considered valid.
+    This uses ADAPTIVE scaling based on where the track first appeared:
+    - Tracks appearing at bottom: require 100% of this duration (e.g., 2.0s)
+    - Tracks appearing mid-frame: require 50% of this duration (e.g., 1.0s)
+    - Tracks appearing near top: require 30% of this duration (e.g., 0.6s)
+    
+    This adaptive approach prevents valid bags from being rejected due to:
+    - Late detection (detector missed them initially)
+    - Partial occlusion at entry
+    - Lower confidence at bottom of frame
+    
+    Typical conveyor speeds: objects take 2-3 seconds to traverse full frame.
     """
 
     exit_zone_ratio: float = _parse_float_env("EXIT_ZONE_RATIO", 0.15)
