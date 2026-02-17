@@ -46,6 +46,12 @@ rsync -avz --progress --filter="merge rsync.rules" /mnt/c/0001_MyFiles/0016_Proj
 
 # Run mapper.py with RGB input type and calibration images:
 python3 model_converter/mapper_nv12.py \
-  --onnx model/yolo_small_classify_v15.onnx \
+  --onnx model/yolo_small_classify_v16.onnx \
   --cal-images model_converter/calibration_images \
+  --save-cache
+
+
+python3 model_converter/mapper_nv12.py \
+  --onnx model/yolo_nano_detect_v13.onnx \
+  --cal-images model_converter/Calibration_Detect \
   --save-cache

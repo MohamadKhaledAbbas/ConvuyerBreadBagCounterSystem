@@ -43,7 +43,7 @@ class AppConfig:
     Application configuration for ConvuyerBreadBagCounterSystem.
     """
     
-    APP_VERSION: str = "15-02-2026_v2.3.1"
+    APP_VERSION: str = "17-02-2026_v2.4.0"
     
     # Video source for testing
     video_path: str = os.getenv("VIDEO_PATH", "D:\\Recordings\\2026_02_05\\2026_02_16\\output_2026-02-15_19-59-34.h264")
@@ -51,13 +51,13 @@ class AppConfig:
     # Platform-specific model paths
     detection_model: str = os.getenv(
         "DETECTION_MODEL",
-        "data/model/yolo_nano_detect_v12_bayese_640x640_nv12.bin" if IS_RDK
-        else "data/model/yolo_nano_detect_v12.pt"
+        "data/model/yolo_nano_detect_v13_bayese_640x640_nv12.bin" if IS_RDK
+        else "data/model/yolo_nano_detect_v13.pt"
     )
     classification_model: str = os.getenv(
         "CLASS_MODEL",
-        "data/model/yolo_small_classify_v15_bayese_256x256_nv12.bin" if IS_RDK
-        else "data/model/yolo_small_classify_v15.pt"
+        "data/model/yolo_small_classify_v16_bayese_256x256_nv12.bin" if IS_RDK
+        else "data/model/yolo_small_classify_v16.pt"
     )
     
     # Database path

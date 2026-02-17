@@ -350,7 +350,7 @@ class TrackingConfig:
     save_all_rois: bool = _parse_bool_env("SAVE_ALL_ROIS", False)
     """Save all ROI candidates for analysis."""
     
-    save_roi_candidates: bool = _parse_bool_env("SAVE_ROI_CANDIDATES", True)
+    save_roi_candidates: bool = _parse_bool_env("SAVE_ROI_CANDIDATES", False)
     """Save ROI candidates with metadata."""
     
     roi_candidates_dir: str = _parse_str_env("ROI_CANDIDATES_DIR", "data/roi_candidates")
