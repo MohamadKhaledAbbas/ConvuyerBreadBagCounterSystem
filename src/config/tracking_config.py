@@ -214,6 +214,46 @@ class TrackingConfig:
     0.15 means 15% quality reduction from first to last ROI.
     """
 
+    # ROI Diversity Controls (ensure different poses/positions)
+    roi_min_frame_spacing: int = _parse_int_env("ROI_MIN_FRAME_SPACING", 5)
+    """
+    Minimum frames between ROI collections for same track.
+    Prevents collecting nearly identical ROIs from consecutive frames.
+    Default: 3 frames (at 25 FPS = ~120ms spacing).
+    """
+
+    roi_min_position_change: float = _parse_float_env("ROI_MIN_POSITION_CHANGE", 50.0)
+    """
+    Minimum centroid movement (pixels) required between ROI collections.
+    Ensures ROIs are captured at different positions/poses along the conveyor.
+    Default: 20 pixels.
+    """
+
+    # Gradual Position Penalty (Y-axis based quality adjustment)
+    enable_gradual_position_penalty: bool = _parse_bool_env("ENABLE_GRADUAL_POSITION_PENALTY", True)
+    """
+    Enable gradual position penalty instead of binary upper/lower half penalty.
+    Smoother quality degradation from bottom (best) to top (worst).
+    """
+
+    position_penalty_start_ratio: float = _parse_float_env("POSITION_PENALTY_START_RATIO", 0.5)
+    """
+    Y-axis ratio where position penalty starts (0.0=top, 1.0=bottom).
+    Default: 0.5 (center of frame) - no penalty below this line.
+    """
+
+    position_penalty_max_ratio: float = _parse_float_env("POSITION_PENALTY_MAX_RATIO", 0.15)
+    """
+    Y-axis ratio where maximum penalty is applied (0.0=top, 1.0=bottom).
+    Default: 0.15 (top 15% of frame) - full penalty at or above this line.
+    """
+
+    position_penalty_min_multiplier: float = _parse_float_env("POSITION_PENALTY_MIN_MULTIPLIER", 0.3)
+    """
+    Minimum quality multiplier at top of frame (0-1).
+    Default: 0.3 (70% quality reduction at top).
+    """
+
     # ==========================================================================
     # Classification Parameters
     # ==========================================================================
@@ -310,7 +350,7 @@ class TrackingConfig:
     save_all_rois: bool = _parse_bool_env("SAVE_ALL_ROIS", False)
     """Save all ROI candidates for analysis."""
     
-    save_roi_candidates: bool = _parse_bool_env("SAVE_ROI_CANDIDATES", False)
+    save_roi_candidates: bool = _parse_bool_env("SAVE_ROI_CANDIDATES", True)
     """Save ROI candidates with metadata."""
     
     roi_candidates_dir: str = _parse_str_env("ROI_CANDIDATES_DIR", "data/roi_candidates")

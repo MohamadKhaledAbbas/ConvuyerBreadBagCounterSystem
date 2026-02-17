@@ -30,6 +30,16 @@ class ROIQualityConfig:
     min_size: int = 20
     upper_half_penalty: float = 0.5  # Quality multiplier for ROIs above half screen (Y axis)
 
+    # Diversity/spacing controls
+    min_frame_spacing: int = 3  # Minimum frames between ROI collection
+    min_position_change: float = 20.0  # Minimum pixel movement (centroid) between ROIs
+
+    # Enhanced position penalty (gradual from center to top)
+    enable_gradual_position_penalty: bool = True  # Use gradual penalty vs binary
+    position_penalty_start_ratio: float = 0.5  # Start applying penalty at this Y ratio (0.5 = center)
+    position_penalty_max_ratio: float = 0.15  # Max penalty at this Y ratio (0.15 = top 15%)
+    position_penalty_min_multiplier: float = 0.3  # Minimum quality multiplier at top
+
 
 @dataclass
 class TrackROICollection:
@@ -45,6 +55,8 @@ class TrackROICollection:
     rois: List[np.ndarray] = field(default_factory=list)
     qualities: List[float] = field(default_factory=list)
     timestamps: List[float] = field(default_factory=list)
+    frame_indices: List[int] = field(default_factory=list)  # Track frame index for spacing
+    positions: List[Tuple[float, float]] = field(default_factory=list)  # Track bbox centroids
 
     # Best ROI tracking
     best_roi: Optional[np.ndarray] = None
@@ -57,6 +69,10 @@ class TrackROICollection:
     created_at: float = field(default_factory=time.time)
     last_updated: float = field(default_factory=time.time)
 
+    # Diversity tracking
+    last_frame_index: int = -1  # Last frame where ROI was collected
+    last_position: Optional[Tuple[float, float]] = None  # Last bbox centroid
+
     # Limits
     max_rois: int = 10
 
@@ -64,7 +80,8 @@ class TrackROICollection:
     enable_temporal_weighting: bool = False
     temporal_decay_rate: float = 0.15
 
-    def add_roi(self, roi: np.ndarray, quality: float):
+    def add_roi(self, roi: np.ndarray, quality: float, frame_index: int = 0,
+                position: Optional[Tuple[float, float]] = None):
         """
         Add a quality-passed ROI to collection.
 
@@ -73,6 +90,8 @@ class TrackROICollection:
         Args:
             roi: ROI image
             quality: Quality score (raw, before temporal weighting)
+            frame_index: Frame number for spacing tracking
+            position: Bbox centroid (x, y) for position diversity
         """
         # Don't collect if we have enough
         if self.collected_count >= self.max_rois:
@@ -97,8 +116,14 @@ class TrackROICollection:
         self.rois.append(roi.copy())
         self.qualities.append(weighted_quality)  # Store weighted quality
         self.timestamps.append(time.time())
+        self.frame_indices.append(frame_index)
+        if position:
+            self.positions.append(position)
+
         self.collected_count += 1
         self.last_updated = time.time()
+        self.last_frame_index = frame_index
+        self.last_position = position
 
         # Track best ROI (using weighted quality)
         if weighted_quality > self.best_roi_quality:
@@ -180,6 +205,9 @@ class ROICollectorService(IROICollector):
         self._total_rejected = 0
         self._last_cleanup_time = time.time()
 
+        # Frame counter for diversity tracking
+        self._frame_counter = 0
+
         logger.info(
             f"[ROICollector] Initialized: max_rois_per_track={max_rois_per_track}, "
             f"quality_thresholds=(sharpness≥{self.quality_config.min_sharpness}, "
@@ -197,6 +225,11 @@ class ROICollectorService(IROICollector):
         """
         Collect ROI for a track (if quality passes).
 
+        Enhanced with:
+        - Frame spacing enforcement (avoid consecutive frames)
+        - Position diversity enforcement (require movement)
+        - Gradual position penalty (smoother than binary)
+
         Does NOT classify - just extracts and stores good quality ROI.
 
         Args:
@@ -207,6 +240,9 @@ class ROICollectorService(IROICollector):
         Returns:
             True if ROI collected, False if rejected
         """
+        # Increment frame counter
+        self._frame_counter += 1
+
         # Periodic cleanup
         self._maybe_cleanup()
 
@@ -226,17 +262,44 @@ class ROICollectorService(IROICollector):
         if collection.collected_count >= self.max_rois_per_track:
             return False
 
-        # Extract ROI with padding
+        # Calculate bbox centroid for position diversity
         x1, y1, x2, y2 = bbox
+        centroid_x = (x1 + x2) / 2
+        centroid_y = (y1 + y2) / 2
+        current_position = (centroid_x, centroid_y)
+
+        # Check frame spacing - enforce minimum gap between collections
+        if collection.last_frame_index >= 0:
+            frame_gap = self._frame_counter - collection.last_frame_index
+            if frame_gap < self.quality_config.min_frame_spacing:
+                logger.debug(
+                    f"[ROI_LIFECYCLE] T{track_id} ROI_SKIPPED_FRAME_SPACING | "
+                    f"frame_gap={frame_gap} < min={self.quality_config.min_frame_spacing}"
+                )
+                return False
+
+        # Check position diversity - require significant movement
+        if collection.last_position is not None:
+            last_x, last_y = collection.last_position
+            position_change = np.sqrt((centroid_x - last_x)**2 + (centroid_y - last_y)**2)
+
+            if position_change < self.quality_config.min_position_change:
+                logger.debug(
+                    f"[ROI_LIFECYCLE] T{track_id} ROI_SKIPPED_POSITION | "
+                    f"change={position_change:.1f}px < min={self.quality_config.min_position_change}px"
+                )
+                return False
+
+        # Extract ROI with padding
         pad = 5
         h, w = frame.shape[:2]
 
-        x1 = max(0, x1 - pad)
-        y1 = max(0, y1 - pad)
-        x2 = min(w, x2 + pad)
-        y2 = min(h, y2 + pad)
+        x1_crop = max(0, x1 - pad)
+        y1_crop = max(0, y1 - pad)
+        x2_crop = min(w, x2 + pad)
+        y2_crop = min(h, y2 + pad)
 
-        roi = frame[y1:y2, x1:x2]
+        roi = frame[y1_crop:y2_crop, x1_crop:x2_crop]
 
         if roi.size == 0:
             return False
@@ -262,24 +325,58 @@ class ROICollectorService(IROICollector):
             )
             return False
 
-        # Apply position penalty for ROIs in upper half of frame (Y axis)
-        bbox_center_y = (y1 + y2) / 2
-        if bbox_center_y < h / 2:
-            quality *= self.quality_config.upper_half_penalty
-            logger.debug(
-                f"[ROI_LIFECYCLE] T{track_id} UPPER_HALF_PENALTY | "
-                f"bbox_center_y={bbox_center_y:.0f} frame_h={h} "
-                f"penalty={self.quality_config.upper_half_penalty} quality={quality:.1f}"
-            )
+        # Apply position penalty based on Y position
+        # Lower in frame (closer to camera) = better quality
+        # Upper in frame (farther from camera) = penalty
+        bbox_center_y = centroid_y
 
-        # Collect the ROI
-        collection.add_roi(roi, quality)
+        if self.quality_config.enable_gradual_position_penalty:
+            # Gradual penalty from center to top
+            # y_ratio: 0.0 = top of frame, 1.0 = bottom of frame
+            y_ratio = bbox_center_y / h
+
+            penalty_start = self.quality_config.position_penalty_start_ratio
+            penalty_max = self.quality_config.position_penalty_max_ratio
+            min_multiplier = self.quality_config.position_penalty_min_multiplier
+
+            if y_ratio < penalty_start:
+                # Calculate gradual penalty
+                # At penalty_start (e.g., 0.5 center): no penalty (1.0x)
+                # At penalty_max (e.g., 0.15 top): max penalty (e.g., 0.3x)
+                if y_ratio <= penalty_max:
+                    # At or above max penalty zone
+                    penalty_multiplier = min_multiplier
+                else:
+                    # Gradual penalty between penalty_max and penalty_start
+                    # Linear interpolation
+                    penalty_range = penalty_start - penalty_max
+                    position_in_range = (y_ratio - penalty_max) / penalty_range
+                    penalty_multiplier = min_multiplier + (1.0 - min_multiplier) * position_in_range
+
+                quality *= penalty_multiplier
+                logger.debug(
+                    f"[ROI_LIFECYCLE] T{track_id} GRADUAL_POSITION_PENALTY | "
+                    f"y_ratio={y_ratio:.2f} penalty_mult={penalty_multiplier:.2f} quality={quality:.1f}"
+                )
+        else:
+            # Binary penalty (original behavior)
+            if bbox_center_y < h / 2:
+                quality *= self.quality_config.upper_half_penalty
+                logger.debug(
+                    f"[ROI_LIFECYCLE] T{track_id} UPPER_HALF_PENALTY | "
+                    f"bbox_center_y={bbox_center_y:.0f} frame_h={h} "
+                    f"penalty={self.quality_config.upper_half_penalty} quality={quality:.1f}"
+                )
+
+        # Collect the ROI with frame index and position
+        collection.add_roi(roi, quality, self._frame_counter, current_position)
         self._total_collected += 1
 
         logger.info(
             f"[ROI_LIFECYCLE] T{track_id} ROI_COLLECTED | "
             f"quality={quality:.1f} count={collection.collected_count}/{self.max_rois_per_track} "
-            f"best_quality={collection.best_roi_quality:.1f} size={roi.shape[1]}x{roi.shape[0]}"
+            f"best_quality={collection.best_roi_quality:.1f} size={roi.shape[1]}x{roi.shape[0]} "
+            f"y_pos={centroid_y:.0f}"
         )
 
         return True

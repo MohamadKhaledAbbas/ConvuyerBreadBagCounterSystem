@@ -363,7 +363,15 @@ class ConveyorCounterApp:
         quality_config = ROIQualityConfig(
             min_sharpness=self.tracking_config.min_sharpness,
             min_brightness=self.tracking_config.min_mean_brightness,
-            max_brightness=self.tracking_config.max_mean_brightness
+            max_brightness=self.tracking_config.max_mean_brightness,
+            # Diversity controls
+            min_frame_spacing=self.tracking_config.roi_min_frame_spacing,
+            min_position_change=self.tracking_config.roi_min_position_change,
+            # Gradual position penalty
+            enable_gradual_position_penalty=self.tracking_config.enable_gradual_position_penalty,
+            position_penalty_start_ratio=self.tracking_config.position_penalty_start_ratio,
+            position_penalty_max_ratio=self.tracking_config.position_penalty_max_ratio,
+            position_penalty_min_multiplier=self.tracking_config.position_penalty_min_multiplier
         )
         self._roi_collector = ROICollectorService(
             quality_config=quality_config,

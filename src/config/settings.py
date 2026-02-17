@@ -46,7 +46,7 @@ class AppConfig:
     APP_VERSION: str = "15-02-2026_v2.3.1"
     
     # Video source for testing
-    video_path: str = os.getenv("VIDEO_PATH", "D:\\Recordings\\2026_02_05\\2026_02_13\\output_2026-02-14_21-23-23.h264")
+    video_path: str = os.getenv("VIDEO_PATH", "D:\\Recordings\\2026_02_05\\2026_02_16\\output_2026-02-15_19-59-34.h264")
     
     # Platform-specific model paths
     detection_model: str = os.getenv(
