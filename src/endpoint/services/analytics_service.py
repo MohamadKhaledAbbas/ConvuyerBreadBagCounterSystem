@@ -27,7 +27,15 @@ class AnalyticsService:
         except ValueError:
             raise HTTPException(400, f"Invalid datetime: {val}")
     def calculate_daily_shift_times(self) -> tuple:
-        time_now = datetime.now() + timedelta(hours=self.config.timezone_offset_hours)
+        """
+        Calculate start and end times for the current daily shift.
+
+        Note: Events are stored in LOCAL system time (not UTC).
+        When system timezone matches production timezone, no offset is needed.
+        The timezone_offset_hours config is for systems running in UTC.
+        """
+        # Use local system time directly (events are stored in local time)
+        time_now = datetime.now()
         if time_now.hour >= self.config.shift_start_hour:
             start_time = time_now
             end_time = time_now + timedelta(days=1)
@@ -38,8 +46,9 @@ class AnalyticsService:
         end_time = end_time.replace(hour=self.config.shift_end_hour, minute=0, second=0, microsecond=0)
         return start_time, end_time
     def get_analytics_data(self, start_time: datetime, end_time: datetime) -> Dict[str, Any]:
-        db_start = start_time - timedelta(hours=self.config.timezone_offset_hours)
-        db_end = end_time - timedelta(hours=self.config.timezone_offset_hours)
+        # Events are stored in local system time, so use times directly without offset
+        db_start = start_time
+        db_end = end_time
         logger.info(f"[Analytics] Query range: {db_start.isoformat()} to {db_end.isoformat()}")
         repo_data = self.repo.get_time_range_analytics(db_start, db_end)
         stats = repo_data['stats']

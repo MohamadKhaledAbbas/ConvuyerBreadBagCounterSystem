@@ -42,7 +42,8 @@ class TrackLifecycleService:
 
     def get_default_time_range(self) -> tuple:
         """Get default time range: last 24 hours."""
-        now = datetime.now() + timedelta(hours=self.config.timezone_offset_hours)
+        # Use local system time directly (events are stored in local time)
+        now = datetime.now()
         start = now - timedelta(hours=24)
         return start, now
 
@@ -63,9 +64,9 @@ class TrackLifecycleService:
         Returns:
             Dictionary with meta, stats, events, and details
         """
-        # Convert to UTC for DB queries
-        db_start = start_time - timedelta(hours=self.config.timezone_offset_hours)
-        db_end = end_time - timedelta(hours=self.config.timezone_offset_hours)
+        # Events are stored in local system time, so use times directly without offset
+        db_start = start_time
+        db_end = end_time
 
         logger.info(f"[TrackLifecycle] Query: {db_start.isoformat()} to {db_end.isoformat()}, type={event_type}")
 
