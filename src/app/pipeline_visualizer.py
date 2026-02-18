@@ -420,7 +420,7 @@ class PipelineVisualizer:
         # Calculate panel dimensions
         num_classes = max(len(counts_by_class), 1)
         panel_w = 280
-        panel_h = 360 + (num_classes * self.LINE_HEIGHT_SMALL)  # Increased height for new info
+        panel_h = 380 + (num_classes * self.LINE_HEIGHT_SMALL)  # Increased height for new info
         panel_x = 15
         panel_y = 15
 
