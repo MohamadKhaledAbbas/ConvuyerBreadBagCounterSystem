@@ -173,14 +173,14 @@ class TrackingConfig:
     # Lost Track Recovery (Valid Journey Detection)
     # ==========================================================================
 
-    lost_track_entry_zone_ratio: float = _parse_float_env("LOST_TRACK_ENTRY_ZONE_RATIO", 0.6)
+    lost_track_entry_zone_ratio: float = _parse_float_env("LOST_TRACK_ENTRY_ZONE_RATIO", 0.3)
     """
     Bottom fraction of frame where valid tracks should start (0.6 = bottom 60%).
     Lost tracks are only rescued if they started in this zone.
     This ensures we only count bags that entered from the expected direction.
     """
 
-    lost_track_exit_zone_ratio: float = _parse_float_env("LOST_TRACK_EXIT_ZONE_RATIO", 0.4)
+    lost_track_exit_zone_ratio: float = _parse_float_env("LOST_TRACK_EXIT_ZONE_RATIO", 0.3)
     """
     Top fraction of frame where lost tracks must reach to be rescued (0.4 = top 40%).
     This is more relaxed than the strict exit_zone_ratio (15%) to handle:
