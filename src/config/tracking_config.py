@@ -170,6 +170,39 @@ class TrackingConfig:
     """
 
     # ==========================================================================
+    # Lost Track Recovery (Valid Journey Detection)
+    # ==========================================================================
+
+    lost_track_entry_zone_ratio: float = _parse_float_env("LOST_TRACK_ENTRY_ZONE_RATIO", 0.6)
+    """
+    Bottom fraction of frame where valid tracks should start (0.6 = bottom 60%).
+    Lost tracks are only rescued if they started in this zone.
+    This ensures we only count bags that entered from the expected direction.
+    """
+
+    lost_track_exit_zone_ratio: float = _parse_float_env("LOST_TRACK_EXIT_ZONE_RATIO", 0.4)
+    """
+    Top fraction of frame where lost tracks must reach to be rescued (0.4 = top 40%).
+    This is more relaxed than the strict exit_zone_ratio (15%) to handle:
+    - Tracks lost due to occlusion/merging near the top
+    - Detector missing objects as they get smaller/further away
+    """
+
+    lost_track_min_travel_ratio: float = _parse_float_env("LOST_TRACK_MIN_TRAVEL_RATIO", 0.3)
+    """
+    Minimum vertical distance traveled as fraction of frame height (0.3 = 30%).
+    Lost tracks must have traveled at least this distance to be rescued.
+    Prevents counting noise/short-lived tracks.
+    """
+
+    lost_track_min_hit_rate: float = _parse_float_env("LOST_TRACK_MIN_HIT_RATE", 0.5)
+    """
+    Minimum detection hit rate for lost track recovery (0.5 = 50%).
+    Hit rate = hits / (hits + misses). Higher values = stricter validation.
+    Ensures we only rescue tracks that were reliably detected.
+    """
+
+    # ==========================================================================
     # ROI Collection Parameters
     # ==========================================================================
     

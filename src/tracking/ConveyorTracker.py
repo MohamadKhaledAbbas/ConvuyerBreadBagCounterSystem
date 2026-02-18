@@ -272,16 +272,27 @@ class ConveyorTracker(ITracker):
         # Completed tracks buffer (for batch processing)
         self.completed_tracks: List[TrackEvent] = []
         
+        # Cache frequently accessed config values (performance optimization)
+        # These are accessed every frame, so caching avoids repeated getattr() lookups
+        self._min_conf_new_track = getattr(self.config, 'min_confidence_new_track', 0.7)
+        self._use_second_stage = getattr(self.config, 'use_second_stage_matching', True)
+        self._velocity_alpha = getattr(self.config, 'velocity_smoothing_alpha', 0.3)
+        self._exit_margin_pixels = getattr(self.config, 'exit_margin_pixels', 20)
+        self._bottom_exit_zone_ratio = getattr(self.config, 'bottom_exit_zone_ratio', 0.15)
+        self._exit_zone_ratio = getattr(self.config, 'exit_zone_ratio', 0.15)
+        self._require_full_travel = getattr(self.config, 'require_full_travel', True)
+        self._min_travel_duration_seconds = getattr(self.config, 'min_travel_duration_seconds', 2.0)
+        self._second_stage_max_distance = getattr(self.config, 'second_stage_max_distance', 150.0)
+        self._second_stage_threshold = getattr(self.config, 'second_stage_threshold', 0.8)
+
         # Log configuration
         multi_criteria = getattr(self.config, 'use_multi_criteria_matching', True)
-        second_stage = getattr(self.config, 'use_second_stage_matching', True)
-        min_conf_new = getattr(self.config, 'min_confidence_new_track', 0.7)
 
         logger.info(
             f"[ConveyorTracker] Initialized: iou_threshold={self.config.iou_threshold}, "
             f"max_age={self.config.max_frames_without_detection}, min_hits={self.config.min_track_duration_frames}, "
-            f"min_conf_new_track={min_conf_new:.2f}, "
-            f"multi_criteria={multi_criteria}, second_stage={second_stage}"
+            f"min_conf_new_track={self._min_conf_new_track:.2f}, "
+            f"multi_criteria={multi_criteria}, second_stage={self._use_second_stage}"
         )
     
     def _compute_cost_matrix(
@@ -467,10 +478,6 @@ class ConveyorTracker(ITracker):
 
         matches = []
 
-        # Get configurable parameters
-        max_dist_base = getattr(self.config, 'second_stage_max_distance', 150.0)
-        threshold = getattr(self.config, 'second_stage_threshold', 0.8)
-
         # Build cost matrix based on centroid distance and motion consistency
         cost_matrix = np.zeros((len(tracks), len(detections)))
 
@@ -483,11 +490,11 @@ class ConveyorTracker(ITracker):
             track_velocity = track.velocity
 
             # Adjust max distance based on velocity magnitude
-            max_dist = max_dist_base
+            max_dist = self._second_stage_max_distance
             if track_velocity is not None:
                 vel_mag = math.sqrt(track_velocity[0]**2 + track_velocity[1]**2)
                 # Allow larger search radius for faster tracks
-                max_dist = max(max_dist_base, vel_mag * 5)
+                max_dist = max(self._second_stage_max_distance, vel_mag * 5)
 
             for j, det in enumerate(detections):
                 det_center = compute_centroid(det.bbox)
@@ -530,7 +537,7 @@ class ConveyorTracker(ITracker):
         used_dets = set()
         for i in range(len(tracks)):
             best_j = -1
-            best_cost = threshold
+            best_cost = self._second_stage_threshold
 
             for j in range(len(detections)):
                 if j not in used_dets and cost_matrix[i, j] < best_cost:
@@ -540,11 +547,6 @@ class ConveyorTracker(ITracker):
             if best_j >= 0:
                 matches.append((track_indices[i], det_indices[best_j]))
                 used_dets.add(best_j)
-
-                logger.debug(
-                    f"[ConveyorTracker] Second-stage match: "
-                    f"track {tracks[i].track_id} -> det {best_j} (cost={best_cost:.3f})"
-                )
 
         return matches
 
@@ -562,15 +564,14 @@ class ConveyorTracker(ITracker):
             return None
 
         cx, cy = track.center
-        margin = getattr(self.config, 'exit_margin_pixels', 20)
 
-        if cx < margin:
+        if cx < self._exit_margin_pixels:
             return "left"
-        if cx > self.frame_width - margin:
+        if cx > self.frame_width - self._exit_margin_pixels:
             return "right"
-        if cy < margin:
+        if cy < self._exit_margin_pixels:
             return "top"
-        if cy > self.frame_height - margin:
+        if cy > self.frame_height - self._exit_margin_pixels:
             return "bottom"
 
         return None
@@ -601,10 +602,8 @@ class ConveyorTracker(ITracker):
             True if in bottom exit zone (invalid exit direction)
         """
         if self.frame_height is None:
-            logger.warning("[ConveyorTracker] Cannot validate bottom exit zone: frame_height is None")
             return False  # Can't validate without frame dimensions
-        bottom_exit_zone_ratio = getattr(self.config, 'bottom_exit_zone_ratio', 0.15)
-        bottom_y_threshold = self.frame_height * (1.0 - bottom_exit_zone_ratio)
+        bottom_y_threshold = self.frame_height * (1.0 - self._bottom_exit_zone_ratio)
         return y >= bottom_y_threshold
 
     def _is_in_exit_zone(self, y: int) -> bool:
@@ -621,10 +620,8 @@ class ConveyorTracker(ITracker):
             True if in exit zone
         """
         if self.frame_height is None:
-            logger.warning("[ConveyorTracker] Cannot validate exit zone: frame_height is None")
             return False  # Can't validate without frame dimensions
-        exit_zone_ratio = getattr(self.config, 'exit_zone_ratio', 0.15)
-        exit_y_threshold = self.frame_height * exit_zone_ratio
+        exit_y_threshold = self.frame_height * self._exit_zone_ratio
         return y <= exit_y_threshold
 
     def _has_valid_travel_path(self, track: TrackedObject) -> bool:
@@ -647,8 +644,7 @@ class ConveyorTracker(ITracker):
         Returns:
             True if the track has a valid travel path
         """
-        require_full_travel = getattr(self.config, 'require_full_travel', True)
-        if not require_full_travel:
+        if not self._require_full_travel:
             return True
 
         # Get current position
@@ -656,22 +652,13 @@ class ConveyorTracker(ITracker):
 
         # Check 1: Track must NOT be exiting from the bottom (wrong direction)
         if self._is_in_bottom_exit_zone(cy):
-            logger.debug(
-                f"[ConveyorTracker] T{track.track_id} INVALID: exiting from bottom zone"
-            )
             return False
 
         # Check 2: Track must be exiting from the top (correct direction)
         if not self._is_in_exit_zone(cy):
-            logger.debug(
-                f"[ConveyorTracker] T{track.track_id} INVALID: not exiting from top zone"
-            )
             return False
 
         # Check 3: Track must have been visible for minimum duration (ADAPTIVE time-based)
-        # Calculate expected travel distance and adjust duration requirement
-        min_travel_seconds_base = getattr(self.config, 'min_travel_duration_seconds', 2.0)
-
         # Adaptive duration based on entry position
         # If track appeared mid-frame or higher, reduce duration requirement proportionally
         if self.frame_height and track.entry_center_y is not None:
@@ -684,28 +671,14 @@ class ConveyorTracker(ITracker):
             # Mid entry (ratio=0.5): 50% of min duration required
             # Top entry (ratio=0.3): 30% of min duration required
             duration_scale = max(0.3, entry_ratio)  # Minimum 30% of base duration
-            min_travel_seconds = min_travel_seconds_base * duration_scale
-
-            logger.debug(
-                f"[ConveyorTracker] T{track.track_id} entry_y={track.entry_center_y} "
-                f"entry_ratio={entry_ratio:.2f} duration_scale={duration_scale:.2f} "
-                f"required_duration={min_travel_seconds:.2f}s"
-            )
+            min_travel_seconds = self._min_travel_duration_seconds * duration_scale
         else:
-            min_travel_seconds = min_travel_seconds_base
+            min_travel_seconds = self._min_travel_duration_seconds
 
         track_duration = time.time() - track.created_at
 
-        if track_duration < min_travel_seconds:
-            logger.debug(
-                f"[ConveyorTracker] T{track.track_id} INVALID: duration {track_duration:.2f}s < {min_travel_seconds:.2f}s required"
-            )
-            return False
-
-        logger.debug(
-            f"[ConveyorTracker] T{track.track_id} VALID: duration={track_duration:.2f}s, exiting from top"
-        )
-        return True
+        # Return result without debug logging (called every frame)
+        return track_duration >= min_travel_seconds
 
     def update(
         self,
@@ -728,20 +701,12 @@ class ConveyorTracker(ITracker):
         
         # Get list of active tracks
         track_list = list(self.tracks.values())
-        
-        # Get confidence threshold for new tracks
-        min_conf_new_track = getattr(self.config, 'min_confidence_new_track', 0.7)
 
         if not track_list:
             # No existing tracks - create new ones for high-confidence detections only
             for det in detections:
-                if det.confidence >= min_conf_new_track:
+                if det.confidence >= self._min_conf_new_track:
                     self._create_track(det)
-                else:
-                    logger.debug(
-                        f"[ConveyorTracker] Skipping low-confidence detection "
-                        f"(conf={det.confidence:.2f} < {min_conf_new_track:.2f}) - not creating initial track"
-                    )
             return list(self.tracks.values())
         
         if not detections:
@@ -764,8 +729,7 @@ class ConveyorTracker(ITracker):
         
         # Second stage: Relaxed matching for remaining tracks using centroid distance
         # This helps recover tracks that moved more than expected between frames
-        use_second_stage = getattr(self.config, 'use_second_stage_matching', True)
-        if use_second_stage and unmatched_tracks and unmatched_dets:
+        if self._use_second_stage and unmatched_tracks and unmatched_dets:
             second_stage_matches = self._second_stage_matching(
                 [track_list[i] for i in unmatched_tracks],
                 [detections[j] for j in unmatched_dets],
@@ -789,32 +753,47 @@ class ConveyorTracker(ITracker):
         
         # Create new tracks for unmatched detections (with confidence filtering)
         # Only create tracks for high-confidence detections to avoid noise
-        # Note: min_conf_new_track was already retrieved at the start of update()
         for det_idx in unmatched_dets:
             detection = detections[det_idx]
-            if detection.confidence >= min_conf_new_track:
+            if detection.confidence >= self._min_conf_new_track:
                 self._create_track(detection)
-            else:
-                logger.debug(
-                    f"[ConveyorTracker] Skipping low-confidence detection "
-                    f"(conf={detection.confidence:.2f} < {min_conf_new_track:.2f}) - not creating track"
-                )
 
         # Check for completed tracks
         self._check_completed_tracks()
         
         return list(self.tracks.values())
     
-    def _create_track(self, detection: Detection) -> TrackedObject:
-        """Create a new track from detection."""
-        # Get velocity smoothing alpha from config
-        velocity_alpha = getattr(self.config, 'velocity_smoothing_alpha', 0.3)
+    def _create_track(self, detection: Detection) -> Optional[TrackedObject]:
+        """
+        Create a new track from detection.
 
+        Returns None if the detection should not create a track (e.g., already in exit zone).
+        """
+        # Create temporary track to check its center position
+        temp_track = TrackedObject(
+            track_id=self._next_id,
+            bbox=detection.bbox,
+            confidence=detection.confidence,
+            _velocity_alpha=self._velocity_alpha
+        )
+
+        # Check if detection is already in exit zone (top or bottom)
+        # Don't create tracks for objects that are about to leave - they won't have time
+        # to accumulate enough hits and will just create unnecessary "track_lost" events
+        _, cy = temp_track.center
+
+        if self._is_in_exit_zone(cy):
+            return None
+
+        if self._is_in_bottom_exit_zone(cy):
+            return None
+
+        # Create the actual track
         track = TrackedObject(
             track_id=self._next_id,
             bbox=detection.bbox,
             confidence=detection.confidence,
-            _velocity_alpha=velocity_alpha
+            _velocity_alpha=self._velocity_alpha
         )
         track.position_history.append(track.center)
         track.bbox_history.append(track.bbox)
@@ -830,7 +809,85 @@ class ConveyorTracker(ITracker):
         self._next_id += 1
         
         return track
-    
+
+    def _validate_lost_track_as_completed(self, track: TrackedObject) -> bool:
+        """
+        Check if a 'lost' track actually represents a valid count.
+
+        This rescues tracks that were healthy and traveled the expected path
+        but got lost due to:
+        - Occlusion/merging with another object
+        - Detector missing detections near the exit
+        - Camera/lighting issues
+
+        Validation criteria:
+        1. Must have started in the bottom portion of frame (entry zone)
+        2. Must have ended in the upper portion of frame (near exit)
+        3. Must have traveled significant vertical distance
+        4. Must have had reasonable detection quality (hit rate)
+
+        Args:
+            track: The lost track to validate
+
+        Returns:
+            True if track should be counted despite being "lost"
+        """
+        if self.frame_height is None:
+            return False
+
+        # Cache config values (getattr is expensive when called repeatedly)
+        if not hasattr(self, '_lost_track_thresholds'):
+            self._lost_track_thresholds = {
+                'entry_zone_ratio': getattr(self.config, 'lost_track_entry_zone_ratio', 0.6),
+                'exit_zone_ratio': getattr(self.config, 'lost_track_exit_zone_ratio', 0.4),
+                'min_travel_ratio': getattr(self.config, 'lost_track_min_travel_ratio', 0.3),
+                'min_hit_rate': getattr(self.config, 'lost_track_min_hit_rate', 0.5)
+            }
+
+        thresholds = self._lost_track_thresholds
+
+        # 1. Check start position - must have started in bottom portion
+        start_y = track.entry_center_y
+        if start_y is None and track.position_history:
+            start_y = track.position_history[0][1]
+
+        if start_y is None:
+            return False
+
+        # Must start in bottom portion (e.g., bottom 60% means y >= 40% of frame_height)
+        min_start_y = self.frame_height * (1.0 - thresholds['entry_zone_ratio'])
+        if start_y < min_start_y:
+            return False
+
+        # 2. Check end position - must have ended in upper portion
+        if not track.position_history:
+            return False
+
+        last_y = track.position_history[-1][1]
+
+        # Must end in upper portion (e.g., top 40% means y <= 40% of frame_height)
+        max_end_y = self.frame_height * thresholds['exit_zone_ratio']
+        if last_y > max_end_y:
+            return False
+
+        # 3. Check vertical travel distance
+        distance_y = start_y - last_y  # Positive means moved UP
+        min_distance = self.frame_height * thresholds['min_travel_ratio']
+
+        if distance_y < min_distance:
+            return False
+
+        # 4. Check hit rate (detection quality)
+        total_frames = track.age + track.hits
+        if total_frames > 0:
+            hit_rate = track.hits / total_frames
+            if hit_rate < thresholds['min_hit_rate']:
+                return False
+
+        # All checks passed - this is a valid journey!
+        # Only log on successful validation (not every failure)
+        return True
+
     def _check_completed_tracks(self):
         """Check for tracks that should be marked as completed."""
         tracks_to_remove = []
@@ -842,8 +899,17 @@ class ConveyorTracker(ITracker):
             # Check if track exceeded max age
             if track.time_since_update > self.config.max_frames_without_detection:
                 should_complete = True
-                event_type = 'track_lost'
-            
+                # ENHANCEMENT: Check if this "lost" track actually completed a valid journey
+                # If a bag travels from bottom to near-top and gets lost, it should still count!
+                if self._validate_lost_track_as_completed(track):
+                    event_type = 'track_completed'  # Rescue it!
+                    logger.info(
+                        f"[TRACK_LIFECYCLE] T{track_id} RESCUED | "
+                        f"Lost track validated as completed (valid journey from bottom to top)"
+                    )
+                else:
+                    event_type = 'track_lost'
+
             # Check if track is exiting frame and has been tracked long enough
             elif (
                 track.hits >= self.config.min_track_duration_frames and
