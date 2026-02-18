@@ -33,17 +33,42 @@ class AnalyticsService:
         Note: Events are stored in LOCAL system time (not UTC).
         When system timezone matches production timezone, no offset is needed.
         The timezone_offset_hours config is for systems running in UTC.
+
+        Handles shifts that span midnight (e.g., 16:00-14:00 next day).
         """
         # Use local system time directly (events are stored in local time)
         time_now = datetime.now()
-        if time_now.hour >= self.config.shift_start_hour:
-            start_time = time_now
-            end_time = time_now + timedelta(days=1)
+
+        # Check if shift spans midnight (start hour > end hour)
+        shift_spans_midnight = self.config.shift_start_hour > self.config.shift_end_hour
+
+        if shift_spans_midnight:
+            # For shifts spanning midnight (e.g., 16:00-14:00)
+            if time_now.hour >= self.config.shift_start_hour:
+                # Currently after shift start (e.g., 16:00-23:59)
+                # Shift: Today 16:00 to Tomorrow 14:00
+                start_time = time_now.replace(hour=self.config.shift_start_hour, minute=0, second=0, microsecond=0)
+                end_time = (time_now + timedelta(days=1)).replace(hour=self.config.shift_end_hour, minute=0, second=0, microsecond=0)
+            elif time_now.hour < self.config.shift_end_hour:
+                # Currently before shift end (e.g., 00:00-13:59)
+                # Still in yesterday's shift: Yesterday 16:00 to Today 14:00
+                start_time = (time_now - timedelta(days=1)).replace(hour=self.config.shift_start_hour, minute=0, second=0, microsecond=0)
+                end_time = time_now.replace(hour=self.config.shift_end_hour, minute=0, second=0, microsecond=0)
+            else:
+                # Currently between shift end and shift start (e.g., 14:00-15:59)
+                # This is a "dead zone" - show the just-completed shift
+                start_time = (time_now - timedelta(days=1)).replace(hour=self.config.shift_start_hour, minute=0, second=0, microsecond=0)
+                end_time = time_now.replace(hour=self.config.shift_end_hour, minute=0, second=0, microsecond=0)
         else:
-            start_time = time_now - timedelta(days=1)
-            end_time = time_now
-        start_time = start_time.replace(hour=self.config.shift_start_hour, minute=0, second=0, microsecond=0)
-        end_time = end_time.replace(hour=self.config.shift_end_hour, minute=0, second=0, microsecond=0)
+            # For shifts within same day (e.g., 08:00-16:00)
+            if time_now.hour >= self.config.shift_start_hour:
+                start_time = time_now.replace(hour=self.config.shift_start_hour, minute=0, second=0, microsecond=0)
+                end_time = time_now.replace(hour=self.config.shift_end_hour, minute=0, second=0, microsecond=0)
+            else:
+                # Before shift start - show previous day's shift
+                start_time = (time_now - timedelta(days=1)).replace(hour=self.config.shift_start_hour, minute=0, second=0, microsecond=0)
+                end_time = (time_now - timedelta(days=1)).replace(hour=self.config.shift_end_hour, minute=0, second=0, microsecond=0)
+
         return start_time, end_time
     def get_analytics_data(self, start_time: datetime, end_time: datetime) -> Dict[str, Any]:
         # Events are stored in local system time, so use times directly without offset
