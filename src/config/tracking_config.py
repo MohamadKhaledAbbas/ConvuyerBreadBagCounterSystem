@@ -302,7 +302,7 @@ class TrackingConfig:
     bidirectional_batch_transition_protection: bool = _parse_bool_env("BIDIRECTIONAL_BATCH_TRANSITION_PROTECTION", True)
     """Protect batch transitions from incorrect smoothing."""
     
-    bidirectional_inactivity_timeout_ms: float = _parse_float_env("BIDIRECTIONAL_INACTIVITY_TIMEOUT_MS", 300_000.0)
+    bidirectional_inactivity_timeout_ms: float = _parse_float_env("BIDIRECTIONAL_INACTIVITY_TIMEOUT_MS", (30 * 60 * 1000))
     """Timeout for flushing buffer on inactivity."""
     
     # ==========================================================================

@@ -916,6 +916,18 @@ class ConveyorCounterApp:
                 # Log memory usage periodically for diagnostics
                 self._maybe_log_memory_usage()
 
+                # Check for smoother timeout and flush pending items if no activity
+                if self._smoother:
+                    timed_out_records = self._smoother.check_timeout()
+                    for record in timed_out_records:
+                        self.state.add_event(
+                            f"CONFIRMED (timeout): T{record.track_id}->"
+                            f"{record.class_name} smoothed={record.smoothed}"
+                        )
+                        self._record_confirmed_count(record, None)
+                    if timed_out_records:
+                        self._publish_pipeline_state()
+
         finally:
             self._cleanup()
     

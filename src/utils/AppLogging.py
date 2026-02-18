@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Dict
 
 # Default log retention in days
-LOG_RETENTION_DAYS = 7
+LOG_RETENTION_DAYS = 3
 
 
 def setup_logging(log_dir: str = "data/logs") -> logging.Logger:

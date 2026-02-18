@@ -15,9 +15,10 @@ def init_shared_resources():
     config = get_config()
     _db_instance = DatabaseManager(config.db_path)
     logger.info("[Shared] Database initialized")
-    # Run 7-day retention cleanup on startup
+    # Run 3-day retention cleanup on startup for all event tables
     try:
-        _db_instance.purge_old_track_events(retention_days=7)
+        _db_instance.purge_old_events(retention_days=3)
+        _db_instance.purge_old_track_events(retention_days=3)
     except Exception as e:
         logger.error(f"[Shared] Retention cleanup failed: {e}")
     template_dir = Path(__file__).parent / "templates"

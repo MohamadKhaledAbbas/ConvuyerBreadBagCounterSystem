@@ -740,7 +740,28 @@ class DatabaseManager:
             'summary': summary,
             'details': details
         }
-    def purge_old_track_events(self, retention_days: int = 7) -> int:
+    def purge_old_events(self, retention_days: int = 3) -> int:
+        """
+        Delete events older than retention_days from the events table.
+
+        Args:
+            retention_days: Number of days to retain (default: 3)
+
+        Returns:
+            Number of events rows deleted
+        """
+        with self._cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM events WHERE timestamp < datetime('now', '-' || ? || ' days')",
+                (retention_days,)
+            )
+            events_deleted = cursor.rowcount
+        logger.info(
+            f"[DatabaseManager] Purged old events: "
+            f"{events_deleted} rows (retention={retention_days}d)"
+        )
+        return events_deleted
+    def purge_old_track_events(self, retention_days: int = 3) -> int:
         """
         Delete track events and details older than retention_days.
 

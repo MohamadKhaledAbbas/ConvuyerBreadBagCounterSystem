@@ -21,8 +21,8 @@ from src.utils.AppLogging import logger
 @dataclass
 class RetentionConfig:
     """Configuration for segment retention policy."""
-    max_age_hours: float = 24.0
-    max_storage_bytes: int = 10 * 1024 * 1024 * 1024  # 10 GB
+    max_age_hours: float = 5.0
+    max_storage_bytes: int = 4 * 1024 * 1024 * 1024  # 4 GB
     min_segments_keep: int = 5
     check_interval_seconds: float = 60.0
     only_delete_processed: bool = True
