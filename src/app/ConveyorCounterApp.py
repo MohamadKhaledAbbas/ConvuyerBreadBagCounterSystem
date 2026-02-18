@@ -83,6 +83,7 @@ class CounterState:
     last_classification: Optional[str] = None  # Last classified item info
     recent_events: list = field(default_factory=list)  # Recent events log (max 10)
     rejected_count: int = 0  # Total rejected classifications
+    lost_track_count: int = 0  # Total lost track events
 
     # Smoothing statistics
     total_smoothed: int = 0  # Total items smoothed (changed)
@@ -479,7 +480,8 @@ class ConveyorCounterApp:
             'rois_collected': rois_collected,
             'processing_ms': self.state.processing_time_ms,
             'tentative_total': self.state.tentative_total,
-            'tentative_counts': self.state.get_tentative_snapshot()
+            'tentative_counts': self.state.get_tentative_snapshot(),
+            'lost_track_count': self.state.lost_track_count
         }
 
         # Store detection data for on-demand snapshot annotation
@@ -510,6 +512,11 @@ class ConveyorCounterApp:
             event: Event description string
         """
         self.state.add_event(event)
+
+        # Count lost track events
+        if "lost before exit" in event:
+            with self.state._lock:
+                self.state.lost_track_count += 1
 
     def _on_classification_completed(self, track_id: int, class_name: str, confidence: float, non_rejected_rois: int = 0, best_roi: Optional[np.ndarray] = None):
         """

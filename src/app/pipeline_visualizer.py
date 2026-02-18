@@ -260,9 +260,10 @@ class PipelineVisualizer:
         # Draw main status overlay (top-left)
         tentative_total = debug_info.get('tentative_total', 0) if debug_info else 0
         tentative_counts = debug_info.get('tentative_counts', {}) if debug_info else {}
+        lost_track_count = debug_info.get('lost_track_count', 0) if debug_info else 0
         self._draw_status(
             annotated, fps, active_tracks, total_counted, counts_by_class,
-            tentative_total, tentative_counts
+            tentative_total, tentative_counts, lost_track_count
         )
 
         # Draw pipeline debug panel (right side)
@@ -412,13 +413,14 @@ class PipelineVisualizer:
         total_counted: int,
         counts_by_class: Dict[str, int],
         tentative_total: int,
-        tentative_counts: Dict[str, int]
+        tentative_counts: Dict[str, int],
+        lost_track_count: int = 0
     ):
         """Draw main status panel with clean modern design."""
         # Calculate panel dimensions
         num_classes = max(len(counts_by_class), 1)
         panel_w = 280
-        panel_h = 280 + (num_classes * self.LINE_HEIGHT_SMALL)
+        panel_h = 360 + (num_classes * self.LINE_HEIGHT_SMALL)  # Increased height for new info
         panel_x = 15
         panel_y = 15
 
@@ -430,6 +432,16 @@ class PipelineVisualizer:
         y += 5
 
         x = panel_x + self.PANEL_PADDING
+
+        # App version (small text, top of panel)
+        from src.config.settings import config
+        version_text = f"v{config.APP_VERSION}"
+        cv2.putText(
+            frame, version_text, (x, y + 10),
+            self.FONT, self.FONT_SCALE_SMALL - 0.05,
+            self.COLORS['text_secondary'], self.FONT_WEIGHT_NORMAL
+        )
+        y += self.LINE_HEIGHT_SMALL
 
         # System metrics section
         # FPS with color indicator
@@ -454,12 +466,47 @@ class PipelineVisualizer:
             self.FONT, self.FONT_SCALE_MEDIUM,
             self.COLORS['text_secondary'], self.FONT_WEIGHT_NORMAL
         )
+        y += self.LINE_HEIGHT_MEDIUM
+
+        # Lost track count
+        cv2.putText(
+            frame, f"Lost Tracks: {lost_track_count}", (x, y + 12),
+            self.FONT, self.FONT_SCALE_MEDIUM,
+            self.COLORS['text_error'], self.FONT_WEIGHT_NORMAL
+        )
         y += self.LINE_HEIGHT_MEDIUM + 10
 
         # Divider
         cv2.line(frame, (x, y), (panel_x + panel_w - self.PANEL_PADDING, y),
                 self.COLORS['panel_border'], 1)
         y += 15
+
+        # Total count (pending + persisted) - NEW
+        total_all = total_counted + tentative_total
+        cv2.putText(
+            frame, "Total (All)", (x, y + 10),
+            self.FONT, self.FONT_SCALE_SMALL,
+            self.COLORS['text_info'], self.FONT_WEIGHT_NORMAL
+        )
+
+        # Total count badge
+        total_text = str(total_all)
+        total_size = cv2.getTextSize(total_text, self.FONT, self.FONT_SCALE_LARGE, self.FONT_WEIGHT_BOLD)[0]
+        total_x = panel_x + panel_w - self.PANEL_PADDING - total_size[0] - 16
+
+        cv2.rectangle(
+            frame,
+            (total_x, y - 2),
+            (total_x + total_size[0] + 16, y + total_size[1] + 8),
+            self.COLORS['text_info'],
+            -1
+        )
+        cv2.putText(
+            frame, total_text, (total_x + 8, y + total_size[1] + 2),
+            self.FONT, self.FONT_SCALE_LARGE,
+            (30, 30, 35), self.FONT_WEIGHT_BOLD
+        )
+        y += self.LINE_HEIGHT_LARGE + 10
 
         # Tentative counts section
         cv2.putText(
