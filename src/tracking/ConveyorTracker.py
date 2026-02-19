@@ -176,7 +176,8 @@ class TrackedObject:
         Predict next position based on velocity.
         
         Uses smoothed velocity for more stable predictions.
-        Prediction distance scales with time_since_update for missed frames.
+        Note: The bbox is already shifted by velocity in mark_missed() for each
+        missed frame, so we only need to add one more frame of velocity here.
 
         Returns:
             Predicted bbox
@@ -186,15 +187,15 @@ class TrackedObject:
             return self.bbox
         
         vx, vy = vel
-        # Scale prediction by frames since last update (for tracking during missed detections)
-        scale = self.time_since_update + 1
+        # Only add one frame of velocity since mark_missed() already updates bbox
+        # for each missed frame. Using time_since_update would double-count.
         x1, y1, x2, y2 = self.bbox
         
         return (
-            int(x1 + vx * scale),
-            int(y1 + vy * scale),
-            int(x2 + vx * scale),
-            int(y2 + vy * scale)
+            int(x1 + vx),
+            int(y1 + vy),
+            int(x2 + vx),
+            int(y2 + vy)
         )
     
     def mark_missed(self):
@@ -538,8 +539,9 @@ class ConveyorTracker(ITracker):
             max_dist = self._second_stage_max_distance
             if track_velocity is not None:
                 vel_mag = math.sqrt(track_velocity[0]**2 + track_velocity[1]**2)
-                # Allow larger search radius for faster tracks
-                max_dist = max(self._second_stage_max_distance, vel_mag * 5)
+                # Allow larger search radius for faster tracks (8x velocity)
+                # This handles cases where bags move faster than expected
+                max_dist = max(self._second_stage_max_distance, vel_mag * 8)
 
             for j, det in enumerate(detections):
                 det_center = compute_centroid(det.bbox)
@@ -1070,6 +1072,13 @@ class ConveyorTracker(ITracker):
                 pred_x = int(pred_x + ghost_vel[0] * projection_frames)
                 pred_y = int(pred_y + ghost_vel[1] * projection_frames)
 
+            logger.debug(
+                f"[GHOST_RECOVERY] T{ghost_id} checking | "
+                f"stored_pos={ghost_info['predicted_pos']}, vel={ghost_vel}, "
+                f"elapsed={elapsed_seconds:.2f}s, proj_frames={projection_frames}, "
+                f"pred_pos=({pred_x}, {pred_y}), max_y_gap={max_y_gap}"
+            )
+
             best_det_idx = None
             best_dist = float('inf')
 
@@ -1081,13 +1090,26 @@ class ConveyorTracker(ITracker):
                 # X-axis tolerance check
                 x_diff = abs(det_cx - pred_x)
                 if x_diff > self._ghost_x_tolerance:
+                    logger.debug(
+                        f"[GHOST_RECOVERY] T{ghost_id} reject det_idx={det_idx} | "
+                        f"x_diff={x_diff} > x_tol={self._ghost_x_tolerance}"
+                    )
                     continue
 
                 # Y-axis check: detection should be at or above ghost's predicted Y
                 y_diff = pred_y - det_cy  # positive means det moved toward top
                 if y_diff < -max_y_gap:  # Detection is too far below predicted position
+                    logger.debug(
+                        f"[GHOST_RECOVERY] T{ghost_id} reject det_idx={det_idx} | "
+                        f"det below ghost: y_diff={y_diff} < -max_y_gap={-max_y_gap}"
+                    )
                     continue
                 if abs(det_cy - pred_y) > max_y_gap:
+                    logger.debug(
+                        f"[GHOST_RECOVERY] T{ghost_id} reject det_idx={det_idx} | "
+                        f"y_gap={abs(det_cy - pred_y)} > max_y_gap={max_y_gap} "
+                        f"(det_cy={det_cy}, pred_y={pred_y}, vel={ghost_vel})"
+                    )
                     continue
 
                 # Score by distance

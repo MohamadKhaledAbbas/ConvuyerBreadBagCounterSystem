@@ -191,6 +191,7 @@ class TrackingConfig:
     """
     Maximum Y gap as fraction of frame height for ghost re-association.
     Detection must be within this distance of the ghost's predicted Y position.
+    Default increased to 0.3 (30%) to handle fast-moving bags on conveyor.
     """
 
     # ==========================================================================

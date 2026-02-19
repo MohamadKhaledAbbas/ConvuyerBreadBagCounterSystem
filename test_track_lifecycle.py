@@ -505,7 +505,7 @@ def test_config_params():
     new_params = [
         ('ghost_track_max_age_seconds', 4.0),
         ('ghost_track_x_tolerance_pixels', 80.0),
-        ('ghost_track_max_y_gap_ratio', 0.2),
+        ('ghost_track_max_y_gap_ratio', 0.3),  # Increased from 0.2 to handle fast-moving bags
         ('merge_bbox_growth_threshold', 1.4),
         ('merge_spatial_tolerance_pixels', 50.0),
         ('merge_y_tolerance_pixels', 30.0),
