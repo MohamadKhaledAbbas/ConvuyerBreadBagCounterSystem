@@ -183,6 +183,8 @@ class DatabaseManager:
         (the exception is caught and ignored).  This handles databases created
         before the enhanced lifecycle fields were added to schema.sql.
         """
+        # NOTE: Column names/types are hardcoded constants — not user input.
+        # f-string usage is safe here; no SQL injection risk.
         new_columns = [
             ("entry_type", "TEXT DEFAULT 'bottom_entry'"),
             ("suspected_duplicate", "INTEGER DEFAULT 0"),
