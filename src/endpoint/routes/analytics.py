@@ -34,8 +34,8 @@ async def analytics(
     
     # Show form if no time range specified
     if start_time is None or end_time is None:
-        return templates.TemplateResponse('analytics_form.html', {'request': request})
-    
+        return templates.TemplateResponse('analytics_form_new.html', {'request': request})
+
     logger.info(f'[Analytics] Request: start={start_time}, end={end_time}')
     
     try:
@@ -62,8 +62,8 @@ async def analytics(
         }
         
         logger.info(f'[Analytics] Rendering: {data["data"]["total"]["count"]} bags')
-        return templates.TemplateResponse('analytics.html', context)
-        
+        return templates.TemplateResponse('analytics_new.html', context)
+
     except HTTPException:
         raise
     except ValueError as e:

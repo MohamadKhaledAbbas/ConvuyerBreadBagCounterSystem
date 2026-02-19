@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>محاكاة المسار - رقم {{ track_id }}</title>
+    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="/static/theme.css">
+    <style>
+        body { direction: ltr; }
+
+        /* Force English numbers */
+        .info-value, .time-label, #speedValue {
+            font-family: 'Inter', sans-serif !important;
+            font-feature-settings: "tnum" 1;
+        }
+
+        .container { display: grid; grid-template-columns: 1fr 320px; gap: 1.5rem; }
+        .canvas-wrapper { background: var(--glass-bg); border: 1px solid var(--glass-border); border-radius: var(--radius-lg); padding: 1rem; }
+        .canvas-container { position: relative; border-radius: var(--radius-md); overflow: hidden; }
+        #bgImage { width: 100%; height: auto; display: block; border-radius: var(--radius-md); opacity: 0.6; }
+        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border-radius: var(--radius-md); }
+        .no-bg-fallback { width: 100%; height: 500px; background: linear-gradient(135deg, rgba(15, 23, 42, 0.9), rgba(30, 41, 59, 0.7)); border-radius: var(--radius-md); }
+        .controls { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; margin-top: 1rem; }
+        .progress-wrap { width: 100%; background: rgba(255,255,255,0.05); border-radius: var(--radius-sm); height: 35px; display: flex; align-items: center; padding: 0 1rem; gap: 1rem; margin-top: 1rem; }
+        .progress-bar { flex: 1; height: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; cursor: pointer; position: relative; }
+        .progress-fill { height: 100%; background: linear-gradient(90deg, var(--accent-primary), var(--accent-purple)); border-radius: 4px; width: 0%; transition: width 0.05s; }
+        .time-label { font-size: 0.8rem; color: var(--text-secondary); font-family: monospace; min-width: 90px; direction: ltr; }
+        .sidebar { display: flex; flex-direction: column; gap: 1rem; }
+        .info-card { background: var(--glass-bg); border: 1px solid var(--glass-border); border-radius: var(--radius-md); padding: 1rem; }
+        .info-card h3 { font-size: 0.9rem; color: var(--accent-primary); margin-bottom: 0.75rem; font-weight: 600; }
+        .info-row { display: flex; justify-content: space-between; font-size: 0.85rem; padding: 0.4rem 0; border-bottom: 1px solid rgba(255,255,255,0.04); }
+        .info-row:last-child { border-bottom: none; }
+        .info-label { color: var(--text-secondary); }
+        .info-value { color: var(--text-primary); font-weight: 600; font-family: monospace; direction: ltr; }
+        .status-badge { padding: 0.25rem 0.6rem; border-radius: 4px; font-size: 0.8rem; font-weight: 600; }
+        .status-completed { background: rgba(45, 212, 191, 0.15); color: var(--accent-success); }
+        .status-lost { background: rgba(248, 113, 113, 0.15); color: var(--accent-danger); }
+        .status-invalid { background: rgba(251, 191, 36, 0.15); color: var(--accent-warning); }
+        .legend { display: grid; gap: 0.5rem; }
+        .legend-item { display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; color: var(--text-secondary); }
+        .legend-color { width: 14px; height: 14px; border-radius: 3px; }
+        @media (max-width: 1000px) { .container { grid-template-columns: 1fr; } canvas { height: 350px; } }
+    </style>
+</head>
+<body>
+<main>
+    <a href="/track-events" class="back-home"><i class="fa-solid fa-arrow-right"></i> العودة لسجل المسارات</a>
+
+    <div class="page-header">
+        <h1><i class="fa-solid fa-film"></i> محاكاة المسار #{{ track_id }}</h1>
+        <p class="subtitle">عرض مرئي لرحلة الكيس على خط الإنتاج من نقطة الرصد حتى الخروج</p>
+    </div>
+
+    <div class="container">
+        <div class="canvas-wrapper">
+            <div class="canvas-container" id="canvasContainer">
+                <img id="bgImage" src="/snapshot/background"
+                     alt="Camera View"
+                     onerror="this.style.display='none'; document.getElementById('animationCanvas').style.position='relative'; document.getElementById('animationCanvas').style.height='500px';">
+                <canvas id="animationCanvas"></canvas>
+            </div>
+
+            <div class="controls">
+                <button id="playBtn" class="btn btn-primary" onclick="togglePlay()">
+                    <i class="fa-solid fa-play"></i> تشغيل
+                </button>
+                <button class="btn btn-secondary" onclick="resetAnimation()">
+                    <i class="fa-solid fa-redo"></i> إعادة
+                </button>
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                    <label style="font-size: 0.85rem; color: var(--text-secondary);">سرعة العرض:</label>
+                    <input type="range" id="speedSlider" min="0.5" max="3" step="0.5" value="1" style="width: 100px;" onchange="updateSpeed(this.value)">
+                    <span id="speedValue" style="font-size: 0.85rem; min-width: 30px;">1x</span>
+                </div>
+            </div>
+
+            <div class="progress-wrap">
+                <span class="time-label"><span id="currentTime">0:00</span> / <span id="totalTime">0:00</span></span>
+                <div class="progress-bar" id="progressBar" onclick="seekAnimation(event)">
+                    <div class="progress-fill" id="progressFill"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="sidebar">
+            <div class="info-card">
+                <h3><i class="fa-solid fa-info-circle"></i> بيانات المسار</h3>
+                <div class="info-row">
+                    <span class="info-label">النتيجة:</span>
+                    <span class="status-badge status-{{ data.summary.event_type.split('_')[1] }}">
+                        {% if data.summary.event_type == 'track_completed' %}تم بنجاح{% elif data.summary.event_type == 'track_lost' %}فُقد{% else %}مسار خاطئ{% endif %}
+                    </span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">مدة الرحلة:</span>
+                    <span class="info-value">{{ "%.2f"|format(data.summary.duration_seconds or 0) }} ثانية</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">المسافة المقطوعة:</span>
+                    <span class="info-value">{{ "%.0f"|format(data.summary.distance_pixels or 0) }} بكسل</span>
+                </div>
+                {% if data.summary.classification %}
+                <div class="info-row">
+                    <span class="info-label">الصنف:</span>
+                    <span class="info-value">{{ data.summary.classification }}</span>
+                </div>
+                {% endif %}
+            </div>
+
+            <div class="info-card">
+                <h3><i class="fa-solid fa-location-dot"></i> إحداثيات المسار</h3>
+                <div class="info-row">
+                    <span class="info-label">نقطة الدخول (X, Y):</span>
+                    <span class="info-value">({{ data.summary.entry.x|default(0, true) }}, {{ data.summary.entry.y|default(0, true) }})</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">نقطة الخروج (X, Y):</span>
+                    <span class="info-value">({{ data.summary.exit.x|default(0, true) }}, {{ data.summary.exit.y|default(0, true) }})</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">اتجاه الخروج:</span>
+                    <span class="info-value">{{ data.summary.exit_direction or 'غير محدد' }}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">نوع الدخول:</span>
+                    <span class="info-value">{{ data.summary.entry_type or 'غير محدد' }}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">نقاط المسار المسجلة:</span>
+                    <span class="info-value">
+                        {{ data.position_history|length if data.position_history else 0 }}
+                        {% if not data.position_history or data.position_history|length == 0 %}
+                        <span style="color: var(--accent-warning); font-size: 0.7rem;">(مُولّد)</span>
+                        {% else %}
+                        <span style="color: var(--accent-success); font-size: 0.7rem;">(حقيقي)</span>
+                        {% endif %}
+                    </span>
+                </div>
+            </div>
+
+            <div class="info-card">
+                <h3><i class="fa-solid fa-palette"></i> دليل الرموز</h3>
+                <div class="legend">
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: rgba(255,255,255,0.3);"></div>
+                        <span>خلفية الكاميرا (صورة حية)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #fbbf24;"></div>
+                        <span>S = نقطة البداية (الدخول)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #38bdf8;"></div>
+                        <span>الموقع الحالي للكيس</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: rgba(56, 189, 248, 0.5);"></div>
+                        <span>مسار الحركة</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #f87171;"></div>
+                        <span>X = نقطة النهاية (الخروج)</span>
+                    </div>
+                </div>
+                <p style="font-size: 0.7rem; color: var(--text-muted); margin-top: 0.75rem; line-height: 1.4;">
+                    <i class="fa-solid fa-info-circle"></i>
+                    المسار يُظهر حركة الكيس الفعلية بناءً على الإحداثيات المسجلة.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <div class="page-footer">
+        <a href="/track-events">سجل المسارات</a> • <a href="/">الرئيسية</a>
+    </div>
+</main>
+
+<script>
+// Track data from server
+const trackData = {{ data | tojson }};
+console.log('Track Data:', trackData);
+console.log('Track ID:', trackData.track_id);
+console.log('Entry:', trackData.summary.entry);
+console.log('Exit:', trackData.summary.exit);
+
+// Canvas setup
+const canvas = document.getElementById('animationCanvas');
+const ctx = canvas.getContext('2d');
+const bgImage = document.getElementById('bgImage');
+const canvasContainer = document.getElementById('canvasContainer');
+
+// Animation state
+let isPlaying = false;
+let currentFrame = 0;
+let animationSpeed = 1.0;
+let animationId = null;
+let lastTime = 0;
+
+// Camera frame dimensions (actual camera resolution - 1280x720)
+let frameWidth = 1280;
+let frameHeight = 720;
+
+// Get position data - use actual position_history if available
+let positions = trackData.position_history || [];
+console.log('Position history from server:', positions.length, 'points');
+
+// If no positions, generate from entry/exit coordinates
+if (positions.length === 0) {
+    const entry = trackData.summary.entry || {};
+    const exit = trackData.summary.exit || {};
+
+    console.log('Generating path from entry:', entry, 'to exit:', exit);
+
+    if (entry.x != null && entry.y != null && exit.x != null && exit.y != null) {
+        const numPoints = 60;
+        for (let i = 0; i < numPoints; i++) {
+            const t = i / (numPoints - 1);
+            // Straight line interpolation - matching actual conveyor movement
+            const x = entry.x + (exit.x - entry.x) * t;
+            const y = entry.y + (exit.y - entry.y) * t;
+            positions.push([Math.round(x), Math.round(y)]);
+        }
+        console.log('Generated', positions.length, 'positions. First:', positions[0], 'Last:', positions[positions.length-1]);
+    } else {
+        console.warn('Missing entry/exit coordinates!');
+    }
+}
+
+const totalFrames = positions.length || 1;
+const duration = (trackData.animation && trackData.animation.suggested_duration_ms) || 4000;
+
+console.log('Positions:', positions.length, 'Duration:', duration);
+console.log('Entry:', trackData.summary.entry, 'Exit:', trackData.summary.exit);
+
+// Resize canvas to match background image
+function resizeCanvas() {
+    if (bgImage.naturalWidth > 0) {
+        // Use actual image dimensions
+        frameWidth = bgImage.naturalWidth;
+        frameHeight = bgImage.naturalHeight;
+        canvas.width = bgImage.clientWidth;
+        canvas.height = bgImage.clientHeight;
+    } else {
+        // Fallback dimensions
+        const rect = canvasContainer.getBoundingClientRect();
+        canvas.width = rect.width;
+        canvas.height = window.innerWidth <= 1000 ? 350 : 500;
+    }
+    draw();
+}
+
+// Wait for background image to load
+bgImage.onload = function() {
+    frameWidth = bgImage.naturalWidth;
+    frameHeight = bgImage.naturalHeight;
+    console.log('Background loaded:', frameWidth, 'x', frameHeight);
+    resizeCanvas();
+};
+
+window.addEventListener('resize', resizeCanvas);
+setTimeout(resizeCanvas, 100);
+
+// Convert world coordinates (camera pixels) to canvas coordinates
+// Note: In camera coordinates, Y=0 is at TOP of frame
+// Bags travel from BOTTOM (high Y) to TOP (low Y) on conveyor
+function toCanvas(x, y) {
+    // Direct mapping from camera coordinates to canvas coordinates
+    const cx = (x / frameWidth) * canvas.width;
+    const cy = (y / frameHeight) * canvas.height;
+    return [cx, cy];
+}
+
+// Draw function
+function draw() {
+    // Clear with transparent background (to show camera image behind)
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // If no background image, draw dark background
+    if (bgImage.style.display === 'none' || !bgImage.complete || bgImage.naturalWidth === 0) {
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+
+    if (positions.length < 2) {
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = '18px Tajawal';
+        ctx.textAlign = 'center';
+        ctx.fillText('لا تتوفر بيانات مسار لهذا التتبع', canvas.width / 2, canvas.height / 2);
+        return;
+    }
+
+    // Draw full path (faint) - with shadow for visibility on camera background
+    ctx.save();
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
+    ctx.shadowBlur = 4;
+    ctx.strokeStyle = 'rgba(56, 189, 248, 0.4)';
+    ctx.lineWidth = 4;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    positions.forEach((p, i) => {
+        const [cx, cy] = toCanvas(p[0], p[1]);
+        i === 0 ? ctx.moveTo(cx, cy) : ctx.lineTo(cx, cy);
+    });
+    ctx.stroke();
+    ctx.restore();
+
+    // Draw traveled path - brighter with glow
+    if (currentFrame > 0) {
+        ctx.save();
+        ctx.shadowColor = 'rgba(56, 189, 248, 0.8)';
+        ctx.shadowBlur = 8;
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 5;
+        ctx.beginPath();
+        for (let i = 0; i <= currentFrame && i < positions.length; i++) {
+            const [cx, cy] = toCanvas(positions[i][0], positions[i][1]);
+            i === 0 ? ctx.moveTo(cx, cy) : ctx.lineTo(cx, cy);
+        }
+        ctx.stroke();
+        ctx.restore();
+    }
+
+    // Entry marker - with shadow
+    ctx.save();
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.7)';
+    ctx.shadowBlur = 6;
+    const [ex, ey] = toCanvas(positions[0][0], positions[0][1]);
+    ctx.fillStyle = 'rgba(251, 191, 36, 0.5)';
+    ctx.beginPath();
+    ctx.arc(ex, ey, 16, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#fbbf24';
+    ctx.beginPath();
+    ctx.arc(ex, ey, 10, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = 'white';
+    ctx.font = 'bold 12px Inter';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('S', ex, ey);  // S for Start
+    ctx.restore();
+
+    // Current position
+    if (currentFrame < positions.length) {
+        ctx.save();
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+        ctx.shadowBlur = 8;
+        const [cx, cy] = toCanvas(positions[currentFrame][0], positions[currentFrame][1]);
+
+        // Glow
+        const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, 30);
+        grad.addColorStop(0, 'rgba(56, 189, 248, 0.7)');
+        grad.addColorStop(1, 'rgba(56, 189, 248, 0)');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(cx, cy, 30, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Ball - bigger
+        ctx.fillStyle = '#38bdf8';
+        ctx.beginPath();
+        ctx.arc(cx, cy, 14, 0, Math.PI * 2);
+        ctx.fill();
+
+        // White border
+        ctx.strokeStyle = 'white';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // Highlight
+        ctx.fillStyle = 'rgba(255,255,255,0.5)';
+        ctx.beginPath();
+        ctx.arc(cx - 4, cy - 4, 5, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Label - with shadow background
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.fillRect(cx - 20, cy - 35, 40, 18);
+        ctx.fillStyle = 'white';
+        ctx.font = 'bold 11px Inter';
+        ctx.fillText('T' + trackData.track_id, cx, cy - 24);
+        ctx.restore();
+    }
+
+    // Exit marker
+    ctx.save();
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.7)';
+    ctx.shadowBlur = 6;
+    const last = positions[positions.length - 1];
+    const [lx, ly] = toCanvas(last[0], last[1]);
+    ctx.fillStyle = 'rgba(248, 113, 113, 0.5)';
+    ctx.beginPath();
+    ctx.arc(lx, ly, 16, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#f87171';
+    ctx.beginPath();
+    ctx.arc(lx, ly, 10, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    // X mark
+    ctx.strokeStyle = 'white';
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(lx - 4, ly - 4);
+    ctx.lineTo(lx + 4, ly + 4);
+    ctx.moveTo(lx + 4, ly - 4);
+    ctx.lineTo(lx - 4, ly + 4);
+    ctx.stroke();
+    ctx.restore();
+}
+
+// Animation loop
+function animate(timestamp) {
+    if (!isPlaying) return;
+
+    if (!lastTime) lastTime = timestamp;
+    const delta = (timestamp - lastTime) * animationSpeed;
+    lastTime = timestamp;
+
+    const progress = delta / duration;
+    currentFrame += Math.ceil(progress * totalFrames);
+
+    if (currentFrame >= totalFrames) {
+        currentFrame = totalFrames - 1;
+        isPlaying = false;
+        document.getElementById('playBtn').innerHTML = '<i class="fa-solid fa-play"></i> تشغيل';
+    }
+
+    updateUI();
+    draw();
+
+    if (isPlaying) {
+        animationId = requestAnimationFrame(animate);
+    }
+}
+
+function togglePlay() {
+    isPlaying = !isPlaying;
+    const btn = document.getElementById('playBtn');
+
+    if (isPlaying) {
+        if (currentFrame >= totalFrames - 1) currentFrame = 0;
+        lastTime = 0;
+        btn.innerHTML = '<i class="fa-solid fa-pause"></i> إيقاف';
+        animationId = requestAnimationFrame(animate);
+    } else {
+        btn.innerHTML = '<i class="fa-solid fa-play"></i> تشغيل';
+        if (animationId) cancelAnimationFrame(animationId);
+    }
+}
+
+function resetAnimation() {
+    isPlaying = false;
+    currentFrame = 0;
+    lastTime = 0;
+    document.getElementById('playBtn').innerHTML = '<i class="fa-solid fa-play"></i> تشغيل';
+    if (animationId) cancelAnimationFrame(animationId);
+    updateUI();
+    draw();
+}
+
+function updateSpeed(val) {
+    animationSpeed = parseFloat(val);
+    document.getElementById('speedValue').textContent = val + 'x';
+}
+
+function seekAnimation(e) {
+    const rect = document.getElementById('progressBar').getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    currentFrame = Math.floor(ratio * (totalFrames - 1));
+    updateUI();
+    draw();
+}
+
+function updateUI() {
+    const progress = totalFrames > 1 ? (currentFrame / (totalFrames - 1)) * 100 : 0;
+    document.getElementById('progressFill').style.width = progress + '%';
+
+    const currentMs = (currentFrame / totalFrames) * duration;
+    document.getElementById('currentTime').textContent = formatTime(currentMs);
+    document.getElementById('totalTime').textContent = formatTime(duration);
+}
+
+function formatTime(ms) {
+    const s = Math.floor(ms / 1000);
+    return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+}
+
+// Initialize
+updateUI();
+draw();
+
+// Auto-play after delay
+setTimeout(() => {
+    if (positions.length > 1) togglePlay();
+}, 800);
+</script>
+</body>
+</html>

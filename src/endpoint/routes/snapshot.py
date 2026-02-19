@@ -266,6 +266,47 @@ async def snapshot_info() -> dict:
     }
 
 
+@router.get("/snapshot/background")
+async def get_background_frame() -> Response:
+    """
+    Get the static background frame for track visualization.
+
+    Returns the background_frame.jpg from the snapshot directory.
+    This is a fixed reference image showing the camera view without any bags.
+    """
+    background_path = os.path.join(SNAPSHOT_DIR, "background_frame.jpg")
+
+    if not os.path.exists(background_path):
+        # Fallback to latest_raw.jpg if background_frame doesn't exist
+        background_path = SNAPSHOT_RAW_PATH
+
+    if not os.path.exists(background_path):
+        return Response(
+            content=b"",
+            status_code=404,
+            media_type="text/plain"
+        )
+
+    try:
+        with open(background_path, "rb") as f:
+            image_data = f.read()
+
+        return Response(
+            content=image_data,
+            media_type="image/jpeg",
+            headers={
+                "Cache-Control": "public, max-age=3600",  # Cache for 1 hour
+            }
+        )
+    except Exception as e:
+        logger.error(f"[Snapshot] Failed to read background frame: {e}")
+        return Response(
+            content=b"",
+            status_code=500,
+            media_type="text/plain"
+        )
+
+
 @router.get("/snapshot/view", response_class=HTMLResponse)
 async def snapshot_view(
     refresh: float = Query(0, ge=0, le=60.0, description="Auto-refresh interval (0=manual)"),
@@ -283,119 +324,270 @@ async def snapshot_view(
 
     html_content = f"""
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ar">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Conveyor Camera Snapshot</title>
+    <title>البث المباشر — منظومة إحصاء أكياس الخبز</title>
+    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
+        :root {{
+            --bg-deep: #0f172a;
+            --glass-bg: rgba(30, 41, 59, 0.7);
+            --glass-border: rgba(255, 255, 255, 0.08);
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --accent-primary: #38bdf8;
+            --accent-success: #2dd4bf;
+            --accent-warning: #fbbf24;
+            --accent-danger: #f87171;
+            --accent-purple: #a78bfa;
+            --radius-lg: 16px;
+            --radius-md: 12px;
+            --radius-sm: 8px;
+        }}
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
         body {{
-            margin: 0;
-            padding: 20px;
-            background: #1a1a2e;
-            color: #eee;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-family: 'Tajawal', 'Inter', system-ui, sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.6;
         }}
-        .container {{ max-width: 1400px; margin: 0 auto; }}
-        h1 {{ color: #00d9ff; margin-bottom: 10px; }}
+        /* Force English numbers */
+        .num, #frameNum, #frameAge, #loadTime {{
+            font-family: 'Inter', sans-serif !important;
+            font-feature-settings: "tnum" 1;
+        }}
+        main {{
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem 1.5rem;
+        }}
+        .back-home {{
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--accent-primary);
+            text-decoration: none;
+            font-size: 0.9rem;
+            margin-bottom: 1.5rem;
+            transition: color 0.2s;
+        }}
+        .back-home:hover {{ color: var(--accent-success); }}
+        .page-header {{
+            text-align: center;
+            margin-bottom: 2rem;
+        }}
+        .page-header h1 {{
+            font-size: 2rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 0.5rem;
+        }}
+        .page-header .subtitle {{
+            color: var(--text-secondary);
+            font-size: 1rem;
+        }}
         .info-bar {{
-            display: flex; gap: 20px; margin-bottom: 15px; padding: 10px 15px;
-            background: #16213e; border-radius: 8px; font-size: 14px; flex-wrap: wrap;
+            display: flex;
+            gap: 1.5rem;
+            margin-bottom: 1.5rem;
+            padding: 1rem 1.5rem;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-md);
+            flex-wrap: wrap;
+            backdrop-filter: blur(10px);
         }}
-        .info-item {{ display: flex; align-items: center; gap: 5px; }}
-        .info-label {{ color: #888; }}
-        .info-value {{ color: #00d9ff; font-weight: 600; }}
+        .info-item {{
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }}
+        .info-label {{
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }}
+        .info-value {{
+            color: var(--accent-primary);
+            font-weight: 600;
+            font-size: 0.9rem;
+        }}
         .status-dot {{
-            width: 10px; height: 10px; border-radius: 50%;
-            background: #888; transition: background 0.3s;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--text-muted);
+            transition: background 0.3s;
         }}
-        .status-dot.live {{ background: #00ff88; }}
-        .status-dot.stale {{ background: #ff4444; }}
-        .status-dot.loading {{ background: #ffaa00; animation: pulse 0.5s infinite; }}
+        .status-dot.live {{ background: var(--accent-success); box-shadow: 0 0 10px var(--accent-success); }}
+        .status-dot.stale {{ background: var(--accent-danger); }}
+        .status-dot.loading {{ background: var(--accent-warning); animation: pulse 0.5s infinite; }}
         @keyframes pulse {{ 0%, 100% {{ opacity: 1; }} 50% {{ opacity: 0.5; }} }}
         .frame-container {{
-            position: relative; background: #0f0f23; border-radius: 8px;
-            overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+            position: relative;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
             min-height: 400px;
         }}
-        #snapshot {{ display: block; width: 100%; height: auto; }}
+        #snapshot {{
+            display: block;
+            width: 100%;
+            height: auto;
+            border-radius: var(--radius-lg);
+        }}
         .loading-overlay {{
-            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            background: rgba(0,0,0,0.7); padding: 20px 40px; border-radius: 8px;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(15, 23, 42, 0.9);
+            padding: 1.5rem 2.5rem;
+            border-radius: var(--radius-md);
             display: none;
+            color: var(--accent-primary);
+            font-weight: 600;
         }}
-        .controls {{ margin-top: 15px; display: flex; gap: 10px; flex-wrap: wrap; }}
-        button {{
-            padding: 12px 24px; border: none; border-radius: 6px;
-            cursor: pointer; font-size: 14px; font-weight: 600;
-            transition: transform 0.1s, box-shadow 0.1s;
+        .controls {{
+            margin-top: 1.5rem;
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
         }}
-        button:hover {{ transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.3); }}
-        button:disabled {{ opacity: 0.5; cursor: not-allowed; transform: none; }}
-        .btn-primary {{ background: #00d9ff; color: #1a1a2e; }}
-        .btn-secondary {{ background: #16213e; color: #eee; border: 1px solid #333; }}
+        .btn {{
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 600;
+            font-family: 'Tajawal', sans-serif;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+        }}
+        .btn:hover {{ transform: translateY(-2px); }}
+        .btn:disabled {{ opacity: 0.5; cursor: not-allowed; transform: none; }}
+        .btn-primary {{
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-purple));
+            color: white;
+        }}
+        .btn-primary:hover {{ box-shadow: 0 8px 25px rgba(56, 189, 248, 0.3); }}
+        .btn-secondary {{
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            color: var(--text-primary);
+        }}
+        .btn-secondary:hover {{ border-color: var(--accent-primary); background: rgba(56, 189, 248, 0.1); }}
         select {{
-            padding: 12px; border-radius: 6px; border: 1px solid #333;
-            background: #16213e; color: #eee; font-size: 14px;
+            padding: 0.75rem 1rem;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--glass-border);
+            background: var(--glass-bg);
+            color: var(--text-primary);
+            font-size: 0.9rem;
+            font-family: 'Tajawal', sans-serif;
+            cursor: pointer;
+        }}
+        select:focus {{
+            outline: none;
+            border-color: var(--accent-primary);
         }}
         .note {{
-            margin-top: 20px; padding: 15px; background: #16213e;
-            border-radius: 8px; border-left: 4px solid #00d9ff;
-            font-size: 13px; color: #aaa;
+            margin-top: 1.5rem;
+            padding: 1rem 1.5rem;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-md);
+            border-right: 4px solid var(--accent-primary);
+            font-size: 0.9rem;
+            color: var(--text-secondary);
         }}
+        .note strong {{ color: var(--accent-primary); }}
+        .page-footer {{
+            text-align: center;
+            padding: 2rem;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            margin-top: 2rem;
+        }}
+        .page-footer a {{
+            color: var(--accent-primary);
+            text-decoration: none;
+        }}
+        .page-footer a:hover {{ color: var(--accent-success); }}
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>📸 Conveyor Camera Snapshot</h1>
+    <main>
+        <a href="/" class="back-home"><i class="fa-solid fa-home"></i> الرئيسية</a>
+        
+        <div class="page-header">
+            <h1><i class="fa-solid fa-camera"></i> البث المباشر</h1>
+            <p class="subtitle">عرض حي للكاميرا مع إطارات الكشف والتعرف</p>
+        </div>
         
         <div class="info-bar">
             <div class="info-item">
                 <div class="status-dot" id="statusDot"></div>
-                <span class="info-label">Status:</span>
-                <span class="info-value" id="status">Ready</span>
+                <span class="info-label">الحالة:</span>
+                <span class="info-value" id="status">جاهز</span>
             </div>
             <div class="info-item">
-                <span class="info-label">Frame:</span>
+                <span class="info-label">رقم الإطار:</span>
                 <span class="info-value" id="frameNum">-</span>
             </div>
             <div class="info-item">
-                <span class="info-label">Age:</span>
+                <span class="info-label">العمر:</span>
                 <span class="info-value" id="frameAge">-</span>
             </div>
             <div class="info-item">
-                <span class="info-label">Load time:</span>
+                <span class="info-label">وقت التحميل:</span>
                 <span class="info-value" id="loadTime">-</span>
             </div>
         </div>
         
         <div class="frame-container">
-            <img id="snapshot" src="" alt="Click 'Capture Snapshot' to get image">
+            <img id="snapshot" src="" alt="اضغط على 'التقاط صورة' للحصول على الصورة">
             <div class="loading-overlay" id="loadingOverlay">
-                ⏳ Capturing...
+                <i class="fa-solid fa-spinner fa-spin"></i> جارٍ الالتقاط...
             </div>
         </div>
         
         <div class="controls">
-            <button class="btn-primary" id="captureBtn" onclick="refreshNow()">
-                📷 Capture Snapshot
+            <button class="btn btn-primary" id="captureBtn" onclick="refreshNow()">
+                <i class="fa-solid fa-camera"></i> التقاط صورة
             </button>
-            <button class="btn-secondary" onclick="toggleOverlay()">
-                {"👁️ Hide Overlay" if overlay else "👁️ Show Overlay"}
+            <button class="btn btn-secondary" onclick="toggleOverlay()">
+                <i class="fa-solid fa-eye"></i> {"إخفاء التوضيحات" if overlay else "إظهار التوضيحات"}
             </button>
             <select id="autoRefresh" onchange="updateAutoRefresh()">
-                <option value="0" {"selected" if refresh == 0 else ""}>Manual</option>
-                <option value="1" {"selected" if refresh == 1 else ""}>Auto 1s</option>
-                <option value="2" {"selected" if refresh == 2 else ""}>Auto 2s</option>
-                <option value="5" {"selected" if refresh == 5 else ""}>Auto 5s</option>
+                <option value="0" {"selected" if refresh == 0 else ""}>يدوي</option>
+                <option value="1" {"selected" if refresh == 1 else ""}>تلقائي 1 ثانية</option>
+                <option value="2" {"selected" if refresh == 2 else ""}>تلقائي 2 ثانية</option>
+                <option value="5" {"selected" if refresh == 5 else ""}>تلقائي 5 ثوانٍ</option>
             </select>
         </div>
         
         <div class="note">
-            <strong>On-Demand Mode:</strong> Snapshots are captured only when you click the button
-            or enable auto-refresh. This minimizes system load.
+            <strong><i class="fa-solid fa-info-circle"></i> وضع الالتقاط عند الطلب:</strong>
+            يتم التقاط الصور فقط عند الضغط على الزر أو تفعيل التحديث التلقائي، مما يقلل الحمل على النظام.
         </div>
-    </div>
+        
+        <div class="page-footer">
+            <a href="/">الرئيسية</a> • <a href="/counts">الإحصاء اللحظي</a> • <a href="/analytics">لوحة المؤشرات</a>
+        </div>
+    </main>
     
     <script>
         let overlay = {str(overlay).lower()};
@@ -410,13 +602,22 @@ async def snapshot_view(
         const loadingOverlay = document.getElementById('loadingOverlay');
         const captureBtn = document.getElementById('captureBtn');
         
+        function formatAge(ms) {{
+            const sec = Math.floor(ms / 1000);
+            if (sec < 60) return sec + ' ثانية';
+            const min = Math.floor(sec / 60);
+            if (min < 60) return min + ' دقيقة';
+            const hr = Math.floor(min / 60);
+            return hr + ' ساعة';
+        }}
+        
         async function refreshNow() {{
             if (isLoading) return;
             
             isLoading = true;
             captureBtn.disabled = true;
             statusDot.className = 'status-dot loading';
-            statusText.textContent = 'Capturing...';
+            statusText.textContent = 'جارٍ الالتقاط...';
             loadingOverlay.style.display = 'block';
             
             const startTime = performance.now();
@@ -431,24 +632,24 @@ async def snapshot_view(
                     img.src = url;
                     
                     const loadTime = Math.round(performance.now() - startTime);
-                    loadTimeText.textContent = loadTime + 'ms';
+                    loadTimeText.textContent = loadTime < 1000 ? loadTime + 'ms' : (loadTime / 1000).toFixed(1) + 's';
                     
                     const frameNum = response.headers.get('X-Frame-Number') || '-';
                     const ageMs = response.headers.get('X-Frame-Age-Ms') || '0';
                     const isFresh = response.headers.get('X-Frame-Fresh') === 'true';
                     
                     frameNumText.textContent = '#' + frameNum;
-                    frameAgeText.textContent = Math.round(parseFloat(ageMs)) + 'ms';
+                    frameAgeText.textContent = formatAge(parseFloat(ageMs));
                     
                     statusDot.className = isFresh ? 'status-dot live' : 'status-dot stale';
-                    statusText.textContent = isFresh ? 'Fresh' : 'Cached';
+                    statusText.textContent = isFresh ? 'مباشر' : 'مخزن مؤقتاً';
                 }} else {{
                     statusDot.className = 'status-dot stale';
-                    statusText.textContent = 'Error: ' + response.status;
+                    statusText.textContent = 'خطأ: ' + response.status;
                 }}
             }} catch (e) {{
                 statusDot.className = 'status-dot stale';
-                statusText.textContent = 'Disconnected';
+                statusText.textContent = 'غير متصل';
             }}
             
             loadingOverlay.style.display = 'none';

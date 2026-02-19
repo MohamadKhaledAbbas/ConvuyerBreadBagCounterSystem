@@ -73,8 +73,15 @@ class TrackedObject:
     time_since_update: int = 0  # Frames since last detection
     
     # Position history for motion estimation (using deque for efficient memory management)
+    # This is used for velocity calculation and prediction - kept small for performance
     position_history: deque = field(default_factory=lambda: deque(maxlen=30))
     bbox_history: deque = field(default_factory=lambda: deque(maxlen=30))
+
+    # Checkpoint positions for DB storage (saved every N frames)
+    # This is the sparse history that gets stored in the database
+    checkpoint_positions: list = field(default_factory=list)
+    _last_checkpoint_frame: int = 0
+    _checkpoint_interval: int = 10  # Save position every N frames
 
     # Smoothed velocity (exponential moving average)
     _smooth_velocity: Optional[Tuple[float, float]] = None
@@ -89,6 +96,7 @@ class TrackedObject:
 
     # Travel path validation
     entry_center_y: Optional[int] = None  # Y position when track was first created
+    entry_center: Optional[Tuple[int, int]] = None  # Full (x, y) position when track was created
 
     # Entry type classification (diagnostics only)
     entry_type: str = "bottom_entry"  # 'bottom_entry', 'thrown_entry', 'midway_entry'
@@ -167,6 +175,12 @@ class TrackedObject:
         # Update history (deque automatically maintains maxlen)
         self.position_history.append(self.center)
         self.bbox_history.append(self.bbox)
+
+        # Save checkpoint position every N frames for DB storage
+        total_frames = self.age + self.hits
+        if total_frames - self._last_checkpoint_frame >= self._checkpoint_interval:
+            self.checkpoint_positions.append(self.center)
+            self._last_checkpoint_frame = total_frames
 
         # Update smoothed velocity
         self._update_smooth_velocity()
@@ -885,7 +899,9 @@ class ConveyorTracker(ITracker):
         track.position_history.append(track.center)
         track.bbox_history.append(track.bbox)
         track.entry_center_y = track.center[1]
-        
+        track.entry_center = track.center  # Store full entry position
+        track.checkpoint_positions.append(track.center)  # First checkpoint = entry point
+
         self.tracks[self._next_id] = track
 
         logger.info(
@@ -941,10 +957,21 @@ class ConveyorTracker(ITracker):
                 # Calculate track statistics
                 velocity = track.velocity
                 vel_str = f"vel=({velocity[0]:.1f},{velocity[1]:.1f})" if velocity else "vel=None"
+
+                # Build position history from checkpoints for DB storage
+                # Checkpoints are saved every N frames, plus entry and exit
+                final_position_history = list(track.checkpoint_positions)
+
+                # Always include the final/exit position if different from last checkpoint
+                exit_position = track.center
+                if not final_position_history or final_position_history[-1] != exit_position:
+                    final_position_history.append(exit_position)
+
+                # Calculate distance using entry and exit points
                 distance = 0.0
-                if len(track.position_history) >= 2:
-                    start = track.position_history[0]
-                    end = track.position_history[-1]
+                if len(final_position_history) >= 2:
+                    start = final_position_history[0]
+                    end = final_position_history[-1]
                     distance = ((end[0]-start[0])**2 + (end[1]-start[1])**2)**0.5
 
                 # Emit completion event with enriched lifecycle data
@@ -952,7 +979,7 @@ class ConveyorTracker(ITracker):
                     track_id=track_id,
                     event_type=event_type,
                     bbox_history=list(track.bbox_history),
-                    position_history=list(track.position_history),
+                    position_history=final_position_history,
                     total_frames=track.age + track.hits,
                     created_at=track.created_at,
                     ended_at=time.time(),
@@ -1159,12 +1186,20 @@ class ConveyorTracker(ITracker):
             ghost_info = self.ghost_tracks.pop(ghost_id)
             track = ghost_info['track']
 
+            # Build position history from checkpoints for DB storage
+            final_position_history = list(track.checkpoint_positions)
+
+            # Include last known position if different from last checkpoint
+            last_position = track.center
+            if not final_position_history or final_position_history[-1] != last_position:
+                final_position_history.append(last_position)
+
             # Finalize as track_lost (not counted)
             event = TrackEvent(
                 track_id=ghost_id,
                 event_type='track_lost',
                 bbox_history=list(track.bbox_history),
-                position_history=list(track.position_history),
+                position_history=final_position_history,
                 total_frames=track.age + track.hits,
                 created_at=track.created_at,
                 ended_at=now,
@@ -1346,11 +1381,19 @@ class ConveyorTracker(ITracker):
     def _complete_with_shadows(self, track: TrackedObject, exit_dir: str):
         """Emit completion events for all shadow tracks when their survivor exits top."""
         for shadow_id, shadow in track.shadow_tracks.items():
+            # Build position history from checkpoints for DB storage
+            final_position_history = list(shadow.checkpoint_positions)
+
+            # Include exit position (same as parent track's exit)
+            exit_position = track.center
+            if not final_position_history or final_position_history[-1] != exit_position:
+                final_position_history.append(exit_position)
+
             event = TrackEvent(
                 track_id=shadow_id,
                 event_type='track_completed',
                 bbox_history=list(shadow.bbox_history),
-                position_history=list(shadow.position_history),
+                position_history=final_position_history,
                 total_frames=shadow.age + shadow.hits,
                 created_at=shadow.created_at,
                 ended_at=time.time(),

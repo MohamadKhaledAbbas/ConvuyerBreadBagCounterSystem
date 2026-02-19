@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>سجل المسارات</title>
+    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="/static/theme.css">
+    <style>
+        body { direction: ltr; }
+
+        /* Force English numbers */
+        .stat-value, .coord, .conf-bar-fill, td, .pagination span {
+            font-family: 'Inter', sans-serif !important;
+            font-feature-settings: "tnum" 1;
+        }
+
+        .events-table-wrap {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+        }
+        table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+        thead th {
+            background: rgba(15, 23, 42, 0.6);
+            padding: 0.75rem 0.6rem;
+            text-align: left;
+            font-weight: 600;
+            color: var(--text-secondary);
+            border-bottom: 1px solid var(--glass-border);
+        }
+        tbody td {
+            padding: 0.6rem;
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+            vertical-align: top;
+        }
+        tbody tr:hover { background: rgba(56, 189, 248, 0.05); }
+        .detail-toggle { cursor: pointer; color: var(--accent-primary); }
+        .detail-row { display: none; }
+        .detail-row.open { display: table-row; }
+        .detail-cell { padding: 1rem; background: rgba(15, 23, 42, 0.5); }
+        .steps-list { list-style: none; font-size: 0.8rem; }
+        .steps-list li { padding: 0.4rem 0; border-bottom: 1px solid rgba(255,255,255,0.04); display: flex; gap: 0.75rem; }
+        .step-type { font-weight: 600; min-width: 120px; }
+        .coord { font-family: monospace; font-size: 0.8rem; color: var(--text-secondary); direction: ltr; }
+        .class-pill { padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; background: rgba(167, 139, 250, 0.15); color: var(--accent-purple); }
+        .class-pill.rejected { background: rgba(248, 113, 113, 0.15); color: var(--accent-danger); }
+        .conf-bar { display: inline-block; width: 50px; height: 6px; background: rgba(255,255,255,0.1); border-radius: 3px; overflow: hidden; vertical-align: middle; margin-right: 4px; }
+        .conf-bar-fill { height: 100%; border-radius: 3px; }
+        .dir-badge { padding: 0.1rem 0.4rem; border-radius: 4px; font-size: 0.72rem; background: rgba(255,255,255,0.06); color: var(--text-secondary); }
+        .pagination { display: flex; justify-content: center; align-items: center; gap: 1rem; margin-top: 2rem; flex-wrap: wrap; }
+        .pagination a { padding: 0.5rem 0.75rem; background: var(--glass-bg); border: 1px solid var(--glass-border); border-radius: var(--radius-sm); color: var(--accent-primary); text-decoration: none; font-size: 0.8rem; }
+        .pagination a:hover { background: rgba(56, 189, 248, 0.1); border-color: var(--accent-primary); }
+    </style>
+</head>
+<body>
+<main>
+    <a href="/" class="back-home"><i class="fa-solid fa-home"></i> الرئيسية</a>
+
+    <div class="page-header">
+        <h1><i class="fa-solid fa-route"></i> سجل المسارات</h1>
+        <p class="subtitle">رحلة كل كيس من لحظة الرصد حتى التصنيف النهائي — الإنشاء، الالتقاط، التحليل، والنتيجة</p>
+    </div>
+
+    <!-- Filter Bar -->
+    <form class="filter-bar" method="get" action="/track-events">
+        <div class="field">
+            <label for="start_time">من تاريخ</label>
+            <input type="datetime-local" id="start_time" name="start_time"
+                   value="{{ meta.start.strftime('%Y-%m-%dT%H:%M') if meta.start else '' }}">
+        </div>
+        <div class="field">
+            <label for="end_time">إلى تاريخ</label>
+            <input type="datetime-local" id="end_time" name="end_time"
+                   value="{{ meta.end.strftime('%Y-%m-%dT%H:%M') if meta.end else '' }}">
+        </div>
+        <div class="field">
+            <label for="event_type">الحالة</label>
+            <select id="event_type" name="event_type">
+                <option value="">جميع الحالات</option>
+                <option value="track_completed" {{ 'selected' if meta.event_type_filter == 'track_completed' else '' }}>مكتمل</option>
+                <option value="track_lost" {{ 'selected' if meta.event_type_filter == 'track_lost' else '' }}>مفقود</option>
+                <option value="track_invalid" {{ 'selected' if meta.event_type_filter == 'track_invalid' else '' }}>مسار خاطئ</option>
+            </select>
+        </div>
+        <div class="field">
+            <label for="classification">الصنف</label>
+            <select id="classification" name="classification">
+                <option value="">جميع الأصناف</option>
+                {% for cls in filter_options.classifications %}
+                <option value="{{ cls }}" {{ 'selected' if meta.classification_filter == cls else '' }}>{{ cls }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <button type="submit" class="btn btn-primary"><i class="fa-solid fa-filter"></i> تصفية</button>
+        <a href="/track-events" class="btn btn-secondary"><i class="fa-solid fa-redo"></i> مسح الفلاتر</a>
+    </form>
+
+    <!-- Stats -->
+    {% set completed_count = stats.by_type.get('track_completed', {}).get('count', 0)|int %}
+    {% set lost_count = stats.by_type.get('track_lost', {}).get('count', 0)|int %}
+    {% set invalid_count = stats.by_type.get('track_invalid', {}).get('count', 0)|int %}
+    {% set total_count = stats.get('total', 0)|int %}
+
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="stat-value" style="color: var(--accent-primary);">{{ total_count }}</div>
+            <div class="stat-label">إجمالي المسارات</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value" style="color: var(--accent-success);">{{ completed_count }}</div>
+            <div class="stat-label"><i class="fa-solid fa-check"></i> تم بنجاح</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value" style="color: var(--accent-danger);">{{ lost_count }}</div>
+            <div class="stat-label"><i class="fa-solid fa-ghost"></i> فُقد أثناء التتبع</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value" style="color: var(--accent-warning);">{{ invalid_count }}</div>
+            <div class="stat-label"><i class="fa-solid fa-ban"></i> مسار خاطئ</div>
+        </div>
+        {% if total_count > 0 %}
+        <div class="stat-card">
+            <div class="stat-value" style="color: var(--accent-purple);">{{ "%.0f"|format(completed_count / total_count * 100) }}%</div>
+            <div class="stat-label">معدل النجاح</div>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Events Table -->
+    {% if events|length == 0 %}
+    <div class="empty-state">
+        <i class="fa-solid fa-inbox"></i>
+        <p>لا توجد مسارات مسجلة في هذه الفترة الزمنية</p>
+    </div>
+    {% else %}
+    <div class="events-table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th></th>
+                    <th>رقم المسار</th>
+                    <th>الحالة</th>
+                    <th>نقطة الدخول</th>
+                    <th>نقطة الخروج</th>
+                    <th>الاتجاه</th>
+                    <th>المسافة</th>
+                    <th>المدة</th>
+                    <th>الدقة</th>
+                    <th>الصنف</th>
+                    <th>بداية التتبع</th>
+                    <th>نهاية التتبع</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for ev in events %}
+                <tr>
+                    <td>
+                        {% if ev.details|length > 0 %}
+                        <span class="detail-toggle" onclick="toggleDetail({{ ev.track_id }})">
+                            <i class="fa-solid fa-chevron-left" id="icon-{{ ev.track_id }}"></i>
+                        </span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <strong>
+                            <a href="/track-events/{{ ev.track_id }}/visualize" style="color: var(--accent-primary); text-decoration: none;">
+                                T{{ ev.track_id }} <i class="fa-solid fa-play-circle" style="font-size: 0.7rem;"></i>
+                            </a>
+                        </strong>
+                    </td>
+                    <td>
+                        {% if ev.event_type == 'track_completed' %}
+                            <span class="badge badge-success">تم بنجاح</span>
+                        {% elif ev.event_type == 'track_lost' %}
+                            <span class="badge badge-danger">فُقد</span>
+                        {% elif ev.event_type == 'track_invalid' %}
+                            <span class="badge badge-warning">مسار خاطئ</span>
+                        {% else %}
+                            <span class="badge">{{ ev.event_type }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="coord">{% if ev.entry_x is not none %}({{ ev.entry_x }}, {{ ev.entry_y }}){% else %}—{% endif %}</td>
+                    <td class="coord">{% if ev.exit_x is not none %}({{ ev.exit_x }}, {{ ev.exit_y }}){% else %}—{% endif %}</td>
+                    <td>{% if ev.exit_direction %}<span class="dir-badge">{{ ev.exit_direction }}</span>{% else %}—{% endif %}</td>
+                    <td class="coord">{% if ev.distance_pixels is not none %}{{ "%.0f"|format(ev.distance_pixels) }}px{% else %}—{% endif %}</td>
+                    <td>{% if ev.duration_seconds is not none %}{{ "%.2f"|format(ev.duration_seconds) }}ث{% else %}—{% endif %}</td>
+                    <td>
+                        {% if ev.avg_confidence is not none %}
+                            {{ "%.2f"|format(ev.avg_confidence) }}
+                            <span class="conf-bar">
+                                <span class="conf-bar-fill" style="width: {{ (ev.avg_confidence * 100)|int }}%; background: {% if ev.avg_confidence >= 0.8 %}var(--accent-success){% elif ev.avg_confidence >= 0.5 %}var(--accent-warning){% else %}var(--accent-danger){% endif %};"></span>
+                            </span>
+                        {% else %}—{% endif %}
+                    </td>
+                    <td>
+                        {% if ev.classification %}
+                            <span class="class-pill {{ 'rejected' if ev.classification == 'Rejected' else '' }}">{{ ev.classification }}</span>
+                        {% else %}—{% endif %}
+                    </td>
+                    <td style="font-size:0.75rem;color:var(--text-muted);">{{ ev.created_at[:19] if ev.created_at else '—' }}</td>
+                    <td style="font-size:0.75rem;color:var(--text-muted);">{{ ev.timestamp[:19] if ev.timestamp else '—' }}</td>
+                </tr>
+                {% if ev.details|length > 0 %}
+                <tr class="detail-row" id="detail-{{ ev.track_id }}">
+                    <td colspan="12" class="detail-cell">
+                        <strong style="color:var(--accent-primary);"><i class="fa-solid fa-list"></i> خطوات دورة الحياة ({{ ev.details|length }})</strong>
+                        <ul class="steps-list">
+                        {% for step in ev.details %}
+                            <li>
+                                <span class="step-type" style="color: {% if 'completed' in step.step_type %}var(--accent-success){% elif 'lost' in step.step_type %}var(--accent-danger){% elif 'roi' in step.step_type %}var(--accent-purple){% else %}var(--accent-primary){% endif %};">{{ step.step_type }}</span>
+                                <span style="color: var(--text-secondary);">
+                                    {% if step.class_name %}<span class="class-pill">{{ step.class_name }}</span>{% endif %}
+                                    {% if step.confidence %}{{ "%.3f"|format(step.confidence) }}{% endif %}
+                                    <span style="color:var(--text-muted);margin-right:0.5rem;">{{ step.timestamp[:19] if step.timestamp else '' }}</span>
+                                </span>
+                            </li>
+                        {% endfor %}
+                        </ul>
+                    </td>
+                </tr>
+                {% endif %}
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+
+    <!-- Pagination -->
+    {% if pagination.total_pages > 1 %}
+    <div class="pagination">
+        <span style="color: var(--text-secondary); font-size: 0.85rem;">
+            الصفحة {{ pagination.page }} من {{ pagination.total_pages }} — إجمالي {{ pagination.total_count }} مسار
+        </span>
+        <div style="display: flex; gap: 0.5rem;">
+            {% if pagination.has_prev %}
+            <a href="?page=1{% for k,v in request.query_params.items() if k != 'page' %}&{{ k }}={{ v }}{% endfor %}">الأولى</a>
+            <a href="?page={{ pagination.page - 1 }}{% for k,v in request.query_params.items() if k != 'page' %}&{{ k }}={{ v }}{% endfor %}">السابقة</a>
+            {% endif %}
+            {% if pagination.has_next %}
+            <a href="?page={{ pagination.page + 1 }}{% for k,v in request.query_params.items() if k != 'page' %}&{{ k }}={{ v }}{% endfor %}">التالية</a>
+            <a href="?page={{ pagination.total_pages }}{% for k,v in request.query_params.items() if k != 'page' %}&{{ k }}={{ v }}{% endfor %}">الأخيرة</a>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="page-footer">
+        عرض {{ events|length }} مسار • <a href="/">الرئيسية</a> • <a href="/analytics">لوحة المؤشرات</a>
+    </div>
+</main>
+
+<script>
+function toggleDetail(trackId) {
+    const row = document.getElementById('detail-' + trackId);
+    const icon = document.getElementById('icon-' + trackId);
+    if (row) {
+        row.classList.toggle('open');
+        if (icon) {
+            icon.classList.toggle('fa-chevron-left');
+            icon.classList.toggle('fa-chevron-down');
+        }
+    }
+}
+</script>
+</body>
+</html>

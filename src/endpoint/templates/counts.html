@@ -1,35 +1,87 @@
 <!DOCTYPE html>
-<html lang="ar" dir="rtl">
+<html lang="ar">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>العد المباشر — عدّاد أكياس الخبز</title>
-    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/analytics.css?v=8">
+    <title>الإحصاء اللحظي — منظومة إحصاء أكياس الخبز</title>
+    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        /* ── RTL & Arabic font overrides ── */
-        body, main, .page-header h1, .hero-label, .hero-sub, .hero-value,
-        .batch-badge, .batch-type, .batch-sub, .batch-count-unit, .section-label,
-        .card-title, .card-batch-info, .status-badge, .batch-idle,
-        .footer-row { font-family: 'Cairo', 'Inter', sans-serif; }
+        :root {
+            --bg-deep: #0f172a;
+            --glass-bg: rgba(30, 41, 59, 0.7);
+            --glass-border: rgba(255, 255, 255, 0.08);
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --accent-primary: #38bdf8;
+            --accent-success: #2dd4bf;
+            --accent-warning: #fbbf24;
+            --accent-danger: #f87171;
+            --accent-purple: #a78bfa;
+            --radius-lg: 16px;
+            --radius-md: 12px;
+            --radius-sm: 8px;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Tajawal', 'Inter', system-ui, sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+        /* Force English numbers */
+        .hero-value, .batch-count-value, .card-metric-large, #heroBatch, #heroConfirmed, #heroPending, #curCount, #prevCount {
+            font-family: 'Inter', sans-serif !important;
+            font-feature-settings: "tnum" 1;
+        }
+        main {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem 1.5rem;
+        }
+        .back-home {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--accent-primary);
+            text-decoration: none;
+            font-size: 0.9rem;
+            margin-bottom: 1.5rem;
+            transition: color 0.2s;
+        }
+        .back-home:hover { color: var(--accent-success); }
 
-        main { padding-top: 1.5rem; direction: rtl; }
-
-        /* Header */
-        .page-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1.5rem; flex-wrap:wrap; gap:12px }
-        .page-header h1 { font-size:1.5rem; font-weight:700; color:var(--text-primary); margin:0 }
-        .status-badge { display:inline-flex; align-items:center; gap:6px; padding:5px 14px; border-radius:20px; font-size:.78rem; font-weight:600; background:rgba(45,212,191,.12); color:#2dd4bf; border:1px solid rgba(45,212,191,.25) }
-        .status-badge .dot { width:8px; height:8px; border-radius:50%; background:#2dd4bf; animation:pulse 2s infinite }
-        .status-badge.disconnected { background:rgba(248,113,113,.12); color:#f87171; border-color:rgba(248,113,113,.25) }
-        .status-badge.disconnected .dot { background:#f87171; animation:none }
+        /* Status badge */
+        .status-badge { display:inline-flex; align-items:center; gap:8px; padding:8px 16px; border-radius:20px; font-size:0.85rem; font-weight:600; background:rgba(45,212,191,.12); color:var(--accent-success); border:1px solid rgba(45,212,191,.25) }
+        .status-badge .dot { width:10px; height:10px; border-radius:50%; background:var(--accent-success); animation:pulse 2s infinite }
+        .status-badge.disconnected { background:rgba(248,113,113,.12); color:var(--accent-danger); border-color:rgba(248,113,113,.25) }
+        .status-badge.disconnected .dot { background:var(--accent-danger); animation:none }
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
 
-        /* Hero with 3 cols */
-        .hero-card { grid-template-columns: 1fr 1fr 1fr; }
+        /* Hero Section */
+        .hero-section { margin-bottom: 2rem; }
+        .hero-card {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1.5rem;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-lg);
+            padding: 1.5rem;
+            backdrop-filter: blur(10px);
+        }
         @media(max-width:768px) { .hero-card { grid-template-columns:1fr; } }
+        .hero-metric { text-align: center; }
+        .hero-metric.primary { border-left: 1px solid var(--glass-border); border-right: 1px solid var(--glass-border); }
+        @media(max-width:768px) { .hero-metric.primary { border: none; border-top: 1px solid var(--glass-border); border-bottom: 1px solid var(--glass-border); padding: 1rem 0; } }
+        .hero-label { font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 0.5rem; }
+        .hero-value { font-size: 3rem; font-weight: 800; line-height: 1; }
+        .hero-sub { font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem; }
 
         /* Section label */
-        .section-label { font-size:.8rem; font-weight:700; text-transform:uppercase; letter-spacing:.1em; color:var(--text-muted); margin-bottom:12px; display:flex; align-items:center; gap:8px }
+        .section-label { font-size:.85rem; font-weight:700; color:var(--text-muted); margin-bottom:1rem; display:flex; align-items:center; gap:8px }
 
         /* ── Batch timeline — current + previous ── */
         .batch-timeline {
@@ -166,7 +218,59 @@
         .connect-arrow.confirm-pulse { animation: confirmArrowPulse .8s ease }
 
         /* Card metric */
-        .card-metric-large { font-variant-numeric: tabular-nums; }
+        .card-metric-large { font-variant-numeric: tabular-nums; font-size: 2.5rem; font-weight: 800; text-align: center; margin: 0.5rem 0; }
+
+        /* Grid Container for Class Cards */
+        .grid-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 1.25rem;
+            margin-bottom: 2rem;
+        }
+
+        /* Stat Card */
+        .stat-card {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-lg);
+            padding: 1.25rem;
+            backdrop-filter: blur(10px);
+            transition: all 0.3s;
+            text-align: center;
+        }
+        .stat-card:hover {
+            border-color: var(--accent-primary);
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px rgba(56, 189, 248, 0.15);
+        }
+
+        /* Card Header */
+        .card-header.stacked {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.75rem;
+        }
+        .card-title {
+            font-size: 1rem;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        /* Thumbnail Container */
+        .thumb-container {
+            width: 80px;
+            height: 80px;
+            border-radius: var(--radius-md);
+            overflow: hidden;
+            border: 2px solid rgba(56, 189, 248, 0.3);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+        }
+        .thumb-container img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
 
         /* Card batch sub-info */
         .card-batch-info { font-size:.72rem; color:var(--text-muted); margin-top:4px; font-variant-numeric:tabular-nums; display:flex; gap:8px; justify-content:center }
@@ -180,18 +284,34 @@
         .confirm-flash { animation:confirmFlash .7s ease }
 
         /* Footer */
-        .footer-row { display:flex; justify-content:flex-start; padding:12px 0; font-size:.78rem; color:var(--text-muted) }
+        .footer-row {
+            display:flex;
+            justify-content:center;
+            padding:2rem 0;
+            font-size:0.85rem;
+            color:var(--text-muted);
+            gap: 1rem;
+        }
+        .footer-row a {
+            color: var(--accent-primary);
+            text-decoration: none;
+        }
+        .footer-row a:hover { color: var(--accent-success); }
     </style>
 </head>
 <body>
 
 <main>
+    <a href="/" class="back-home"><i class="fa-solid fa-home"></i> الرئيسية</a>
+
     <!-- Header -->
-    <div class="page-header">
-        <h1>📊 العد المباشر</h1>
+    <div class="page-header" style="display:flex; align-items:center; justify-content:space-between; margin-bottom:2rem; flex-wrap:wrap; gap:1rem;">
+        <h1 style="font-size:2rem; font-weight:800; background:linear-gradient(135deg, var(--accent-primary), var(--accent-purple)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; margin:0;">
+            <i class="fa-solid fa-gauge-high"></i> الإحصاء اللحظي
+        </h1>
         <div class="status-badge" id="statusBadge">
             <span class="dot"></span>
-            <span id="statusText">جارٍ الاتصال…</span>
+            <span id="statusText">جارٍ الاتصال...</span>
         </div>
     </div>
 
@@ -279,7 +399,15 @@
     </section>
 
     <!-- Footer -->
-    <div class="footer-row"><span id="lastUpdate">—</span></div>
+    <div class="footer-row">
+        <span id="lastUpdate">—</span>
+        <span>•</span>
+        <a href="/">الرئيسية</a>
+        <span>•</span>
+        <a href="/analytics">لوحة المؤشرات</a>
+        <span>•</span>
+        <a href="/snapshot/view">البث المباشر</a>
+    </div>
 </main>
 
 <script>

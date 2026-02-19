@@ -1,0 +1,821 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Track Lifecycle Animation - Track #{{ track_id }}</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --bg-deep: #0f172a;
+            --glass-bg: rgba(30, 41, 59, 0.7);
+            --glass-border: rgba(255, 255, 255, 0.08);
+            --glass-shadow: 0 4px 30px rgba(0, 0, 0, 0.3);
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --accent-primary: #38bdf8;
+            --accent-success: #2dd4bf;
+            --accent-warning: #fbbf24;
+            --accent-danger: #f87171;
+            --accent-purple: #a78bfa;
+            --radius-lg: 16px;
+            --radius-md: 12px;
+            --radius-sm: 8px;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Inter', system-ui, sans-serif;
+            background-color: var(--bg-deep);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.5;
+        }
+        main {
+            max-width: 1600px;
+            margin: 0 auto;
+            padding: 2rem 1.5rem;
+        }
+
+        /* Header */
+        .page-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 2rem;
+        }
+        .page-header h1 {
+            font-size: 1.8rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .header-actions {
+            display: flex;
+            gap: 1rem;
+        }
+        .back-btn, .fullscreen-btn {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-sm);
+            color: var(--text-primary);
+            padding: 0.5rem 1rem;
+            cursor: pointer;
+            font-size: 0.85rem;
+            transition: all 0.2s;
+        }
+        .back-btn:hover, .fullscreen-btn:hover {
+            background: rgba(56, 189, 248, 0.1);
+            border-color: var(--accent-primary);
+        }
+
+        /* Layout */
+        .container {
+            display: grid;
+            grid-template-columns: 1fr 350px;
+            gap: 1.5rem;
+        }
+
+        /* Canvas area */
+        .canvas-wrapper {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-lg);
+            padding: 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+        canvas {
+            width: 100%;
+            height: 600px;
+            background: linear-gradient(135deg, rgba(15, 23, 42, 0.8), rgba(30, 41, 59, 0.5));
+            border-radius: var(--radius-md);
+            display: block;
+        }
+
+        /* Controls */
+        .controls {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .control-group {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+        }
+        button {
+            background: linear-gradient(135deg, var(--accent-primary), #818cf8);
+            border: none;
+            border-radius: var(--radius-sm);
+            color: white;
+            padding: 0.5rem 1rem;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 0.85rem;
+            transition: transform 0.1s;
+        }
+        button:hover { transform: translateY(-1px); }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        input[type="range"] {
+            width: 150px;
+            cursor: pointer;
+        }
+        .speed-label, .progress-label {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            min-width: 50px;
+        }
+
+        /* Timeline/Progress bar */
+        .progress-bar-wrap {
+            width: 100%;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: var(--radius-sm);
+            height: 30px;
+            display: flex;
+            align-items: center;
+            padding: 0 0.75rem;
+            gap: 0.75rem;
+        }
+        .progress-bar {
+            flex: 1;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+            position: relative;
+            cursor: pointer;
+        }
+        .progress-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--accent-primary), var(--accent-purple));
+            border-radius: 3px;
+            width: 0%;
+            transition: width 0.05s linear;
+        }
+        .time-label {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            font-family: 'Courier New', monospace;
+            min-width: 100px;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        /* Info card */
+        .info-card {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-md);
+            padding: 1rem;
+        }
+        .info-card h3 {
+            font-size: 0.85rem;
+            color: var(--accent-primary);
+            margin-bottom: 0.75rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.8rem;
+            padding: 0.4rem 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+        }
+        .info-row:last-child { border-bottom: none; }
+        .info-label {
+            color: var(--text-secondary);
+        }
+        .info-value {
+            color: var(--text-primary);
+            font-weight: 600;
+            font-family: 'Courier New', monospace;
+        }
+
+        /* Status badge */
+        .status-badge {
+            display: inline-block;
+            padding: 0.25rem 0.6rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-align: center;
+        }
+        .status-completed { background: rgba(45, 212, 191, 0.15); color: var(--accent-success); }
+        .status-lost { background: rgba(248, 113, 113, 0.15); color: var(--accent-danger); }
+        .status-invalid { background: rgba(251, 191, 36, 0.15); color: var(--accent-warning); }
+
+        /* Events timeline */
+        .events-list {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-md);
+            padding: 1rem;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .events-list h3 {
+            font-size: 0.85rem;
+            color: var(--accent-primary);
+            margin-bottom: 0.75rem;
+            font-weight: 600;
+        }
+        .event-item {
+            font-size: 0.75rem;
+            padding: 0.5rem;
+            margin-bottom: 0.5rem;
+            border-left: 2px solid var(--accent-primary);
+            padding-left: 0.75rem;
+            background: rgba(56, 189, 248, 0.05);
+            border-radius: 4px;
+            color: var(--text-secondary);
+        }
+        .event-item.roi { border-left-color: var(--accent-purple); background: rgba(167, 139, 250, 0.05); }
+        .event-item.classification { border-left-color: var(--accent-success); background: rgba(45, 212, 191, 0.05); }
+        .event-item.lifecycle { border-left-color: var(--accent-warning); background: rgba(251, 191, 36, 0.05); }
+
+        /* Legend */
+        .legend {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-md);
+            padding: 1rem;
+        }
+        .legend h3 {
+            font-size: 0.85rem;
+            color: var(--accent-primary);
+            margin-bottom: 0.75rem;
+            font-weight: 600;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.75rem;
+            margin-bottom: 0.5rem;
+            color: var(--text-secondary);
+        }
+        .legend-color {
+            width: 12px;
+            height: 12px;
+            border-radius: 2px;
+        }
+
+        /* Responsive */
+        @media (max-width: 1200px) {
+            .container { grid-template-columns: 1fr; }
+            canvas { height: 400px; }
+        }
+        @media (max-width: 768px) {
+            main { padding: 1rem; }
+            .page-header { flex-direction: column; align-items: flex-start; gap: 1rem; }
+            .controls { gap: 0.5rem; }
+            input[type="range"] { width: 100px; }
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: rgba(255, 255, 255, 0.05); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.15); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.25); }
+    </style>
+</head>
+<body>
+<main>
+    <div class="page-header">
+        <h1><i class="fa-solid fa-film"></i> Track #{{ track_id }} Lifecycle Animation</h1>
+        <div class="header-actions">
+            <button class="back-btn" onclick="window.history.back()">
+                <i class="fa-solid fa-arrow-left"></i> Back
+            </button>
+            <button class="fullscreen-btn" onclick="toggleFullscreen()">
+                <i class="fa-solid fa-expand"></i> Fullscreen
+            </button>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="canvas-wrapper">
+            <canvas id="animationCanvas"></canvas>
+
+            <!-- Controls -->
+            <div class="controls">
+                <div class="control-group">
+                    <button id="playBtn" onclick="togglePlay()">
+                        <i class="fa-solid fa-play"></i> Play
+                    </button>
+                    <button id="resetBtn" onclick="resetAnimation()">
+                        <i class="fa-solid fa-redo"></i> Reset
+                    </button>
+                </div>
+                <div class="control-group">
+                    <label class="speed-label" for="speedSlider">Speed:</label>
+                    <input type="range" id="speedSlider" min="0.5" max="3" step="0.5" value="1"
+                           oninput="updateSpeed(this.value)">
+                    <span id="speedValue">1x</span>
+                </div>
+            </div>
+
+            <!-- Progress bar -->
+            <div class="progress-bar-wrap">
+                <span class="time-label">
+                    <span id="currentTime">0:00</span> / <span id="totalTime">0:00</span>
+                </span>
+                <div class="progress-bar" id="progressBar" onclick="seekAnimation(event)">
+                    <div class="progress-bar-fill" id="progressBarFill"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <!-- Summary Info -->
+            <div class="info-card">
+                <h3><i class="fa-solid fa-info-circle"></i> Summary</h3>
+                <div class="info-row">
+                    <span class="info-label">Status:</span>
+                    <span class="status-badge status-{{ data.summary.event_type.split('_')[1] }}">
+                        {{ data.summary.event_type.replace('track_', '').upper() }}
+                    </span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Duration:</span>
+                    <span class="info-value">{{ "%.2f"|format(data.summary.duration_seconds) }}s</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Distance:</span>
+                    <span class="info-value">{{ "%.0f"|format(data.summary.distance_pixels) }}px</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Entry Type:</span>
+                    <span class="info-value">{{ data.summary.entry_type or 'N/A' }}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Exit Dir:</span>
+                    <span class="info-value">{{ data.summary.exit_direction or 'N/A' }}</span>
+                </div>
+                {% if data.summary.classification %}
+                <div class="info-row">
+                    <span class="info-label">Class:</span>
+                    <span class="info-value">{{ data.summary.classification }}</span>
+                </div>
+                {% endif %}
+            </div>
+
+            <!-- Entry/Exit -->
+            <div class="info-card">
+                <h3><i class="fa-solid fa-location-dot"></i> Position</h3>
+                <div class="info-row">
+                    <span class="info-label">Entry:</span>
+                    <span class="info-value">({{ data.summary.entry.x }}, {{ data.summary.entry.y }})</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Exit:</span>
+                    <span class="info-value">({{ data.summary.exit.x }}, {{ data.summary.exit.y }})</span>
+                </div>
+            </div>
+
+            <!-- Quality Metrics -->
+            {% if data.summary.ghost_recovery_count or data.summary.shadow_count %}
+            <div class="info-card">
+                <h3><i class="fa-solid fa-ghost"></i> Recovery Stats</h3>
+                {% if data.summary.ghost_recovery_count %}
+                <div class="info-row">
+                    <span class="info-label">Ghost Recoveries:</span>
+                    <span class="info-value">{{ data.summary.ghost_recovery_count }}</span>
+                </div>
+                {% endif %}
+                {% if data.summary.shadow_count %}
+                <div class="info-row">
+                    <span class="info-label">Shadows:</span>
+                    <span class="info-value">{{ data.summary.shadow_count }}</span>
+                </div>
+                {% endif %}
+            </div>
+            {% endif %}
+
+            <!-- Events Timeline -->
+            {% if data.roi_events or data.classification_events or data.lifecycle_events %}
+            <div class="events-list">
+                <h3><i class="fa-solid fa-timeline"></i> Events</h3>
+                {% for event in data.lifecycle_events %}
+                <div class="event-item lifecycle">
+                    <strong>{{ event.step_type }}</strong><br>
+                    <span style="font-size: 0.7rem; color: var(--text-muted);">
+                        {{ event.timestamp[:19] if event.timestamp else '' }}
+                    </span>
+                </div>
+                {% endfor %}
+                {% for event in data.classification_events[:5] %}
+                <div class="event-item classification">
+                    <strong>Class ROI #{{ event.roi_index }}</strong><br>
+                    {{ event.class_name }} ({{ "%.2f"|format(event.confidence) }})
+                </div>
+                {% endfor %}
+                {% if data.classification_events|length > 5 %}
+                <div class="event-item" style="opacity: 0.6;">
+                    +{{ data.classification_events|length - 5 }} more events
+                </div>
+                {% endif %}
+            </div>
+            {% endif %}
+
+            <!-- Legend -->
+            <div class="legend">
+                <h3><i class="fa-solid fa-square"></i> Legend</h3>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #38bdf8;"></div>
+                    <span>Track Position</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #a78bfa;"></div>
+                    <span>ROI Collection</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #2dd4bf;"></div>
+                    <span>Classification</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #fbbf24;"></div>
+                    <span>Entry/Exit</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</main>
+
+<script>
+const trackData = {{ data | tojson }};
+console.log('Track Data:', trackData);
+
+let canvas = document.getElementById('animationCanvas');
+let ctx = canvas.getContext('2d');
+let animationFrameId = null;
+let isPlaying = false;
+let currentFrame = 0;
+let animationSpeed = 1.0;
+let startTime = Date.now();
+let pausedTime = 0;
+
+// Canvas setup
+function resizeCanvas() {
+    const rect = canvas.parentElement.getBoundingClientRect();
+    canvas.width = rect.width - 32;
+    canvas.height = 600;
+    if (window.innerWidth <= 1200) canvas.height = 400;
+    draw();
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+// Animation data with validation
+const positions = trackData.position_history || [];
+const roiEvents = trackData.roi_events || [];
+const classEvents = trackData.classification_events || [];
+const lifecycleEvents = trackData.lifecycle_events || [];
+const totalFrames = trackData.animation ? trackData.animation.frame_count : positions.length;
+const suggestedDuration = trackData.animation ? trackData.animation.suggested_duration_ms : 5000;
+
+console.log(`Animation: ${totalFrames} frames, ${positions.length} positions`);
+
+if (positions.length === 0) {
+    ctx.fillStyle = 'white';
+    ctx.font = '20px Inter';
+    ctx.textAlign = 'center';
+    ctx.fillText('No position data available', canvas.width / 2, canvas.height / 2);
+}
+
+// Calculate canvas bounds with validation
+let boundsX = [Infinity, -Infinity];
+let boundsY = [Infinity, -Infinity];
+
+positions.forEach(pos => {
+    if (pos && pos.length >= 2) {
+        boundsX[0] = Math.min(boundsX[0], pos[0]);
+        boundsX[1] = Math.max(boundsX[1], pos[0]);
+        boundsY[0] = Math.min(boundsY[0], pos[1]);
+        boundsY[1] = Math.max(boundsY[1], pos[1]);
+    }
+});
+
+roiEvents.forEach(evt => {
+    if (evt && evt.bbox) {
+        const bbox = evt.bbox;
+        boundsX[0] = Math.min(boundsX[0], bbox.x1, bbox.x2);
+        boundsX[1] = Math.max(boundsX[1], bbox.x1, bbox.x2);
+        boundsY[0] = Math.min(boundsY[0], bbox.y1, bbox.y2);
+        boundsY[1] = Math.max(boundsY[1], bbox.y1, bbox.y2);
+    }
+});
+
+// Fallback if no bounds found
+if (!isFinite(boundsX[0])) {
+    boundsX = [0, 640];
+    boundsY = [0, 480];
+}
+
+// Add padding
+const padX = Math.max((boundsX[1] - boundsX[0]) * 0.1, 50);
+const padY = Math.max((boundsY[1] - boundsY[0]) * 0.1, 50);
+boundsX[0] -= padX;
+boundsX[1] += padX;
+boundsY[0] -= padY;
+boundsY[1] += padY;
+
+console.log('Bounds:', boundsX, boundsY);
+
+// Map world coordinates to canvas
+function worldToCanvas(x, y) {
+    const cw = canvas.width;
+    const ch = canvas.height;
+    const dw = boundsX[1] - boundsX[0];
+    const dh = boundsY[1] - boundsY[0];
+    const cx = ((x - boundsX[0]) / dw) * cw;
+    const cy = ((y - boundsY[0]) / dh) * ch;
+    return [cx, cy];
+}
+
+function draw() {
+    // Clear canvas
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    if (positions.length === 0) {
+        ctx.fillStyle = 'white';
+        ctx.font = '18px Inter';
+        ctx.textAlign = 'center';
+        ctx.fillText('No track data to display', canvas.width / 2, canvas.height / 2);
+        return;
+    }
+
+    // Draw full trajectory path
+    ctx.strokeStyle = 'rgba(56, 189, 248, 0.4)';
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+
+    positions.forEach((pos, i) => {
+        if (pos && pos.length >= 2) {
+            const [cx, cy] = worldToCanvas(pos[0], pos[1]);
+            if (i === 0) {
+                ctx.moveTo(cx, cy);
+            } else {
+                ctx.lineTo(cx, cy);
+            }
+        }
+    });
+    ctx.stroke();
+
+    // Draw traveled path (up to current frame)
+    if (currentFrame > 0 && currentFrame < positions.length) {
+        ctx.strokeStyle = 'rgba(56, 189, 248, 0.8)';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+
+        for (let i = 0; i <= currentFrame && i < positions.length; i++) {
+            const pos = positions[i];
+            if (pos && pos.length >= 2) {
+                const [cx, cy] = worldToCanvas(pos[0], pos[1]);
+                if (i === 0) {
+                    ctx.moveTo(cx, cy);
+                } else {
+                    ctx.lineTo(cx, cy);
+                }
+            }
+        }
+        ctx.stroke();
+    }
+
+    // Draw ROI boxes
+    ctx.strokeStyle = 'rgba(167, 139, 250, 0.6)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([5, 5]);
+    roiEvents.forEach(evt => {
+        if (evt && evt.bbox) {
+            const [x1, y1] = worldToCanvas(evt.bbox.x1, evt.bbox.y1);
+            const [x2, y2] = worldToCanvas(evt.bbox.x2, evt.bbox.y2);
+            ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+        }
+    });
+    ctx.setLineDash([]);
+
+    // Draw entry marker
+    if (positions.length > 0 && positions[0] && positions[0].length >= 2) {
+        const [ex, ey] = worldToCanvas(positions[0][0], positions[0][1]);
+
+        // Outer glow
+        ctx.fillStyle = 'rgba(251, 191, 36, 0.3)';
+        ctx.beginPath();
+        ctx.arc(ex, ey, 12, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Main circle
+        ctx.fillStyle = 'rgba(251, 191, 36, 0.9)';
+        ctx.beginPath();
+        ctx.arc(ex, ey, 8, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Label
+        ctx.fillStyle = 'white';
+        ctx.font = 'bold 12px Inter';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('E', ex, ey);
+    }
+
+    // Draw current position (animated ball)
+    if (currentFrame < positions.length && positions[currentFrame] && positions[currentFrame].length >= 2) {
+        const pos = positions[currentFrame];
+        const [cx, cy] = worldToCanvas(pos[0], pos[1]);
+
+        // Glow effect
+        const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, 20);
+        gradient.addColorStop(0, 'rgba(56, 189, 248, 0.8)');
+        gradient.addColorStop(1, 'rgba(56, 189, 248, 0)');
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(cx, cy, 20, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Main ball
+        ctx.fillStyle = 'rgba(56, 189, 248, 1)';
+        ctx.beginPath();
+        ctx.arc(cx, cy, 10, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Inner highlight
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+        ctx.beginPath();
+        ctx.arc(cx - 2, cy - 2, 4, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Track ID label
+        ctx.fillStyle = 'white';
+        ctx.font = 'bold 11px Inter';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(`T${trackData.track_id}`, cx, cy - 15);
+    }
+
+    // Draw exit marker
+    if (positions.length > 0) {
+        const last = positions[positions.length - 1];
+        if (last && last.length >= 2) {
+            const [lx, ly] = worldToCanvas(last[0], last[1]);
+
+            // Outer glow
+            ctx.fillStyle = 'rgba(248, 113, 113, 0.3)';
+            ctx.beginPath();
+            ctx.arc(lx, ly, 12, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Main circle
+            ctx.fillStyle = 'rgba(248, 113, 113, 0.9)';
+            ctx.beginPath();
+            ctx.arc(lx, ly, 8, 0, Math.PI * 2);
+            ctx.fill();
+
+            // X mark
+            ctx.strokeStyle = 'white';
+            ctx.lineWidth = 2.5;
+            ctx.lineCap = 'round';
+            ctx.beginPath();
+            ctx.moveTo(lx - 4, ly - 4);
+            ctx.lineTo(lx + 4, ly + 4);
+            ctx.moveTo(lx + 4, ly - 4);
+            ctx.lineTo(lx - 4, ly + 4);
+            ctx.stroke();
+        }
+    }
+}
+
+function animate() {
+    if (!isPlaying) return;
+
+    const elapsed = Date.now() - startTime;
+    const progress = (elapsed * animationSpeed) / suggestedDuration;
+    currentFrame = Math.floor(progress * totalFrames);
+
+    if (currentFrame >= totalFrames) {
+        currentFrame = totalFrames - 1;
+        isPlaying = false;
+        document.getElementById('playBtn').innerHTML = '<i class="fa-solid fa-play"></i> Play';
+    }
+
+    updateUI();
+    draw();
+
+    if (isPlaying) {
+        animationFrameId = requestAnimationFrame(animate);
+    }
+}
+
+function togglePlay() {
+    isPlaying = !isPlaying;
+    const btn = document.getElementById('playBtn');
+
+    if (isPlaying) {
+        if (currentFrame >= totalFrames - 1) {
+            currentFrame = 0;
+        }
+        startTime = Date.now() - (currentFrame / totalFrames) * suggestedDuration / animationSpeed;
+        btn.innerHTML = '<i class="fa-solid fa-pause"></i> Pause';
+        animate();
+    } else {
+        btn.innerHTML = '<i class="fa-solid fa-play"></i> Play';
+        if (animationFrameId) {
+            cancelAnimationFrame(animationFrameId);
+        }
+    }
+}
+
+function resetAnimation() {
+    isPlaying = false;
+    currentFrame = 0;
+    startTime = Date.now();
+    document.getElementById('playBtn').innerHTML = '<i class="fa-solid fa-play"></i> Play';
+    if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+    }
+    updateUI();
+    draw();
+}
+
+function updateSpeed(value) {
+    animationSpeed = parseFloat(value);
+    document.getElementById('speedValue').textContent = value + 'x';
+    if (isPlaying) {
+        startTime = Date.now() - (currentFrame / totalFrames) * suggestedDuration / animationSpeed;
+    }
+}
+
+function seekAnimation(e) {
+    const rect = document.getElementById('progressBar').getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const ratio = Math.max(0, Math.min(1, x / rect.width));
+    currentFrame = Math.floor(ratio * (totalFrames - 1));
+
+    if (isPlaying) {
+        startTime = Date.now() - (currentFrame / totalFrames) * suggestedDuration / animationSpeed;
+    }
+
+    updateUI();
+    draw();
+}
+
+function updateUI() {
+    const progress = totalFrames > 1 ? (currentFrame / (totalFrames - 1)) * 100 : 0;
+    document.getElementById('progressBarFill').style.width = progress + '%';
+
+    const currentMs = (currentFrame / totalFrames) * suggestedDuration;
+    const totalMs = suggestedDuration;
+    document.getElementById('currentTime').textContent = formatTime(currentMs);
+    document.getElementById('totalTime').textContent = formatTime(totalMs);
+}
+
+function formatTime(ms) {
+    const secs = Math.floor(ms / 1000);
+    const mins = Math.floor(secs / 60);
+    const s = secs % 60;
+    return mins + ':' + String(s).padStart(2, '0');
+}
+
+function toggleFullscreen() {
+    if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(err => console.error(err));
+    } else {
+        document.exitFullscreen();
+    }
+}
+
+// Initialize
+updateUI();
+draw();
+
+// Auto-play on load
+setTimeout(() => {
+    if (positions.length > 0) {
+        togglePlay();
+    }
+}, 500);
+</script>
+</body>
+</html>

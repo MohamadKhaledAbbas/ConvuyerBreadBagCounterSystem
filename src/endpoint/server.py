@@ -20,12 +20,20 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from fastapi import Request
+from fastapi.responses import HTMLResponse
+
 from src.endpoint.routes import analytics
 from src.endpoint.routes import track_lifecycle
 from src.endpoint.routes import snapshot
 from src.endpoint.routes import counts
-from src.endpoint.shared import init_shared_resources, cleanup_shared_resources
+from src.endpoint.shared import init_shared_resources, cleanup_shared_resources, get_templates
 from src.utils.AppLogging import logger
+
+from src.config.settings import AppConfig
+
+# Application version
+APP_VERSION = AppConfig.APP_VERSION
 
 
 @asynccontextmanager
@@ -75,6 +83,21 @@ app.include_router(snapshot.router)
 
 # Include counts router for real-time pipeline counts
 app.include_router(counts.router)
+
+
+@app.get("/", response_class=HTMLResponse)
+async def root(request: Request):
+    """
+    Root endpoint - Dashboard with shortcuts to all system features (Arabic version).
+
+    Returns:
+        HTMLResponse: Main dashboard page with navigation cards in Arabic
+    """
+    templates = get_templates()
+    return templates.TemplateResponse('index_ar.html', {
+        'request': request,
+        'version': APP_VERSION
+    })
 
 
 @app.get("/health")

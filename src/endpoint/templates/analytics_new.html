@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>لوحة المؤشرات التحليلية</title>
+    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --bg-deep: #0f172a;
+            --glass-bg: rgba(30, 41, 59, 0.7);
+            --glass-border: rgba(255, 255, 255, 0.08);
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --accent-primary: #38bdf8;
+            --accent-success: #2dd4bf;
+            --accent-warning: #fbbf24;
+            --accent-danger: #f87171;
+            --accent-purple: #a78bfa;
+            --accent-orange: #fb923c;
+            --radius-lg: 16px;
+            --radius-md: 12px;
+            --radius-sm: 8px;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Tajawal', 'Inter', system-ui, sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+
+        /* Force English numbers */
+        .num, .hero-value, .card-count, .conf-value, .timeline-stat-value, .dates {
+            font-family: 'Inter', sans-serif !important;
+            font-feature-settings: "tnum" 1;
+        }
+
+        main {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem 1.5rem;
+        }
+
+        .back-home {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--accent-primary);
+            text-decoration: none;
+            font-size: 0.9rem;
+            margin-bottom: 1.5rem;
+            transition: color 0.2s;
+        }
+        .back-home:hover { color: var(--accent-success); }
+
+        /* Header */
+        .page-header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        .page-header h1 {
+            font-size: 2rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 0.5rem;
+        }
+        .page-header .subtitle {
+            color: var(--text-secondary);
+            font-size: 1rem;
+        }
+        .last-update {
+            color: var(--accent-warning);
+            font-size: 0.85rem;
+            margin-top: 0.5rem;
+        }
+
+        /* Time Range */
+        .time-range {
+            background: var(--glass-bg);
+            border: 1px solid var(--accent-warning);
+            border-radius: var(--radius-lg);
+            padding: 1.25rem 2rem;
+            margin-bottom: 2rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 1.5rem;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 0 30px rgba(251, 191, 36, 0.1);
+        }
+        .time-range .label {
+            color: var(--accent-warning);
+            font-weight: 700;
+            font-size: 0.9rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .time-range .dates {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            font-family: 'Inter', monospace;
+        }
+        .time-range .dates span { margin: 0 0.75rem; color: var(--text-muted); }
+        .time-range .edit-btn {
+            background: rgba(251, 191, 36, 0.15);
+            border: 1px solid var(--accent-warning);
+            border-radius: var(--radius-sm);
+            color: var(--accent-warning);
+            padding: 0.4rem 0.8rem;
+            cursor: pointer;
+            font-size: 0.8rem;
+            text-decoration: none;
+            transition: all 0.2s;
+        }
+        .time-range .edit-btn:hover {
+            background: rgba(251, 191, 36, 0.25);
+        }
+
+        /* Hero Stats */
+        .hero-section {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2.5rem;
+        }
+        .hero-card {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-lg);
+            padding: 1.5rem;
+            text-align: center;
+            backdrop-filter: blur(10px);
+        }
+        .hero-card.primary {
+            border-color: rgba(56, 189, 248, 0.3);
+            background: linear-gradient(135deg, rgba(56, 189, 248, 0.1), rgba(30, 41, 59, 0.7));
+        }
+        .hero-label {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+        }
+        .hero-value {
+            font-size: 3rem;
+            font-weight: 800;
+            color: var(--text-primary);
+            font-family: 'Inter', sans-serif;
+            line-height: 1;
+        }
+        .hero-card.primary .hero-value { color: var(--accent-primary); }
+        .hero-breakdown {
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+        .tier-badge {
+            padding: 0.3rem 0.8rem;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        .tier-badge.high { background: rgba(45, 212, 191, 0.15); color: var(--accent-success); }
+        .tier-badge.low { background: rgba(251, 191, 36, 0.15); color: var(--accent-warning); }
+        .hero-unit {
+            font-size: 1.2rem;
+            color: var(--text-muted);
+            margin-right: 0.25rem;
+        }
+
+        /* Classification Grid */
+        .section-title {
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: var(--text-secondary);
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .cards-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2.5rem;
+        }
+        .class-card {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-lg);
+            padding: 1.5rem;
+            backdrop-filter: blur(10px);
+            transition: all 0.3s;
+            text-align: center;
+        }
+        .class-card:hover {
+            border-color: var(--accent-primary);
+            transform: translateY(-3px);
+            box-shadow: 0 10px 40px rgba(56, 189, 248, 0.15);
+        }
+        .card-thumb {
+            width: 120px;
+            height: 120px;
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+            border: 3px solid rgba(56, 189, 248, 0.3);
+            margin: 0 auto 1rem;
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
+        }
+        .card-thumb img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .card-name {
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-bottom: 0.5rem;
+        }
+        .card-count {
+            font-size: 3rem;
+            font-weight: 800;
+            color: var(--accent-primary);
+            font-family: 'Inter', sans-serif;
+            text-align: center;
+            margin: 0.5rem 0;
+            line-height: 1;
+        }
+        .card-conf {
+            display: flex;
+            justify-content: space-around;
+            padding: 0.75rem 0;
+            border-top: 1px solid var(--glass-border);
+            border-bottom: 1px solid var(--glass-border);
+            margin-bottom: 0.75rem;
+        }
+        .conf-item {
+            text-align: center;
+        }
+        .conf-label {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            display: block;
+        }
+        .conf-value {
+            font-size: 1rem;
+            font-weight: 700;
+            font-family: 'Inter', sans-serif;
+        }
+        .conf-item.high .conf-value { color: var(--accent-success); }
+        .conf-item.low .conf-value { color: var(--accent-warning); }
+        .card-weight {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.85rem;
+        }
+        .card-weight .label { color: var(--text-muted); }
+        .card-weight .value {
+            color: var(--accent-purple);
+            font-weight: 600;
+            font-family: 'Inter', sans-serif;
+        }
+
+        /* Timeline Section */
+        .timeline-section {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-lg);
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+        }
+        .timeline-header {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 1.25rem;
+            color: var(--accent-primary);
+            font-size: 1.1rem;
+            font-weight: 700;
+        }
+        .timeline-grid {
+            display: grid;
+            gap: 1rem;
+        }
+        .timeline-item {
+            display: flex;
+            align-items: center;
+            gap: 1.25rem;
+            padding: 1.25rem;
+            background: rgba(15, 23, 42, 0.5);
+            border-radius: var(--radius-md);
+            border: 1px solid var(--glass-border);
+        }
+        .timeline-thumb {
+            width: 72px;
+            height: 72px;
+            border-radius: var(--radius-md);
+            overflow: hidden;
+            flex-shrink: 0;
+            border: 2px solid rgba(56, 189, 248, 0.2);
+        }
+        .timeline-thumb img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .timeline-info {
+            flex: 1;
+        }
+        .timeline-name {
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 0.25rem;
+        }
+        .timeline-time {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            font-family: 'Inter', monospace;
+        }
+        .timeline-stats {
+            display: flex;
+            gap: 1.5rem;
+            text-align: center;
+        }
+        .timeline-stat-label {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            display: block;
+        }
+        .timeline-stat-value {
+            font-size: 1.1rem;
+            font-weight: 700;
+            font-family: 'Inter', sans-serif;
+            color: var(--text-primary);
+        }
+
+        /* Empty State */
+        .empty-state {
+            text-align: center;
+            padding: 3rem;
+            color: var(--text-muted);
+        }
+        .empty-state i {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+            display: block;
+        }
+
+        /* Footer */
+        .page-footer {
+            text-align: center;
+            padding: 2rem;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+        .page-footer a {
+            color: var(--accent-primary);
+            text-decoration: none;
+        }
+        .page-footer a:hover { color: var(--accent-success); }
+
+        @media (max-width: 768px) {
+            .page-header h1 { font-size: 1.5rem; }
+            .hero-value { font-size: 2.2rem; }
+            .time-range { flex-direction: column; gap: 1rem; text-align: center; }
+            .cards-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <a href="/" class="back-home"><i class="fa-solid fa-home"></i> الرئيسية</a>
+
+    <div class="page-header">
+        <h1><i class="fa-solid fa-chart-line"></i> لوحة المؤشرات التحليلية</h1>
+        <p class="subtitle">تقرير شامل عن الإنتاج والتصنيف</p>
+        <p class="last-update"><i class="fa-solid fa-clock"></i> آخر تحديث: {{ meta.request_time }}</p>
+    </div>
+
+    {% if meta and meta.start and meta.end %}
+    <div class="time-range">
+        <span class="label"><i class="fa-regular fa-calendar-check"></i> نطاق التقرير</span>
+        <span class="dates">
+            {{ meta.start.strftime('%Y-%m-%d %H:%M') }}
+            <span>—</span>
+            {{ meta.end.strftime('%Y-%m-%d %H:%M') }}
+        </span>
+        <a href="/analytics" class="edit-btn"><i class="fa-solid fa-pen"></i> تعديل</a>
+    </div>
+    {% endif %}
+
+    <!-- Hero Stats -->
+    <div class="hero-section">
+        <div class="hero-card primary">
+            <div class="hero-label">إجمالي الأكياس</div>
+            <div class="hero-value">{{ total.count or 0 }}</div>
+            <div class="hero-breakdown">
+                <span class="tier-badge high">دقة عالية: {{ total.high_count or 0 }}</span>
+                <span class="tier-badge low">دقة منخفضة: {{ total.low_count or 0 }}</span>
+            </div>
+        </div>
+        <div class="hero-card">
+            <div class="hero-label">الوزن الإجمالي</div>
+            <div class="hero-value">{{ total.weight or 0 }}<span class="hero-unit">كجم</span></div>
+        </div>
+    </div>
+
+    <!-- Classifications -->
+    <div class="section-title"><i class="fa-solid fa-layer-group"></i> توزيع الأصناف</div>
+    <div class="cards-grid">
+        {% for c in classifications %}
+        <div class="class-card">
+            <div class="card-thumb">
+                <img src="/{{ c.thumb }}" alt="{{ c.name }}" loading="lazy"
+                     onerror="this.src='https://placehold.co/120x120/1e293b/FFF?text={{ c.name[:1] if c.name else '?' }}'">
+            </div>
+            <div class="card-name">{{ c.arabic_name or c.name }}</div>
+            <div class="card-count">{{ c.count }}</div>
+            <div class="card-conf">
+                <div class="conf-item high">
+                    <span class="conf-label">دقة عالية</span>
+                    <span class="conf-value">{{ c.high_count or 0 }}</span>
+                </div>
+                <div class="conf-item low">
+                    <span class="conf-label">دقة منخفضة</span>
+                    <span class="conf-value">{{ c.low_count or 0 }}</span>
+                </div>
+            </div>
+            <div class="card-weight">
+                <span class="label">الوزن الكلي</span>
+                <span class="value">{{ "%.1f"|format((c.weight * c.count) or 0) }} كجم</span>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- Timeline -->
+    {% if timeline and timeline.runs %}
+    <div class="timeline-section">
+        <div class="timeline-header">
+            <i class="fa-solid fa-clock-rotate-left"></i> التسلسل الزمني للإنتاج
+        </div>
+        <div class="timeline-grid">
+            {% for run in timeline.runs %}
+            <div class="timeline-item">
+                <div class="timeline-thumb">
+                    <img src="/{{ run.thumb }}" alt="{{ run.class_name }}" loading="lazy"
+                         onerror="this.src='https://placehold.co/60x60/1e293b/FFF?text={{ run.class_name[:1] if run.class_name else '?' }}'">
+                </div>
+                <div class="timeline-info">
+                    <div class="timeline-name">{{ run.arabic_name or run.class_name }}</div>
+                    <div class="timeline-time">
+                        <i class="fa-regular fa-clock"></i>
+                        {{ run.start[11:16] if run.start and (run.start|length) >= 16 else 'N/A' }}
+                        →
+                        {{ run.end[11:16] if run.end and (run.end|length) >= 16 else 'N/A' }}
+                    </div>
+                </div>
+                <div class="timeline-stats">
+                    <div>
+                        <span class="timeline-stat-label">العدد</span>
+                        <span class="timeline-stat-value">{{ run.count }}</span>
+                    </div>
+                    <div>
+                        <span class="timeline-stat-label">الوزن</span>
+                        <span class="timeline-stat-value">{{ (run.weight * run.count)|round(2) }}</span>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% elif not classifications %}
+    <div class="empty-state">
+        <i class="fa-solid fa-inbox"></i>
+        <p>لا توجد بيانات في هذه الفترة</p>
+    </div>
+    {% endif %}
+
+    <div class="page-footer">
+        <a href="/">الرئيسية</a> • <a href="/track-events">سجل المسارات</a> • <a href="/counts">الإحصاء اللحظي</a>
+    </div>
+</main>
+</body>
+</html>

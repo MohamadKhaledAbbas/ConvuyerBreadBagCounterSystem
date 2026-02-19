@@ -1,17 +1,20 @@
 <!DOCTYPE html>
-<html lang="ar">
+<html lang="ar" dir="rtl">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>لوحة تحليلات البيانات</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="/static/theme.css">
     <link href="/static/css/analytics.css?v=5" rel="stylesheet">
 </head>
 
 <body>
 
 <main>
+    <a href="/" class="back-home"><i class="fa-solid fa-home"></i> الرئيسية</a>
+
     <header class="stats-header">
         <h1 class="stats-title">لوحة رؤى البيانات</h1>
         <h3 class="stats-request-time">{{ meta.request_time }} آخر تحديث</h3>
@@ -30,7 +33,7 @@
                 <span>{{ meta.end.strftime('%Y-%m-%d %H:%M') }}</span>
             </div>
 
-            <a href="analytics.html" class="edit-time-btn" title="تعديل الفترة">
+            <a href="/analytics" class="edit-time-btn" title="تعديل الفترة">
                 <i class="fa-solid fa-pen-to-square"></i>
             </a>
         </div>

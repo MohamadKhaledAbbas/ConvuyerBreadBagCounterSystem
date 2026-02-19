@@ -1,88 +1,116 @@
 <!DOCTYPE html>
-<html lang="ar">
+<html lang="ar" dir="rtl">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>تحديد الفترة الزمنية</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link href="/static/css/time-selector.css?v=3" rel="stylesheet" >
+    <link rel="stylesheet" href="/static/theme.css">
+    <style>
+        .form-container {
+            max-width: 500px;
+            margin: 3rem auto;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-lg);
+            padding: 2rem;
+        }
+        .form-container h1 {
+            font-size: 1.6rem;
+            font-weight: 800;
+            text-align: center;
+            margin-bottom: 2rem;
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+        }
+        .form-group input {
+            width: 100%;
+            padding: 0.8rem 1rem;
+            font-size: 1rem;
+            direction: ltr;
+        }
+        .submit-btn {
+            width: 100%;
+            padding: 1rem;
+            font-size: 1.1rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-purple));
+            border: none;
+            border-radius: var(--radius-md);
+            color: white;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            transition: transform 0.2s;
+        }
+        .submit-btn:hover {
+            transform: translateY(-2px);
+        }
+    </style>
 </head>
 <body>
-    <div class="container">
-        <h1><i class="fa-solid fa-filter"></i> تحديد الفترة</h1>
+<main>
+    <a href="/" class="back-home"><i class="fa-solid fa-home"></i> الرئيسية</a>
+
+    <div class="form-container">
+        <h1><i class="fa-solid fa-filter"></i> تحديد نطاق التحليل</h1>
 
         <form action="/analytics" method="get">
-
             <div class="form-group">
-                <label for="start_time">وقت البداية</label>
-                <input
-                    type="datetime-local"
-                    id="start_time"
-                    name="start_time"
-                    class="input-field"
-                    pattern="[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}"
-                    step="60"
-                    required>
+                <label for="start_time">من تاريخ</label>
+                <input type="datetime-local" id="start_time" name="start_time" required>
             </div>
 
             <div class="form-group">
-                <label for="end_time">وقت النهاية</label>
-                <input
-                    type="datetime-local"
-                    id="end_time"
-                    name="end_time"
-                    class="input-field"
-                    pattern="[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}"
-                    step="60"
-                    required>
+                <label for="end_time">إلى تاريخ</label>
+                <input type="datetime-local" id="end_time" name="end_time" required>
             </div>
 
-            <button type="submit" class="submit-button">
-                عرض التحليلات <i class="fa-solid fa-arrow-right"></i>
+            <button type="submit" class="submit-btn">
+                عرض التقرير <i class="fa-solid fa-arrow-left"></i>
             </button>
         </form>
     </div>
+</main>
 
-    <script>
-        // Normalize datetime-local input display for consistent formatting (keep unified English numeric format)
-        document.addEventListener('DOMContentLoaded', function() {
-            const startInput = document.getElementById('start_time');
-            const endInput = document.getElementById('end_time');
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const startInput = document.getElementById('start_time');
+        const endInput = document.getElementById('end_time');
 
-            const now = new Date();
-            const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        const now = new Date();
+        const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
-            function formatDateTimeLocal(date) {
-                const year = date.getFullYear();
-                const month = String(date.getMonth() + 1).padStart(2, '0');
-                const day = String(date.getDate()).padStart(2, '0');
-                const hours = String(date.getHours()).padStart(2, '0');
-                const minutes = String(date.getMinutes()).padStart(2, '0');
-                return `${year}-${month}-${day}T${hours}:${minutes}`;
-            }
+        function formatDTL(date) {
+            return date.getFullYear() + '-' +
+                String(date.getMonth() + 1).padStart(2, '0') + '-' +
+                String(date.getDate()).padStart(2, '0') + 'T' +
+                String(date.getHours()).padStart(2, '0') + ':' +
+                String(date.getMinutes()).padStart(2, '0');
+        }
 
-            if (!startInput.value) {
-                yesterday.setHours(16, 0, 0, 0);
-                startInput.value = formatDateTimeLocal(yesterday);
-            }
-
-            if (!endInput.value) {
-                now.setHours(11, 0, 0, 0);
-                endInput.value = formatDateTimeLocal(now);
-            }
-
-            [startInput, endInput].forEach(input => {
-                input.addEventListener('change', function() {
-                    if (this.value) {
-                        const date = new Date(this.value);
-                        if (!isNaN(date.getTime())) {
-                            this.value = formatDateTimeLocal(date);
-                        }
-                    }
-                });
-            });
-        });
-    </script>
+        if (!startInput.value) {
+            yesterday.setHours(16, 0, 0, 0);
+            startInput.value = formatDTL(yesterday);
+        }
+        if (!endInput.value) {
+            now.setHours(11, 0, 0, 0);
+            endInput.value = formatDTL(now);
+        }
+    });
+</script>
 </body>
 </html>
