@@ -6,7 +6,7 @@ Defines contracts for tracker implementations to ensure loose coupling.
 
 from abc import ABC, abstractmethod
 from collections import deque
-from typing import List, Optional, Tuple, Protocol
+from typing import Dict, List, Optional, Tuple, Protocol
 
 from src.detection.BaseDetection import Detection
 
@@ -29,6 +29,16 @@ class TrackedObject(Protocol):
     created_at: float
     last_seen_at: float
     classified: bool
+
+    # Entry type classification (diagnostics)
+    entry_type: str  # 'bottom_entry', 'thrown_entry', 'midway_entry'
+
+    # Ghost recovery tracking
+    ghost_recovery_count: int  # Number of times re-associated after occlusion
+
+    # Shadow/merge tracking
+    shadow_of: Optional[int]  # track_id this is a shadow of (if merge detected)
+    shadow_tracks: Dict[int, 'TrackedObject']  # Shadows riding on this track
 
     @property
     def center(self) -> Tuple[int, int]:
@@ -68,6 +78,15 @@ class TrackEvent(Protocol):
     ended_at: float
     avg_confidence: float
     exit_direction: str
+
+    # Enhanced lifecycle fields
+    entry_type: str  # 'bottom_entry', 'thrown_entry', 'midway_entry'
+    suspected_duplicate: bool  # True only for midway_entry
+    ghost_recovery_count: int  # Times track was re-associated after occlusion
+    occlusion_events: List[dict]  # [{lost_at_y, recovered_at_y, gap_seconds}]
+    shadow_of: Optional[int]  # track_id this was a shadow of
+    shadow_count: int  # Number of shadow tracks when this track exited
+    merge_events: List[dict]  # [{merged_track_id, merge_y, unmerge_y}]
 
     @property
     def duration_seconds(self) -> float:

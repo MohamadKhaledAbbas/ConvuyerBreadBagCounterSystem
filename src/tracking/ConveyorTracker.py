@@ -14,6 +14,9 @@ Conveyor assumptions:
 Production Features:
 - Multi-criteria cost function (IoU + centroid distance + motion consistency)
 - Velocity-based prediction for better matching
+- Ghost track recovery for occlusion handling
+- Shadow track / merge detection for merged bboxes near top
+- Entry type classification for operator diagnostics
 - Configurable exit zones
 - Minimum track duration filtering
 - Memory-efficient history management
@@ -86,6 +89,20 @@ class TrackedObject:
 
     # Travel path validation
     entry_center_y: Optional[int] = None  # Y position when track was first created
+
+    # Entry type classification (diagnostics only)
+    entry_type: str = "bottom_entry"  # 'bottom_entry', 'thrown_entry', 'midway_entry'
+    _entry_classified: bool = False  # Whether entry type has been finalized
+
+    # Ghost recovery tracking
+    ghost_recovery_count: int = 0  # Number of times re-associated after occlusion
+    occlusion_events: list = field(default_factory=list)  # [{lost_at_y, recovered_at_y, gap_seconds}]
+
+    # Shadow/merge tracking
+    shadow_of: Optional[int] = None  # track_id this is a shadow of (if merge detected)
+    shadow_tracks: Dict = field(default_factory=dict)  # {track_id: TrackedObject} shadows riding on this track
+    shadow_count: int = 0  # Number of shadow tracks when exited
+    merge_events: list = field(default_factory=list)  # [{merged_track_id, merge_y, unmerge_y}]
     
     @property
     def center(self) -> Tuple[int, int]:
@@ -217,6 +234,15 @@ class TrackEvent:
     avg_confidence: float = 0.0
     exit_direction: str = "unknown"
 
+    # Enhanced lifecycle fields
+    entry_type: str = "bottom_entry"  # 'bottom_entry', 'thrown_entry', 'midway_entry'
+    suspected_duplicate: bool = False  # True only for midway_entry
+    ghost_recovery_count: int = 0  # Times track was re-associated after occlusion
+    occlusion_events: list = field(default_factory=list)  # [{lost_at_y, recovered_at_y, gap_seconds}]
+    shadow_of: Optional[int] = None  # track_id this was a shadow of
+    shadow_count: int = 0  # Number of shadow tracks when this track exited
+    merge_events: list = field(default_factory=list)  # [{merged_track_id, merge_y, unmerge_y}]
+
     @property
     def duration_seconds(self) -> float:
         """Track duration in seconds."""
@@ -262,6 +288,9 @@ class ConveyorTracker(ITracker):
         # Active tracks
         self.tracks: Dict[int, TrackedObject] = {}
         
+        # Ghost tracks buffer (for occlusion recovery)
+        self.ghost_tracks: Dict[int, dict] = {}  # {track_id: {track, lost_at, predicted_pos}}
+        
         # Track ID counter
         self._next_id = 1
         
@@ -285,6 +314,21 @@ class ConveyorTracker(ITracker):
         self._second_stage_max_distance = getattr(self.config, 'second_stage_max_distance', 150.0)
         self._second_stage_threshold = getattr(self.config, 'second_stage_threshold', 0.8)
 
+        # Ghost track config
+        self._ghost_max_age = getattr(self.config, 'ghost_track_max_age_seconds', 4.0)
+        self._ghost_x_tolerance = getattr(self.config, 'ghost_track_x_tolerance_pixels', 50.0)
+        self._ghost_max_y_gap_ratio = getattr(self.config, 'ghost_track_max_y_gap_ratio', 0.2)
+
+        # Shadow/merge config
+        self._merge_bbox_growth = getattr(self.config, 'merge_bbox_growth_threshold', 1.4)
+        self._merge_spatial_tol = getattr(self.config, 'merge_spatial_tolerance_pixels', 50.0)
+        self._merge_y_tol = getattr(self.config, 'merge_y_tolerance_pixels', 30.0)
+
+        # Entry type config
+        self._bottom_entry_zone_ratio = getattr(self.config, 'bottom_entry_zone_ratio', 0.4)
+        self._thrown_entry_min_velocity = getattr(self.config, 'thrown_entry_min_velocity', 15.0)
+        self._thrown_entry_detection_frames = getattr(self.config, 'thrown_entry_detection_frames', 5)
+
         # Log configuration
         multi_criteria = getattr(self.config, 'use_multi_criteria_matching', True)
 
@@ -292,7 +336,8 @@ class ConveyorTracker(ITracker):
             f"[ConveyorTracker] Initialized: iou_threshold={self.config.iou_threshold}, "
             f"max_age={self.config.max_frames_without_detection}, min_hits={self.config.min_track_duration_frames}, "
             f"min_conf_new_track={self._min_conf_new_track:.2f}, "
-            f"multi_criteria={multi_criteria}, second_stage={self._use_second_stage}"
+            f"multi_criteria={multi_criteria}, second_stage={self._use_second_stage}, "
+            f"ghost_max_age={self._ghost_max_age}s, merge_growth={self._merge_bbox_growth}"
         )
     
     def _compute_cost_matrix(
@@ -703,10 +748,17 @@ class ConveyorTracker(ITracker):
         track_list = list(self.tracks.values())
 
         if not track_list:
-            # No existing tracks - create new ones for high-confidence detections only
-            for det in detections:
-                if det.confidence >= self._min_conf_new_track:
-                    self._create_track(det)
+            # No existing tracks - try ghost recovery first, then create new
+            unmatched_dets = set(range(len(detections)))
+            if detections:
+                unmatched_dets = self._try_recover_ghosts(detections, unmatched_dets)
+            for det_idx in unmatched_dets:
+                if detections[det_idx].confidence >= self._min_conf_new_track:
+                    self._create_track(detections[det_idx])
+            # Update ghosts (expire old ones)
+            self._update_ghosts()
+            # Classify entry types for tracks that have enough frames
+            self._classify_entry_types()
             return list(self.tracks.values())
         
         if not detections:
@@ -716,6 +768,8 @@ class ConveyorTracker(ITracker):
             
             # Check for track completion
             self._check_completed_tracks()
+            # Update ghosts (expire old ones)
+            self._update_ghosts()
             return list(self.tracks.values())
         
         # Compute cost matrix
@@ -750,7 +804,22 @@ class ConveyorTracker(ITracker):
         # Mark unmatched tracks as missed
         for track_idx in unmatched_tracks:
             track_list[track_idx].mark_missed()
+
+        # Check for merges: unmatched tracks that may have been absorbed by a matched track
+        if unmatched_tracks:
+            self._check_for_merges(track_list, unmatched_tracks, matches)
         
+        # Try ghost recovery for unmatched detections before creating new tracks
+        if unmatched_dets:
+            remaining_dets = [detections[j] for j in unmatched_dets]
+            remaining_indices = list(unmatched_dets)
+            recovered_indices = self._try_recover_ghosts(detections, unmatched_dets)
+            unmatched_dets = recovered_indices
+
+        # Try to detach shadows if a matched track's bbox shrank and there are unmatched detections
+        if unmatched_dets:
+            self._detach_shadows(track_list, matches, detections, unmatched_dets)
+
         # Create new tracks for unmatched detections (with confidence filtering)
         # Only create tracks for high-confidence detections to avoid noise
         for det_idx in unmatched_dets:
@@ -760,6 +829,12 @@ class ConveyorTracker(ITracker):
 
         # Check for completed tracks
         self._check_completed_tracks()
+
+        # Update ghosts (expire old ones)
+        self._update_ghosts()
+
+        # Classify entry types for tracks that have enough frames
+        self._classify_entry_types()
         
         return list(self.tracks.values())
     
@@ -788,12 +863,22 @@ class ConveyorTracker(ITracker):
         if self._is_in_bottom_exit_zone(cy):
             return None
 
+        # Determine initial entry type based on Y position
+        entry_type = "bottom_entry"
+        if self.frame_height is not None:
+            bottom_entry_y = self.frame_height * (1.0 - self._bottom_entry_zone_ratio)
+            if cy < bottom_entry_y:
+                # Not in bottom zone -> midway_entry (may be reclassified as thrown_entry later)
+                entry_type = "midway_entry"
+
         # Create the actual track
         track = TrackedObject(
             track_id=self._next_id,
             bbox=detection.bbox,
             confidence=detection.confidence,
-            _velocity_alpha=self._velocity_alpha
+            _velocity_alpha=self._velocity_alpha,
+            entry_type=entry_type,
+            _entry_classified=(entry_type == "bottom_entry")  # bottom_entry is final
         )
         track.position_history.append(track.center)
         track.bbox_history.append(track.bbox)
@@ -803,112 +888,34 @@ class ConveyorTracker(ITracker):
 
         logger.info(
             f"[TRACK_LIFECYCLE] T{self._next_id} CREATED | "
-            f"bbox={detection.bbox} center={track.center} conf={detection.confidence:.2f}"
+            f"bbox={detection.bbox} center={track.center} conf={detection.confidence:.2f} "
+            f"entry_type={entry_type}"
         )
 
         self._next_id += 1
         
         return track
 
-    def _validate_lost_track_as_completed(self, track: TrackedObject) -> bool:
-        """
-        Check if a 'lost' track actually represents a valid count.
-
-        This rescues tracks that were healthy and traveled the expected path
-        but got lost due to:
-        - Occlusion/merging with another object
-        - Detector missing detections near the exit
-        - Camera/lighting issues
-
-        Validation criteria:
-        1. Must have started in the bottom portion of frame (entry zone)
-        2. Must have ended in the upper portion of frame (near exit)
-        3. Must have traveled significant vertical distance
-        4. Must have had reasonable detection quality (hit rate)
-
-        Args:
-            track: The lost track to validate
-
-        Returns:
-            True if track should be counted despite being "lost"
-        """
-        if self.frame_height is None:
-            return False
-
-        # Cache config values (getattr is expensive when called repeatedly)
-        if not hasattr(self, '_lost_track_thresholds'):
-            self._lost_track_thresholds = {
-                'entry_zone_ratio': getattr(self.config, 'lost_track_entry_zone_ratio', 0.6),
-                'exit_zone_ratio': getattr(self.config, 'lost_track_exit_zone_ratio', 0.4),
-                'min_travel_ratio': getattr(self.config, 'lost_track_min_travel_ratio', 0.3),
-                'min_hit_rate': getattr(self.config, 'lost_track_min_hit_rate', 0.5)
-            }
-
-        thresholds = self._lost_track_thresholds
-
-        # 1. Check start position - must have started in bottom portion
-        start_y = track.entry_center_y
-        if start_y is None and track.position_history:
-            start_y = track.position_history[0][1]
-
-        if start_y is None:
-            return False
-
-        # Must start in bottom portion (e.g., bottom 60% means y >= 40% of frame_height)
-        min_start_y = self.frame_height * (1.0 - thresholds['entry_zone_ratio'])
-        if start_y < min_start_y:
-            return False
-
-        # 2. Check end position - must have ended in upper portion
-        if not track.position_history:
-            return False
-
-        last_y = track.position_history[-1][1]
-
-        # Must end in upper portion (e.g., top 40% means y <= 40% of frame_height)
-        max_end_y = self.frame_height * thresholds['exit_zone_ratio']
-        if last_y > max_end_y:
-            return False
-
-        # 3. Check vertical travel distance
-        distance_y = start_y - last_y  # Positive means moved UP
-        min_distance = self.frame_height * thresholds['min_travel_ratio']
-
-        if distance_y < min_distance:
-            return False
-
-        # 4. Check hit rate (detection quality)
-        total_frames = track.age + track.hits
-        if total_frames > 0:
-            hit_rate = track.hits / total_frames
-            if hit_rate < thresholds['min_hit_rate']:
-                return False
-
-        # All checks passed - this is a valid journey!
-        # Only log on successful validation (not every failure)
-        return True
-
     def _check_completed_tracks(self):
-        """Check for tracks that should be marked as completed."""
+        """
+        Check for tracks that should be marked as completed.
+        
+        Core counting rule: A bread bag is COUNTED if and only if its track
+        exits from the TOP of the frame. Lost tracks are NEVER counted - they
+        are moved to the ghost buffer for potential re-association.
+        """
         tracks_to_remove = []
+        tracks_to_ghost = []
         
         for track_id, track in self.tracks.items():
             should_complete = False
             event_type = 'track_completed'
             
-            # Check if track exceeded max age
+            # Check if track exceeded max age (lost)
             if track.time_since_update > self.config.max_frames_without_detection:
-                should_complete = True
-                # ENHANCEMENT: Check if this "lost" track actually completed a valid journey
-                # If a bag travels from bottom to near-top and gets lost, it should still count!
-                if self._validate_lost_track_as_completed(track):
-                    event_type = 'track_completed'  # Rescue it!
-                    logger.info(
-                        f"[TRACK_LIFECYCLE] T{track_id} RESCUED | "
-                        f"Lost track validated as completed (valid journey from bottom to top)"
-                    )
-                else:
-                    event_type = 'track_lost'
+                # Lost tracks are NEVER counted. Move to ghost buffer for possible recovery.
+                tracks_to_ghost.append(track_id)
+                continue
 
             # Check if track is exiting frame and has been tracked long enough
             elif (
@@ -938,32 +945,433 @@ class ConveyorTracker(ITracker):
                     end = track.position_history[-1]
                     distance = ((end[0]-start[0])**2 + (end[1]-start[1])**2)**0.5
 
-                # Emit completion event
+                # Emit completion event with enriched lifecycle data
                 event = TrackEvent(
                     track_id=track_id,
                     event_type=event_type,
-                    bbox_history=list(track.bbox_history),  # Convert deque to list
-                    position_history=list(track.position_history),  # Convert deque to list
+                    bbox_history=list(track.bbox_history),
+                    position_history=list(track.position_history),
                     total_frames=track.age + track.hits,
                     created_at=track.created_at,
                     ended_at=time.time(),
                     avg_confidence=avg_conf,
-                    exit_direction=exit_dir
+                    exit_direction=exit_dir,
+                    entry_type=track.entry_type,
+                    suspected_duplicate=(track.entry_type == "midway_entry"),
+                    ghost_recovery_count=track.ghost_recovery_count,
+                    occlusion_events=list(track.occlusion_events),
+                    shadow_of=track.shadow_of,
+                    shadow_count=len(track.shadow_tracks),
+                    merge_events=list(track.merge_events)
                 )
                 self.completed_tracks.append(event)
                 tracks_to_remove.append(track_id)
+
+                # Also emit events for any shadow tracks riding on this track
+                if event_type == 'track_completed' and track.shadow_tracks:
+                    self._complete_with_shadows(track, exit_dir)
 
                 logger.info(
                     f"[TRACK_LIFECYCLE] T{track_id} COMPLETED | "
                     f"type={event_type} exit={exit_dir} hits={track.hits} missed={track.time_since_update} "
                     f"duration={event.duration_seconds:.2f}s distance={distance:.0f}px {vel_str} "
-                    f"positions={len(track.position_history)} avg_conf={avg_conf:.2f}"
+                    f"positions={len(track.position_history)} avg_conf={avg_conf:.2f} "
+                    f"entry_type={track.entry_type} ghosts={track.ghost_recovery_count} shadows={len(track.shadow_tracks)}"
                 )
 
-        # Remove completed tracks (use set to avoid duplicates)
+        # Move lost tracks to ghost buffer
+        for track_id in tracks_to_ghost:
+            self._move_to_ghost(track_id)
+
+        # Remove completed tracks
         for track_id in set(tracks_to_remove):
             if track_id in self.tracks:
                 del self.tracks[track_id]
+
+    # =========================================================================
+    # Ghost Track Recovery (Occlusion Handling)
+    # =========================================================================
+
+    def _move_to_ghost(self, track_id: int):
+        """
+        Move a lost track to the ghost buffer for potential re-association.
+        
+        Ghost tracks are held for up to ghost_track_max_age_seconds before
+        being finalized as track_lost.
+        """
+        track = self.tracks.pop(track_id, None)
+        if track is None:
+            return
+
+        # Predict where the ghost should be
+        predicted_pos = self._predict_ghost_position(track)
+
+        self.ghost_tracks[track_id] = {
+            'track': track,
+            'lost_at': time.time(),
+            'predicted_pos': predicted_pos,
+            'last_velocity': track.velocity
+        }
+
+        logger.info(
+            f"[TRACK_LIFECYCLE] T{track_id} GHOST | "
+            f"moved to ghost buffer, predicted_pos={predicted_pos}, "
+            f"will expire in {self._ghost_max_age}s"
+        )
+
+    def _predict_ghost_position(self, track: TrackedObject) -> Tuple[int, int]:
+        """Predict where a ghost track should be based on last known velocity."""
+        cx, cy = track.center
+        vel = track.velocity
+        if vel is not None:
+            # Predict position based on velocity and frames since update
+            frames_ahead = track.time_since_update + 1
+            cx = int(cx + vel[0] * frames_ahead)
+            cy = int(cy + vel[1] * frames_ahead)
+        return (cx, cy)
+
+    def _try_recover_ghosts(
+        self,
+        detections: List[Detection],
+        unmatched_dets: Set[int]
+    ) -> Set[int]:
+        """
+        Try to re-associate unmatched detections with ghost tracks.
+        
+        For each unmatched detection, check if it matches a ghost:
+        - X-axis within tolerance (bags don't move sideways)
+        - Y-axis within max gap and moved toward top
+        
+        Returns the remaining set of unmatched detection indices.
+        """
+        if not self.ghost_tracks or not unmatched_dets:
+            return unmatched_dets
+
+        max_y_gap = int(self._ghost_max_y_gap_ratio * (self.frame_height or 1000))
+        remaining_dets = set(unmatched_dets)
+        ghosts_recovered = []
+
+        for ghost_id, ghost_info in list(self.ghost_tracks.items()):
+            ghost_track = ghost_info['track']
+            ghost_vel = ghost_info['last_velocity']
+            lost_at = ghost_info['lost_at']
+
+            # Update predicted position based on elapsed time since loss
+            elapsed_frames = max(1, int((time.time() - lost_at) * 25))  # ~25 fps estimate
+            pred_x, pred_y = ghost_info['predicted_pos']
+            if ghost_vel is not None:
+                pred_x = int(pred_x + ghost_vel[0] * elapsed_frames * 0.5)
+                pred_y = int(pred_y + ghost_vel[1] * elapsed_frames * 0.5)
+
+            best_det_idx = None
+            best_dist = float('inf')
+
+            for det_idx in remaining_dets:
+                det = detections[det_idx]
+                det_cx = (det.bbox[0] + det.bbox[2]) // 2
+                det_cy = (det.bbox[1] + det.bbox[3]) // 2
+
+                # X-axis tolerance check
+                x_diff = abs(det_cx - pred_x)
+                if x_diff > self._ghost_x_tolerance:
+                    continue
+
+                # Y-axis check: detection should be at or above ghost's predicted Y
+                y_diff = pred_y - det_cy  # positive means det moved toward top
+                if y_diff < -max_y_gap:  # Detection is too far below predicted position
+                    continue
+                if abs(det_cy - pred_y) > max_y_gap:
+                    continue
+
+                # Score by distance
+                dist = math.sqrt(x_diff**2 + (det_cy - pred_y)**2)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_det_idx = det_idx
+
+            if best_det_idx is not None:
+                # Re-associate: restore ghost as active track
+                det = detections[best_det_idx]
+                ghost_track.update(det)
+                ghost_track.ghost_recovery_count += 1
+                ghost_track.occlusion_events.append({
+                    'lost_at_y': ghost_info['predicted_pos'][1],
+                    'recovered_at_y': (det.bbox[1] + det.bbox[3]) // 2,
+                    'gap_seconds': round(time.time() - lost_at, 2)
+                })
+
+                self.tracks[ghost_id] = ghost_track
+                ghosts_recovered.append(ghost_id)
+                remaining_dets.discard(best_det_idx)
+
+                logger.info(
+                    f"[TRACK_LIFECYCLE] T{ghost_id} RECOVERED | "
+                    f"ghost re-associated after {time.time() - lost_at:.1f}s, "
+                    f"recovery_count={ghost_track.ghost_recovery_count}"
+                )
+
+        # Remove recovered ghosts
+        for gid in ghosts_recovered:
+            del self.ghost_tracks[gid]
+
+        return remaining_dets
+
+    def _update_ghosts(self):
+        """Expire ghost tracks that exceeded max age."""
+        now = time.time()
+        expired = []
+
+        for ghost_id, ghost_info in self.ghost_tracks.items():
+            elapsed = now - ghost_info['lost_at']
+            if elapsed >= self._ghost_max_age:
+                expired.append(ghost_id)
+
+        for ghost_id in expired:
+            ghost_info = self.ghost_tracks.pop(ghost_id)
+            track = ghost_info['track']
+
+            # Finalize as track_lost (not counted)
+            event = TrackEvent(
+                track_id=ghost_id,
+                event_type='track_lost',
+                bbox_history=list(track.bbox_history),
+                position_history=list(track.position_history),
+                total_frames=track.age + track.hits,
+                created_at=track.created_at,
+                ended_at=now,
+                avg_confidence=track.confidence,
+                exit_direction="timeout",
+                entry_type=track.entry_type,
+                suspected_duplicate=(track.entry_type == "midway_entry"),
+                ghost_recovery_count=track.ghost_recovery_count,
+                occlusion_events=list(track.occlusion_events),
+                shadow_of=track.shadow_of,
+                shadow_count=0,
+                merge_events=list(track.merge_events)
+            )
+            self.completed_tracks.append(event)
+
+            logger.info(
+                f"[TRACK_LIFECYCLE] T{ghost_id} GHOST_EXPIRED | "
+                f"ghost expired after {self._ghost_max_age}s, finalized as track_lost"
+            )
+
+    # =========================================================================
+    # Shadow Track / Merge Detection
+    # =========================================================================
+
+    def _check_for_merges(
+        self,
+        track_list: List[TrackedObject],
+        unmatched_track_indices: Set[int],
+        matches: List[Tuple[int, int]]
+    ):
+        """
+        Check if unmatched tracks were absorbed (merged) by a matched track.
+
+        Merge conditions:
+        1. Matched track's bbox grew significantly (>= merge_bbox_growth_threshold)
+        2. The unmatched and matched tracks were spatially adjacent
+        3. Both tracks were moving in the same direction (toward top)
+        """
+        if not matches or not unmatched_track_indices:
+            return
+
+        matched_tracks = [(track_list[ti], ti) for ti, _ in matches]
+
+        for unmatched_idx in list(unmatched_track_indices):
+            lost_track = track_list[unmatched_idx]
+
+            # Only consider tracks with enough history
+            if len(lost_track.bbox_history) < 3:
+                continue
+
+            lost_cx, lost_cy = lost_track.center
+
+            for survivor, survivor_idx in matched_tracks:
+                # Check 1: Bbox growth
+                if len(survivor.bbox_history) < 4:
+                    continue
+
+                current_width = survivor.bbox[2] - survivor.bbox[0]
+                # Average width over recent history (excluding current)
+                recent_widths = [
+                    b[2] - b[0] for b in list(survivor.bbox_history)[-5:-1]
+                ]
+                if not recent_widths:
+                    continue
+                avg_width = sum(recent_widths) / len(recent_widths)
+
+                if avg_width <= 0:
+                    continue
+                growth_ratio = current_width / avg_width
+                if growth_ratio < self._merge_bbox_growth:
+                    continue
+
+                # Check 2: Spatial adjacency (previous frame)
+                surv_cx, surv_cy = survivor.center
+                x_gap = abs(surv_cx - lost_cx)
+                y_gap = abs(surv_cy - lost_cy)
+
+                if x_gap > self._merge_spatial_tol or y_gap > self._merge_y_tol:
+                    continue
+
+                # Check 3: Same direction (both moving toward top = negative vy)
+                lost_vel = lost_track.velocity
+                surv_vel = survivor.velocity
+                if lost_vel is not None and surv_vel is not None:
+                    if lost_vel[1] > 5 or surv_vel[1] > 5:  # Moving downward significantly
+                        continue
+
+                # All checks passed → attach as shadow
+                self._attach_shadow(survivor, lost_track)
+                break  # One merge per lost track
+
+    def _attach_shadow(self, survivor: TrackedObject, shadow: TrackedObject):
+        """Attach a shadow track to a surviving track."""
+        shadow_id = shadow.track_id
+        survivor.shadow_tracks[shadow_id] = shadow
+        shadow.shadow_of = survivor.track_id
+
+        survivor.merge_events.append({
+            'merged_track_id': shadow_id,
+            'merge_y': shadow.center[1],
+            'unmerge_y': None
+        })
+
+        # Remove shadow from active tracks
+        if shadow_id in self.tracks:
+            del self.tracks[shadow_id]
+
+        logger.info(
+            f"[TRACK_LIFECYCLE] T{shadow_id} SHADOW | "
+            f"merged into T{survivor.track_id}, total_shadows={len(survivor.shadow_tracks)}"
+        )
+
+    def _detach_shadows(
+        self,
+        track_list: List[TrackedObject],
+        matches: List[Tuple[int, int]],
+        detections: List[Detection],
+        unmatched_dets: Set[int]
+    ):
+        """
+        Detach shadows if the survivor's bbox shrank and an unmatched detection appeared nearby.
+        """
+        if not unmatched_dets:
+            return
+
+        for track_idx, _ in matches:
+            track = track_list[track_idx]
+            if not track.shadow_tracks:
+                continue
+
+            # Check if bbox shrank back to normal
+            if len(track.bbox_history) < 4:
+                continue
+
+            current_width = track.bbox[2] - track.bbox[0]
+            recent_widths = [b[2] - b[0] for b in list(track.bbox_history)[-5:-1]]
+            if not recent_widths:
+                continue
+            avg_width = sum(recent_widths) / len(recent_widths)
+            if avg_width <= 0:
+                continue
+
+            # If bbox is back near its average, check for nearby unmatched detections
+            if current_width / avg_width > 0.9:  # Still large, no shrinkage
+                continue
+
+            # Try to detach shadows
+            tcx, tcy = track.center
+            for det_idx in list(unmatched_dets):
+                det = detections[det_idx]
+                det_cx = (det.bbox[0] + det.bbox[2]) // 2
+                det_cy = (det.bbox[1] + det.bbox[3]) // 2
+
+                if abs(det_cx - tcx) < self._merge_spatial_tol and abs(det_cy - tcy) < self._merge_y_tol:
+                    # Detach first shadow
+                    if track.shadow_tracks:
+                        shadow_id = next(iter(track.shadow_tracks))
+                        shadow = track.shadow_tracks.pop(shadow_id)
+
+                        # Restore as active track
+                        shadow.update(det)
+                        shadow.shadow_of = None
+                        self.tracks[shadow_id] = shadow
+                        unmatched_dets.discard(det_idx)
+
+                        # Update merge events
+                        for me in track.merge_events:
+                            if me['merged_track_id'] == shadow_id and me['unmerge_y'] is None:
+                                me['unmerge_y'] = det_cy
+                                break
+
+                        logger.info(
+                            f"[TRACK_LIFECYCLE] T{shadow_id} SHADOW_DETACHED | "
+                            f"detached from T{track.track_id}"
+                        )
+                        break
+
+    def _complete_with_shadows(self, track: TrackedObject, exit_dir: str):
+        """Emit completion events for all shadow tracks when their survivor exits top."""
+        for shadow_id, shadow in track.shadow_tracks.items():
+            event = TrackEvent(
+                track_id=shadow_id,
+                event_type='track_completed',
+                bbox_history=list(shadow.bbox_history),
+                position_history=list(shadow.position_history),
+                total_frames=shadow.age + shadow.hits,
+                created_at=shadow.created_at,
+                ended_at=time.time(),
+                avg_confidence=shadow.confidence,
+                exit_direction=exit_dir,
+                entry_type=shadow.entry_type,
+                suspected_duplicate=(shadow.entry_type == "midway_entry"),
+                ghost_recovery_count=shadow.ghost_recovery_count,
+                occlusion_events=list(shadow.occlusion_events),
+                shadow_of=track.track_id,
+                shadow_count=0,
+                merge_events=list(shadow.merge_events)
+            )
+            self.completed_tracks.append(event)
+
+            logger.info(
+                f"[TRACK_LIFECYCLE] T{shadow_id} SHADOW_COMPLETED | "
+                f"shadow of T{track.track_id} counted on exit"
+            )
+
+    # =========================================================================
+    # Entry Type Classification (Diagnostics Only)
+    # =========================================================================
+
+    def _classify_entry_types(self):
+        """
+        Classify entry type for tracks that have accumulated enough frames.
+        
+        Tracks created mid-frame start as 'midway_entry' and can be reclassified
+        to 'thrown_entry' if their initial velocity exceeds the threshold.
+        """
+        for track in self.tracks.values():
+            if track._entry_classified:
+                continue
+
+            if track.hits < self._thrown_entry_detection_frames:
+                continue
+
+            # Only reclassify midway_entry tracks
+            if track.entry_type != "midway_entry":
+                track._entry_classified = True
+                continue
+
+            # Measure initial velocity
+            vel = track.velocity
+            if vel is not None:
+                vel_magnitude = math.sqrt(vel[0]**2 + vel[1]**2)
+                if vel_magnitude >= self._thrown_entry_min_velocity:
+                    track.entry_type = "thrown_entry"
+
+            track._entry_classified = True
 
     def get_confirmed_tracks(self) -> List[TrackedObject]:
         """
@@ -996,4 +1404,5 @@ class ConveyorTracker(ITracker):
         """Clean up tracker resources."""
         self.tracks.clear()
         self.completed_tracks.clear()
+        self.ghost_tracks.clear()
         logger.info("[ConveyorTracker] Cleanup complete")

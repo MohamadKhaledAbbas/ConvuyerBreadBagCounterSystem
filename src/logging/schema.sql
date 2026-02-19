@@ -99,7 +99,16 @@ CREATE TABLE IF NOT EXISTS track_events (
     classification_confidence REAL,            -- Classification confidence (NULL if skipped)
 
     -- Position history as JSON (for trajectory visualization)
-    position_history TEXT                       -- JSON array of [x,y] points
+    position_history TEXT,                      -- JSON array of [x,y] points
+
+    -- Enhanced lifecycle fields
+    entry_type TEXT DEFAULT 'bottom_entry',     -- 'bottom_entry', 'thrown_entry', 'midway_entry'
+    suspected_duplicate INTEGER DEFAULT 0,      -- 1 if entry_type is midway_entry
+    ghost_recovery_count INTEGER DEFAULT 0,     -- Times track was re-associated after occlusion
+    shadow_of INTEGER,                          -- track_id this was a shadow of (NULL if not)
+    shadow_count INTEGER DEFAULT 0,             -- Number of shadow tracks when exited
+    occlusion_events TEXT,                      -- JSON: [{lost_at_y, recovered_at_y, gap_seconds}]
+    merge_events TEXT                           -- JSON: [{merged_track_id, merge_y, unmerge_y}]
 );
 
 -- Indexes for analytics queries
@@ -129,6 +138,14 @@ CREATE TABLE IF NOT EXISTS track_event_details (
     --   'track_completed'   - Track exited frame normally
     --   'track_lost'        - Track lost (disappeared)
     --   'track_invalid'     - Track had invalid travel path
+    --   'ghost_moved'       - Track moved to ghost buffer
+    --   'ghost_recovered'   - Ghost track re-associated with detection
+    --   'ghost_expired'     - Ghost track expired without recovery
+    --   'merge_detected'    - Two tracks merged into one detection
+    --   'shadow_attached'   - Track became shadow of another track
+    --   'shadow_detached'   - Shadow track restored as independent track
+    --   'shadow_completed'  - Shadow track counted when survivor exited
+    --   'entry_classified'  - Track entry type classified
 
     -- Position data (for ROI steps)
     bbox_x1 INTEGER,                           -- ROI bounding box x1
