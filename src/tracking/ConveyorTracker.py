@@ -1057,7 +1057,8 @@ class ConveyorTracker(ITracker):
             lost_at = ghost_info['lost_at']
 
             # Update predicted position based on elapsed time since loss
-            elapsed_frames = max(1, int((time.time() - lost_at) * 25))  # ~25 fps estimate
+            target_fps = getattr(self.config, 'target_fps', 25.0)
+            elapsed_frames = max(1, int((time.time() - lost_at) * target_fps))
             pred_x, pred_y = ghost_info['predicted_pos']
             if ghost_vel is not None:
                 pred_x = int(pred_x + ghost_vel[0] * elapsed_frames * 0.5)
@@ -1278,8 +1279,9 @@ class ConveyorTracker(ITracker):
             if avg_width <= 0:
                 continue
 
-            # If bbox is back near its average, check for nearby unmatched detections
-            if current_width / avg_width > 0.9:  # Still large, no shrinkage
+            # If bbox is still near its merged (grown) width, no un-merge yet
+            # Below 90% of average means the bbox has shrunk back, suggesting separation
+            if current_width / avg_width > 0.9:
                 continue
 
             # Try to detach shadows
