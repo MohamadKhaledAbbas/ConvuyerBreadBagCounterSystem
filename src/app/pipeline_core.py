@@ -255,7 +255,7 @@ class PipelineCore:
         Log a track lifecycle event to the database for analytics.
 
         Records the full journey of a tracked object including entry/exit positions,
-        distance traveled, duration, and event type.
+        distance traveled, duration, event type, and enhanced lifecycle fields.
 
         Args:
             event: Track completion event from the tracker
@@ -280,8 +280,11 @@ class PipelineCore:
                 )
 
             # Compute total_hits from total_frames and age
-            # total_frames = age + hits in the tracker, but we use total_frames directly
-            total_hits = event.total_frames  # Approximate; includes both hit and missed frames
+            total_hits = event.total_frames
+
+            # Serialize enhanced lifecycle fields
+            occlusion_events_json = json.dumps(event.occlusion_events) if event.occlusion_events else None
+            merge_events_json = json.dumps(event.merge_events) if event.merge_events else None
 
             self._db.enqueue_write(
                 """INSERT INTO track_events (
@@ -290,8 +293,10 @@ class PipelineCore:
                     exit_direction, distance_pixels, duration_seconds, total_frames,
                     avg_confidence, total_hits,
                     classification, classification_confidence,
-                    position_history
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    position_history,
+                    entry_type, suspected_duplicate, ghost_recovery_count,
+                    shadow_of, shadow_count, occlusion_events, merge_events
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     event.track_id, event.event_type,
                     datetime.fromtimestamp(event.ended_at).isoformat(),
@@ -301,7 +306,14 @@ class PipelineCore:
                     event.duration_seconds, event.total_frames,
                     event.avg_confidence, total_hits,
                     None, None,
-                    position_json
+                    position_json,
+                    getattr(event, 'entry_type', 'bottom_entry'),
+                    1 if getattr(event, 'suspected_duplicate', False) else 0,
+                    getattr(event, 'ghost_recovery_count', 0),
+                    getattr(event, 'shadow_of', None),
+                    getattr(event, 'shadow_count', 0),
+                    occlusion_events_json,
+                    merge_events_json
                 )
             )
         except Exception as e:
@@ -309,16 +321,23 @@ class PipelineCore:
 
         # Also log a detail row for the event type itself (non-blocking)
         try:
+            detail_data = {
+                'exit_direction': event.exit_direction,
+                'total_frames': event.total_frames,
+                'duration_seconds': round(event.duration_seconds, 2) if event.duration_seconds else None,
+                'distance_pixels': round(event.distance_traveled, 1) if event.distance_traveled else None,
+                'entry_type': getattr(event, 'entry_type', None),
+                'suspected_duplicate': getattr(event, 'suspected_duplicate', False),
+                'ghost_recovery_count': getattr(event, 'ghost_recovery_count', 0),
+                'shadow_of': getattr(event, 'shadow_of', None),
+                'shadow_count': getattr(event, 'shadow_count', 0)
+            }
+
             self._db.enqueue_track_event_detail(
                 track_id=event.track_id,
                 timestamp=datetime.fromtimestamp(event.ended_at).isoformat(),
                 step_type=event.event_type,
-                detail=json.dumps({
-                    'exit_direction': event.exit_direction,
-                    'total_frames': event.total_frames,
-                    'duration_seconds': round(event.duration_seconds, 2) if event.duration_seconds else None,
-                    'distance_pixels': round(event.distance_traveled, 1) if event.distance_traveled else None
-                })
+                detail=json.dumps(detail_data)
             )
         except Exception as e:
             logger.error(f"[PipelineCore] Failed to log track event detail T{event.track_id}: {e}")

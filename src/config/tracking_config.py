@@ -170,36 +170,68 @@ class TrackingConfig:
     """
 
     # ==========================================================================
-    # Lost Track Recovery (Valid Journey Detection)
+    # Ghost Track Recovery (Occlusion Handling)
     # ==========================================================================
 
-    lost_track_entry_zone_ratio: float = _parse_float_env("LOST_TRACK_ENTRY_ZONE_RATIO", 0.3)
+    ghost_track_max_age_seconds: float = _parse_float_env("GHOST_TRACK_MAX_AGE_SECONDS", 4.0)
     """
-    Bottom fraction of frame where valid tracks should start (0.6 = bottom 60%).
-    Lost tracks are only rescued if they started in this zone.
-    This ensures we only count bags that entered from the expected direction.
-    """
-
-    lost_track_exit_zone_ratio: float = _parse_float_env("LOST_TRACK_EXIT_ZONE_RATIO", 0.3)
-    """
-    Top fraction of frame where lost tracks must reach to be rescued (0.4 = top 40%).
-    This is more relaxed than the strict exit_zone_ratio (15%) to handle:
-    - Tracks lost due to occlusion/merging near the top
-    - Detector missing objects as they get smaller/further away
+    Maximum time (seconds) to hold a ghost track before finalizing as lost.
+    Ghost tracks are lost tracks held in a buffer for possible re-association
+    when occluded bags reappear.
     """
 
-    lost_track_min_travel_ratio: float = _parse_float_env("LOST_TRACK_MIN_TRAVEL_RATIO", 0.3)
+    ghost_track_x_tolerance_pixels: float = _parse_float_env("GHOST_TRACK_X_TOLERANCE_PIXELS", 80.0)
     """
-    Minimum vertical distance traveled as fraction of frame height (0.3 = 30%).
-    Lost tracks must have traveled at least this distance to be rescued.
-    Prevents counting noise/short-lived tracks.
+    X-axis tolerance (pixels) for ghost track re-association.
+    Bags primarily move vertically on conveyor, but camera perspective
+    causes slight horizontal shift (~50-80px over full frame travel).
     """
 
-    lost_track_min_hit_rate: float = _parse_float_env("LOST_TRACK_MIN_HIT_RATE", 0.5)
+    ghost_track_max_y_gap_ratio: float = _parse_float_env("GHOST_TRACK_MAX_Y_GAP_RATIO", 0.2)
     """
-    Minimum detection hit rate for lost track recovery (0.5 = 50%).
-    Hit rate = hits / (hits + misses). Higher values = stricter validation.
-    Ensures we only rescue tracks that were reliably detected.
+    Maximum Y gap as fraction of frame height for ghost re-association.
+    Detection must be within this distance of the ghost's predicted Y position.
+    """
+
+    # ==========================================================================
+    # Shadow / Merge Detection
+    # ==========================================================================
+
+    merge_bbox_growth_threshold: float = _parse_float_env("MERGE_BBOX_GROWTH_THRESHOLD", 1.4)
+    """
+    Bbox width growth ratio that triggers merge check (1.4 = 40% growth).
+    When a surviving track's bbox grows by this ratio, check if it absorbed a neighbor.
+    """
+
+    merge_spatial_tolerance_pixels: float = _parse_float_env("MERGE_SPATIAL_TOLERANCE_PIXELS", 50.0)
+    """
+    Maximum X gap (pixels) between two tracks to consider them adjacent for merge detection.
+    """
+
+    merge_y_tolerance_pixels: float = _parse_float_env("MERGE_Y_TOLERANCE_PIXELS", 30.0)
+    """
+    Maximum Y difference (pixels) between two tracks at merge time.
+    """
+
+    # ==========================================================================
+    # Entry Type Classification (Diagnostics Only)
+    # ==========================================================================
+
+    bottom_entry_zone_ratio: float = _parse_float_env("BOTTOM_ENTRY_ZONE_RATIO", 0.4)
+    """
+    Bottom fraction of frame considered as bottom_entry zone (0.4 = bottom 40%).
+    Tracks created below this line are classified as bottom_entry.
+    """
+
+    thrown_entry_min_velocity: float = _parse_float_env("THROWN_ENTRY_MIN_VELOCITY", 15.0)
+    """
+    Minimum velocity (px/frame) to classify a mid-frame entry as thrown_entry.
+    Entries above this threshold are bags thrown onto the conveyor.
+    """
+
+    thrown_entry_detection_frames: int = _parse_int_env("THROWN_ENTRY_DETECTION_FRAMES", 5)
+    """
+    Number of frames to measure initial velocity for thrown_entry classification.
     """
 
     # ==========================================================================

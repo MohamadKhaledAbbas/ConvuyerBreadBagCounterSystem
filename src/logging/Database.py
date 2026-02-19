@@ -169,9 +169,46 @@ class DatabaseManager:
         else:
             logger.warning("[DatabaseManager] schema.sql not found, using fallback")
             self._create_fallback_schema()
-        
+
+        # Migrate existing tables to add new columns (safe for existing DBs)
+        self._migrate_track_events_schema()
+
         # Initialize default config values
         self._initialize_default_config()
+
+    def _migrate_track_events_schema(self):
+        """Add missing columns to track_events table for existing databases.
+
+        Uses ALTER TABLE which is safe to call even if the column already exists
+        (the exception is caught and ignored).  This handles databases created
+        before the enhanced lifecycle fields were added to schema.sql.
+        """
+        # NOTE: Column names/types are hardcoded constants — not user input.
+        # f-string usage is safe here; no SQL injection risk.
+        new_columns = [
+            ("entry_type", "TEXT DEFAULT 'bottom_entry'"),
+            ("suspected_duplicate", "INTEGER DEFAULT 0"),
+            ("ghost_recovery_count", "INTEGER DEFAULT 0"),
+            ("shadow_of", "INTEGER"),
+            ("shadow_count", "INTEGER DEFAULT 0"),
+            ("occlusion_events", "TEXT"),
+            ("merge_events", "TEXT"),
+        ]
+        try:
+            conn = self._get_connection()
+            for col_name, col_type in new_columns:
+                try:
+                    conn.execute(
+                        f"ALTER TABLE track_events ADD COLUMN {col_name} {col_type}"
+                    )
+                    logger.info(
+                        f"[DatabaseManager] Migrated track_events: added column {col_name}"
+                    )
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
+            conn.commit()
+        except Exception as e:
+            logger.error(f"[DatabaseManager] Migration error: {e}")
     def _create_fallback_schema(self):
         with self._get_connection() as conn:
             conn.execute("PRAGMA foreign_keys = ON")
