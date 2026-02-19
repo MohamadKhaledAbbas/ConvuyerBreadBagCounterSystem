@@ -1020,15 +1020,16 @@ class ConveyorTracker(ITracker):
         )
 
     def _predict_ghost_position(self, track: TrackedObject) -> Tuple[int, int]:
-        """Predict where a ghost track should be based on last known velocity."""
-        cx, cy = track.center
-        vel = track.velocity
-        if vel is not None:
-            # Predict position based on velocity and frames since update
-            frames_ahead = track.time_since_update + 1
-            cx = int(cx + vel[0] * frames_ahead)
-            cy = int(cy + vel[1] * frames_ahead)
-        return (cx, cy)
+        """Return the last real observed position as the ghost's reference point.
+
+        Uses position_history[-1] (last actual detection), NOT track.center
+        which has been shifted by mark_missed() velocity predictions and would
+        cause massive overshoot when combined with further velocity projection
+        in _try_recover_ghosts().
+        """
+        if track.position_history:
+            return track.position_history[-1]
+        return track.center
 
     def _try_recover_ghosts(
         self,
@@ -1056,13 +1057,18 @@ class ConveyorTracker(ITracker):
             ghost_vel = ghost_info['last_velocity']
             lost_at = ghost_info['lost_at']
 
-            # Update predicted position based on elapsed time since loss
+            # Predict current position from last real observation + elapsed velocity
+            # predicted_pos is the last real observed position (from position_history)
             target_fps = getattr(self.config, 'target_fps', 25.0)
-            elapsed_frames = max(1, int((time.time() - lost_at) * target_fps))
+            elapsed_seconds = time.time() - lost_at
+            elapsed_frames = max(1, int(elapsed_seconds * target_fps))
+            # Cap velocity projection to avoid overshoot (max 1 second of projection)
+            max_projection_frames = int(target_fps)
+            projection_frames = min(elapsed_frames, max_projection_frames)
             pred_x, pred_y = ghost_info['predicted_pos']
             if ghost_vel is not None:
-                pred_x = int(pred_x + ghost_vel[0] * elapsed_frames * 0.5)
-                pred_y = int(pred_y + ghost_vel[1] * elapsed_frames * 0.5)
+                pred_x = int(pred_x + ghost_vel[0] * projection_frames)
+                pred_y = int(pred_y + ghost_vel[1] * projection_frames)
 
             best_det_idx = None
             best_dist = float('inf')

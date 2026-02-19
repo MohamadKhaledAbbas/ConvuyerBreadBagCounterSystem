@@ -32,7 +32,7 @@ def make_tracker(max_frames_without=5, ghost_max_age=4.0, frame_h=1000, frame_w=
     config.require_full_travel = True
     config.min_travel_duration_seconds = 0.0  # Disable time check for unit tests
     config.ghost_track_max_age_seconds = ghost_max_age
-    config.ghost_track_x_tolerance_pixels = 50.0
+    config.ghost_track_x_tolerance_pixels = 80.0
     config.ghost_track_max_y_gap_ratio = 0.2
     config.merge_bbox_growth_threshold = 1.4
     config.merge_spatial_tolerance_pixels = 50.0
@@ -192,9 +192,11 @@ def test_ghost_recovery():
         return False
     print(f"  T{track_id} in ghost buffer, predicted_pos={tracker.ghost_tracks[track_id]['predicted_pos']}")
 
-    # Bag reappears. Ghost predicted position is ~y=450-500 due to velocity prediction.
-    # Detection at y=500 should be within max_y_gap_ratio (20% of 1000 = 200px) tolerance
-    det = Detection(bbox=(450, 450, 550, 550), confidence=0.9, class_id=0)
+    # Bag reappears near the ghost's last real position (y=740).
+    # Ghost prediction uses last real observed position, so detection
+    # must be within max_y_gap_ratio (20% of 1000 = 200px) tolerance.
+    # y=650 is 90px above last observation — well within tolerance.
+    det = Detection(bbox=(450, 600, 550, 700), confidence=0.9, class_id=0)
     tracker.update([det])
 
     # Verify ghost was recovered with same track_id
@@ -204,7 +206,7 @@ def test_ghost_recovery():
             print(f"  ✓ PASS: T{track_id} recovered from ghost, recovery_count=1")
 
             # Now move to exit (center < 20)
-            for y in [400, 300, 200, 100, 10]:
+            for y in [500, 300, 200, 100, 10]:
                 det = Detection(bbox=(450, y-50, 550, y+50), confidence=0.9, class_id=0)
                 tracker.update([det])
 
@@ -502,7 +504,7 @@ def test_config_params():
     # New params
     new_params = [
         ('ghost_track_max_age_seconds', 4.0),
-        ('ghost_track_x_tolerance_pixels', 50.0),
+        ('ghost_track_x_tolerance_pixels', 80.0),
         ('ghost_track_max_y_gap_ratio', 0.2),
         ('merge_bbox_growth_threshold', 1.4),
         ('merge_spatial_tolerance_pixels', 50.0),

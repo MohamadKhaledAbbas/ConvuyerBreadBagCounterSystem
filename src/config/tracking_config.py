@@ -180,10 +180,11 @@ class TrackingConfig:
     when occluded bags reappear.
     """
 
-    ghost_track_x_tolerance_pixels: float = _parse_float_env("GHOST_TRACK_X_TOLERANCE_PIXELS", 50.0)
+    ghost_track_x_tolerance_pixels: float = _parse_float_env("GHOST_TRACK_X_TOLERANCE_PIXELS", 80.0)
     """
     X-axis tolerance (pixels) for ghost track re-association.
-    Bags don't move sideways on the conveyor, so X should be stable.
+    Bags primarily move vertically on conveyor, but camera perspective
+    causes slight horizontal shift (~50-80px over full frame travel).
     """
 
     ghost_track_max_y_gap_ratio: float = _parse_float_env("GHOST_TRACK_MAX_Y_GAP_RATIO", 0.2)
