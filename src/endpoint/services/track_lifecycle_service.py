@@ -118,10 +118,15 @@ class TrackLifecycleService:
         )
 
         # Get detail steps for each track (batch query)
+        # IMPORTANT: Pass time range to filter by current window (track_id is not unique across sessions)
         track_ids = [e['track_id'] for e in events]
         details_map = {}
         if track_ids:
-            details_map = self.repo.get_track_event_details_for_tracks(track_ids)
+            details_map = self.repo.get_track_event_details_for_tracks(
+                track_ids,
+                start_time=db_start,
+                end_time=db_end
+            )
 
         # Enrich events with their detail steps and parsed data
         for event in events:

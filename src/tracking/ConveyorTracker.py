@@ -213,26 +213,71 @@ class TrackedObject:
         )
     
     def mark_missed(self):
-        """Mark frame without detection."""
+        """Mark frame without detection.
+
+        ROBUST VELOCITY HANDLING:
+        - Requires minimum hits before trusting velocity for prediction
+        - Clamps velocity to reasonable conveyor speed limits
+        - Decays velocity confidence over missed frames
+        - Stops drifting after maximum missed frames
+        """
         self.time_since_update += 1
         self.age += 1
 
-        # Update predicted position in history based on velocity
-        # This helps maintain motion consistency even during missed detections
+        # Constants for robust velocity handling
+        MIN_HITS_FOR_VELOCITY = 8  # Need 8+ detections for reliable velocity
+        MAX_VEL_X = 15.0  # Max horizontal pixels/frame (conveyor mostly vertical)
+        MAX_VEL_Y = 50.0  # Max vertical pixels/frame
+        VELOCITY_DECAY = 0.9  # Decay velocity each missed frame
+        MAX_DRIFT_FRAMES = 10  # Stop drifting after this many frames
+
         vel = self.velocity
-        if vel is not None and len(self.position_history) > 0:
-            last_pos = self.position_history[-1]
-            predicted_pos = (
-                int(last_pos[0] + vel[0]),
-                int(last_pos[1] + vel[1])
-            )
-            # Don't add to history, but update bbox for next prediction
-            x1, y1, x2, y2 = self.bbox
-            self.bbox = (
-                int(x1 + vel[0]),
-                int(y1 + vel[1]),
-                int(x2 + vel[0]),
-                int(y2 + vel[1])
+        if vel is None or len(self.position_history) == 0:
+            return
+
+        # Check if we have enough history to trust velocity
+        if self.hits < MIN_HITS_FOR_VELOCITY:
+            if self.time_since_update == 1:
+                logger.info(
+                    f"[TRACK_DRIFT] T{self.track_id} NOT drifting | "
+                    f"hits={self.hits} < min={MIN_HITS_FOR_VELOCITY}, velocity not trusted"
+                )
+            return
+
+        # Stop drifting after too many missed frames
+        if self.time_since_update > MAX_DRIFT_FRAMES:
+            if self.time_since_update == MAX_DRIFT_FRAMES + 1:
+                logger.info(
+                    f"[TRACK_DRIFT] T{self.track_id} STOPPED drifting | "
+                    f"missed={self.time_since_update} > max={MAX_DRIFT_FRAMES}"
+                )
+            return
+
+        # Clamp velocity to reasonable limits
+        vx = max(-MAX_VEL_X, min(MAX_VEL_X, vel[0]))
+        vy = max(-MAX_VEL_Y, min(MAX_VEL_Y, vel[1]))
+
+        # Apply decay based on how many frames missed
+        decay_factor = VELOCITY_DECAY ** self.time_since_update
+        vx *= decay_factor
+        vy *= decay_factor
+
+        # Apply velocity to bbox
+        old_bbox = self.bbox
+        x1, y1, x2, y2 = self.bbox
+        self.bbox = (
+            int(x1 + vx),
+            int(y1 + vy),
+            int(x2 + vx),
+            int(y2 + vy)
+        )
+
+        # Log drift for debugging
+        if self.time_since_update <= 5 or self.time_since_update % 10 == 0:
+            logger.info(
+                f"[TRACK_DRIFT] T{self.track_id} frame #{self.time_since_update} | "
+                f"raw_vel=({vel[0]:.1f}, {vel[1]:.1f}) clamped=({vx:.1f}, {vy:.1f}) | "
+                f"center: {self.center}"
             )
 
 
@@ -1060,6 +1105,41 @@ class ConveyorTracker(ITracker):
             return track.position_history[-1]
         return track.center
 
+    def _get_conveyor_velocity(self) -> Tuple[float, float]:
+        """
+        Estimate conveyor velocity from all active tracks.
+
+        For a conveyor belt, objects move consistently in the same direction.
+        We use the average velocity from all stable tracks to get a reliable
+        conveyor speed estimate, rather than trusting individual track velocity
+        which may be noisy (especially for tracks with few detections).
+
+        Returns:
+            (vx, vy) where vx ≈ 0 (locked horizontal) and vy < 0 (moving toward top)
+        """
+        velocities = []
+        for track in self.tracks.values():
+            vel = track.velocity
+            # Only trust tracks with enough history and moving upward
+            if vel is not None and track.hits >= 8 and vel[1] < 0:
+                velocities.append(vel)
+
+        if not velocities:
+            # Default conveyor velocity (moving toward top at ~10 pixels/frame)
+            return (0.0, -10.0)
+
+        # Average velocity across all stable tracks
+        avg_vx = sum(v[0] for v in velocities) / len(velocities)
+        avg_vy = sum(v[1] for v in velocities) / len(velocities)
+
+        # Clamp X to near zero (conveyor moves vertically, not horizontally)
+        clamped_vx = max(-2.0, min(2.0, avg_vx))
+
+        # Ensure Y is negative (moving toward top) and reasonable
+        clamped_vy = max(-50.0, min(-3.0, avg_vy))
+
+        return (clamped_vx, clamped_vy)
+
     def _try_recover_ghosts(
         self,
         detections: List[Detection],
@@ -1068,10 +1148,11 @@ class ConveyorTracker(ITracker):
         """
         Try to re-associate unmatched detections with ghost tracks.
         
-        For each unmatched detection, check if it matches a ghost:
-        - X-axis within tolerance (bags don't move sideways)
-        - Y-axis within max gap and moved toward top
-        
+        CONVEYOR-SPECIFIC PREDICTION:
+        - Uses average conveyor velocity from all active tracks (not individual track velocity)
+        - X-axis is nearly locked (bread bags don't move sideways)
+        - Y-axis predicted based on consistent conveyor speed
+
         Returns the remaining set of unmatched detection indices.
         """
         if not self.ghost_tracks or not unmatched_dets:
@@ -1081,29 +1162,34 @@ class ConveyorTracker(ITracker):
         remaining_dets = set(unmatched_dets)
         ghosts_recovered = []
 
+        # Get conveyor velocity (stable estimate from all active tracks)
+        conveyor_vel = self._get_conveyor_velocity()
+
         for ghost_id, ghost_info in list(self.ghost_tracks.items()):
             ghost_track = ghost_info['track']
-            ghost_vel = ghost_info['last_velocity']
+            individual_vel = ghost_info['last_velocity']
             lost_at = ghost_info['lost_at']
+            original_pos = ghost_info['predicted_pos']
 
-            # Predict current position from last real observation + elapsed velocity
-            # predicted_pos is the last real observed position (from position_history)
+            # Predict current position using CONVEYOR velocity (not individual track velocity)
             target_fps = getattr(self.config, 'target_fps', 25.0)
             elapsed_seconds = time.time() - lost_at
             elapsed_frames = max(1, int(elapsed_seconds * target_fps))
-            # Cap velocity projection to avoid overshoot (max 1 second of projection)
-            max_projection_frames = int(target_fps)
-            projection_frames = min(elapsed_frames, max_projection_frames)
-            pred_x, pred_y = ghost_info['predicted_pos']
-            if ghost_vel is not None:
-                pred_x = int(pred_x + ghost_vel[0] * projection_frames)
-                pred_y = int(pred_y + ghost_vel[1] * projection_frames)
 
-            logger.debug(
-                f"[GHOST_RECOVERY] T{ghost_id} checking | "
-                f"stored_pos={ghost_info['predicted_pos']}, vel={ghost_vel}, "
-                f"elapsed={elapsed_seconds:.2f}s, proj_frames={projection_frames}, "
-                f"pred_pos=({pred_x}, {pred_y}), max_y_gap={max_y_gap}"
+            # Cap projection to avoid overshooting (max 2 seconds)
+            max_projection_frames = int(target_fps * 2)
+            projection_frames = min(elapsed_frames, max_projection_frames)
+
+            # Use conveyor velocity for prediction (X locked, Y toward top)
+            pred_x = int(original_pos[0] + conveyor_vel[0] * projection_frames)
+            pred_y = int(original_pos[1] + conveyor_vel[1] * projection_frames)
+
+            logger.info(
+                f"[GHOST_PREDICT] T{ghost_id} | "
+                f"original={original_pos}, elapsed={elapsed_seconds:.2f}s, "
+                f"conveyor_vel=({conveyor_vel[0]:.1f}, {conveyor_vel[1]:.1f}), "
+                f"individual_vel={f'({individual_vel[0]:.1f}, {individual_vel[1]:.1f})' if individual_vel else 'None'}, "
+                f"predicted=({pred_x}, {pred_y})"
             )
 
             best_det_idx = None
@@ -1114,7 +1200,7 @@ class ConveyorTracker(ITracker):
                 det_cx = (det.bbox[0] + det.bbox[2]) // 2
                 det_cy = (det.bbox[1] + det.bbox[3]) // 2
 
-                # X-axis tolerance check
+                # X-axis tolerance check (bags don't move sideways)
                 x_diff = abs(det_cx - pred_x)
                 if x_diff > self._ghost_x_tolerance:
                     logger.debug(
@@ -1185,14 +1271,21 @@ class ConveyorTracker(ITracker):
         for ghost_id in expired:
             ghost_info = self.ghost_tracks.pop(ghost_id)
             track = ghost_info['track']
+            original_pos = ghost_info['predicted_pos']  # Last REAL observed position
 
             # Build position history from checkpoints for DB storage
             final_position_history = list(track.checkpoint_positions)
 
-            # Include last known position if different from last checkpoint
-            last_position = track.center
-            if not final_position_history or final_position_history[-1] != last_position:
-                final_position_history.append(last_position)
+            # IMPORTANT: Use original_pos (last real detection), NOT track.center
+            # track.center may have drifted due to mark_missed() velocity predictions
+            last_real_position = original_pos if original_pos else track.center
+            if not final_position_history or final_position_history[-1] != last_real_position:
+                final_position_history.append(last_real_position)
+
+            # Log the drift for debugging
+            drifted_center = track.center
+            drift_x = drifted_center[0] - last_real_position[0]
+            drift_y = drifted_center[1] - last_real_position[1]
 
             # Finalize as track_lost (not counted)
             event = TrackEvent(
@@ -1217,7 +1310,8 @@ class ConveyorTracker(ITracker):
 
             logger.info(
                 f"[TRACK_LIFECYCLE] T{ghost_id} GHOST_EXPIRED | "
-                f"ghost expired after {self._ghost_max_age}s, finalized as track_lost"
+                f"expired after {self._ghost_max_age}s, exit_pos={last_real_position}, "
+                f"drift_was=({drift_x}, {drift_y})"
             )
 
     # =========================================================================

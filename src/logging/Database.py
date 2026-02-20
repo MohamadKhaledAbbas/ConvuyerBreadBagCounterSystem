@@ -759,6 +759,9 @@ class DatabaseManager:
         """
         Get the full lifecycle of a single track: summary + all detail steps.
 
+        WARNING: track_id is NOT unique across sessions. Use get_track_lifecycle_by_event_id()
+        for unambiguous lookups.
+
         Args:
             track_id: Track ID to look up
 
@@ -773,6 +776,49 @@ class DatabaseManager:
             row = cursor.fetchone()
             summary = dict(row) if row else None
         details = self.get_track_event_details(track_id=track_id)
+        return {
+            'summary': summary,
+            'details': details
+        }
+
+    def get_track_lifecycle_by_event_id(self, event_id: int) -> Dict[str, Any]:
+        """
+        Get the full lifecycle of a track by its UNIQUE event_id.
+
+        This is the recommended method for unambiguous track lookups since
+        track_id resets on each app restart.
+
+        Args:
+            event_id: Unique ID from track_events.id
+
+        Returns:
+            Dictionary with 'summary' (from track_events) and 'details' (from track_event_details)
+        """
+        with self._cursor() as cursor:
+            # Get the track event by unique ID
+            cursor.execute(
+                "SELECT * FROM track_events WHERE id = ?",
+                (event_id,)
+            )
+            row = cursor.fetchone()
+            if not row:
+                return {'summary': None, 'details': []}
+
+            summary = dict(row)
+            track_id = summary['track_id']
+            timestamp = summary['timestamp']
+
+            # Get details within a narrow time window around this event
+            # This ensures we only get details from this specific session
+            cursor.execute("""
+                SELECT * FROM track_event_details 
+                WHERE track_id = ? 
+                  AND timestamp >= datetime(?, '-1 minute')
+                  AND timestamp <= datetime(?, '+1 minute')
+                ORDER BY id ASC
+            """, (track_id, timestamp, timestamp))
+            details = [dict(r) for r in cursor.fetchall()]
+
         return {
             'summary': summary,
             'details': details

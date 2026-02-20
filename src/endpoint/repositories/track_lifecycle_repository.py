@@ -253,10 +253,20 @@ class TrackLifecycleRepository:
 
     def get_track_event_details_for_tracks(
         self,
-        track_ids: List[int]
+        track_ids: List[int],
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None
     ) -> Dict[int, List[Dict[str, Any]]]:
         """
         Get detail steps for a list of track IDs in a single batch query.
+
+        IMPORTANT: track_id is NOT unique across sessions (resets on app restart).
+        We must filter by timestamp to get only details within the current time window.
+
+        Args:
+            track_ids: List of track IDs to fetch details for
+            start_time: Start of time window (required for correct filtering)
+            end_time: End of time window (required for correct filtering)
 
         Returns:
             Dictionary mapping track_id -> list of detail steps
@@ -264,16 +274,24 @@ class TrackLifecycleRepository:
         if not track_ids:
             return {}
 
-        # Batch query for better performance
+        # Build query with timestamp filtering to avoid cross-session data
         placeholders = ','.join('?' * len(track_ids))
+        params = list(track_ids)
+
+        # Add timestamp filtering if provided (CRITICAL for session isolation)
+        time_filter = ""
+        if start_time and end_time:
+            time_filter = " AND timestamp >= ? AND timestamp <= ?"
+            params.extend([start_time.isoformat(), end_time.isoformat()])
+
         query = f"""
             SELECT * FROM track_event_details
-            WHERE track_id IN ({placeholders})
+            WHERE track_id IN ({placeholders}){time_filter}
             ORDER BY track_id, id ASC
         """
 
         with self.db._cursor() as cursor:
-            cursor.execute(query, track_ids)
+            cursor.execute(query, params)
             rows = [dict(row) for row in cursor.fetchall()]
 
         # Group by track_id

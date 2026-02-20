@@ -199,10 +199,41 @@ async def track_events_stats_api(
         raise HTTPException(500, str(e))
 
 
+@router.get("/track-events/by-event/{event_id}", response_class=JSONResponse)
+async def track_lifecycle_by_event_id(event_id: int):
+    """
+    Get full lifecycle for a track by its UNIQUE event_id.
+
+    This is the recommended endpoint for unambiguous track lookups since
+    track_id resets on each app restart. The event_id is the unique
+    primary key from the track_events table.
+
+    Args:
+        event_id: Unique ID from track_events.id (shown in the events table)
+
+    Returns:
+        Summary + all detail steps for this specific track event
+    """
+    db = get_db()
+    try:
+        data = db.get_track_lifecycle_by_event_id(event_id)
+        if data['summary'] is None:
+            raise HTTPException(404, f"Event {event_id} not found")
+        return data
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f'[TrackEvents] Event detail error: {e}', exc_info=True)
+        raise HTTPException(500, str(e))
+
+
 @router.get("/track-events/{track_id}", response_class=JSONResponse)
 async def track_lifecycle_detail(track_id: int):
     """
     Get full lifecycle for a single track as JSON.
+
+    WARNING: track_id is NOT unique across sessions (resets on app restart).
+    Use /track-events/by-event/{event_id} for unambiguous lookups.
 
     Returns summary + all detail steps for debugging.
     """
