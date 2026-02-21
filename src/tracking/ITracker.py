@@ -148,6 +148,28 @@ class ITracker(ABC):
         pass
 
     @abstractmethod
+    def get_statistics(self) -> Dict:
+        """
+        Get tracker statistics for UI display and diagnostics.
+
+        Returns:
+            Dict with statistics (implementation-specific keys)
+        """
+        pass
+
+    def get_ghost_tracks_for_visualization(self) -> List[Dict]:
+        """
+        Get ghost track data for visualization (optional).
+
+        Default implementation returns empty list.
+        Subclasses can override to provide ghost track visualization data.
+
+        Returns:
+            List of ghost track info dicts
+        """
+        return []
+
+    @abstractmethod
     def cleanup(self):
         """Release tracker resources."""
         pass
