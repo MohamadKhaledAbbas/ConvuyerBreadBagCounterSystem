@@ -1221,7 +1221,7 @@ class ConveyorTracker(ITracker):
                     logger.debug(
                         f"[GHOST_RECOVERY] T{ghost_id} reject det_idx={det_idx} | "
                         f"y_gap={abs(det_cy - pred_y)} > max_y_gap={max_y_gap} "
-                        f"(det_cy={det_cy}, pred_y={pred_y}, vel={ghost_vel})"
+                        f"(det_cy={det_cy}, pred_y={pred_y})"
                     )
                     continue
 

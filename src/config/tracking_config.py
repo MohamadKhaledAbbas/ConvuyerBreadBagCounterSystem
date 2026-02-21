@@ -103,7 +103,7 @@ class TrackingConfig:
     max_active_tracks: int = _parse_int_env("MAX_ACTIVE_TRACKS", 20)
     """Maximum concurrent tracks to prevent memory issues."""
     
-    exit_margin_pixels: int = _parse_int_env("EXIT_MARGIN_PIXELS", 70)
+    exit_margin_pixels: int = _parse_int_env("EXIT_MARGIN_PIXELS", 30)
     """
     Margin from frame edge to consider a track as exiting.
     Objects within this margin are considered to be leaving the frame.
