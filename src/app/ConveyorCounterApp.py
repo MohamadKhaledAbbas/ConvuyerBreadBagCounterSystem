@@ -484,6 +484,13 @@ class ConveyorCounterApp:
             'lost_track_count': self.state.lost_track_count
         }
 
+        # Add tracker statistics if available
+        if hasattr(self._pipeline_core, 'tracker') and self._pipeline_core.tracker:
+            tracker_stats = self._pipeline_core.tracker.get_statistics()
+            debug_info['tracks_created'] = tracker_stats.get('tracks_created', 0)
+            debug_info['duplicates_prevented'] = tracker_stats.get('duplicates_prevented', 0)
+            debug_info['ghost_tracks'] = tracker_stats.get('ghost_tracks', 0)
+
         # Store detection data for on-demand snapshot annotation
         self._last_detections = detections
         self._last_tracks = active_tracks
@@ -491,6 +498,11 @@ class ConveyorCounterApp:
 
         # Visualization (if display enabled)
         if self.enable_display and self._pipeline_visualizer:
+            # Get ghost tracks for visualization
+            ghost_tracks = None
+            if hasattr(self._pipeline_core, 'tracker') and self._pipeline_core.tracker:
+                ghost_tracks = self._pipeline_core.tracker.get_ghost_tracks_for_visualization()
+
             frame = self._pipeline_visualizer.annotate_frame(
                 frame=frame,
                 detections=detections,
@@ -499,7 +511,8 @@ class ConveyorCounterApp:
                 active_tracks=self.state.active_tracks,
                 total_counted=self.state.total_counted,
                 counts_by_class=self.state.get_counts_snapshot(),
-                debug_info=debug_info
+                debug_info=debug_info,
+                ghost_tracks=ghost_tracks
             )
 
         return frame
@@ -813,6 +826,11 @@ class ConveyorCounterApp:
             # Create annotated version on-demand for snapshot
             frame_with_overlay = annotated_frame
             if not self.enable_display and self._pipeline_visualizer is not None:
+                # Get ghost tracks for visualization
+                ghost_tracks = None
+                if hasattr(self._pipeline_core, 'tracker') and self._pipeline_core.tracker:
+                    ghost_tracks = self._pipeline_core.tracker.get_ghost_tracks_for_visualization()
+
                 # Create annotated frame on-demand
                 frame_with_overlay = self._pipeline_visualizer.annotate_frame(
                     frame=frame.copy(),  # Copy to avoid modifying original
@@ -822,7 +840,8 @@ class ConveyorCounterApp:
                     active_tracks=self.state.active_tracks,
                     total_counted=self.state.total_counted,
                     counts_by_class=self.state.get_counts_snapshot(),
-                    debug_info=self._last_debug_info
+                    debug_info=self._last_debug_info,
+                    ghost_tracks=ghost_tracks
                 )
 
             # Capture snapshot

@@ -231,7 +231,8 @@ class PipelineVisualizer:
         active_tracks: int,
         total_counted: int,
         counts_by_class: Dict[str, int],
-        debug_info: Optional[Dict] = None
+        debug_info: Optional[Dict] = None,
+        ghost_tracks: Optional[List[Dict]] = None
     ) -> np.ndarray:
         """
         Draw all annotations on frame including debug panel.
@@ -245,6 +246,7 @@ class PipelineVisualizer:
             total_counted: Total bags counted (CONFIRMED)
             counts_by_class: Count per class (CONFIRMED)
             debug_info: Optional debug information dict including tentative counts
+            ghost_tracks: Optional list of ghost track info for visualization
 
         Returns:
             Annotated frame
@@ -257,13 +259,21 @@ class PipelineVisualizer:
         # Draw tracks (colored boxes with IDs and info)
         self._draw_tracks(annotated, tracks)
 
+        # Draw ghost tracks (predicted positions with dashed lines)
+        if ghost_tracks:
+            self._draw_ghost_tracks(annotated, ghost_tracks)
+
         # Draw main status overlay (top-left)
         tentative_total = debug_info.get('tentative_total', 0) if debug_info else 0
         tentative_counts = debug_info.get('tentative_counts', {}) if debug_info else {}
         lost_track_count = debug_info.get('lost_track_count', 0) if debug_info else 0
+        tracks_created = debug_info.get('tracks_created', 0) if debug_info else 0
+        duplicates_prevented = debug_info.get('duplicates_prevented', 0) if debug_info else 0
+        ghost_tracks_count = debug_info.get('ghost_tracks', 0) if debug_info else 0
         self._draw_status(
             annotated, fps, active_tracks, total_counted, counts_by_class,
-            tentative_total, tentative_counts, lost_track_count
+            tentative_total, tentative_counts, lost_track_count,
+            tracks_created, duplicates_prevented, ghost_tracks_count
         )
 
         # Draw pipeline debug panel (right side)
@@ -405,6 +415,120 @@ class PipelineVisualizer:
                 pts = np.array(list(track.position_history), dtype=np.int32)
                 cv2.polylines(frame, [pts], False, color, 2)
 
+    def _draw_ghost_tracks(self, frame: np.ndarray, ghost_tracks: List[Dict]):
+        """
+        Draw ghost tracks with predicted positions.
+
+        Shows where the tracker expects each ghost to be based on conveyor velocity.
+        Uses dashed lines and semi-transparent styling to distinguish from active tracks.
+
+        Args:
+            frame: Frame to draw on
+            ghost_tracks: List of ghost track info from tracker.get_ghost_tracks_for_visualization()
+        """
+        ghost_color = (100, 100, 255)  # Light red/pink for ghosts
+        prediction_color = (255, 150, 100)  # Light blue for predicted path
+
+        for ghost in ghost_tracks:
+            track_id = ghost['track_id']
+            pred_bbox = ghost['predicted_bbox']
+            original_pos = ghost['original_pos']
+            predicted_pos = ghost['predicted_pos']
+            elapsed = ghost['elapsed_seconds']
+            velocity = ghost['velocity']
+            hits = ghost['hits']
+
+            x1, y1, x2, y2 = pred_bbox
+
+            # Skip if bbox is completely off-screen
+            frame_h, frame_w = frame.shape[:2]
+            if x2 < 0 or x1 > frame_w or y2 < 0 or y1 > frame_h:
+                continue
+
+            # Draw dashed rectangle for predicted position
+            # Using dotted line effect
+            dash_length = 8
+            gap_length = 6
+
+            # Draw dashed box edges
+            def draw_dashed_line(pt1, pt2, color, thickness=2):
+                dist = int(np.sqrt((pt2[0] - pt1[0])**2 + (pt2[1] - pt1[1])**2))
+                if dist == 0:
+                    return
+                dx = (pt2[0] - pt1[0]) / dist
+                dy = (pt2[1] - pt1[1]) / dist
+                i = 0
+                while i < dist:
+                    start_x = int(pt1[0] + i * dx)
+                    start_y = int(pt1[1] + i * dy)
+                    end_i = min(i + dash_length, dist)
+                    end_x = int(pt1[0] + end_i * dx)
+                    end_y = int(pt1[1] + end_i * dy)
+                    cv2.line(frame, (start_x, start_y), (end_x, end_y), color, thickness)
+                    i += dash_length + gap_length
+
+            # Draw the dashed rectangle
+            draw_dashed_line((x1, y1), (x2, y1), ghost_color)  # Top
+            draw_dashed_line((x2, y1), (x2, y2), ghost_color)  # Right
+            draw_dashed_line((x2, y2), (x1, y2), ghost_color)  # Bottom
+            draw_dashed_line((x1, y2), (x1, y1), ghost_color)  # Left
+
+            # Draw line from original position to predicted position
+            cv2.arrowedLine(
+                frame,
+                (int(original_pos[0]), int(original_pos[1])),
+                (int(predicted_pos[0]), int(predicted_pos[1])),
+                prediction_color,
+                2,
+                tipLength=0.2
+            )
+
+            # Draw small circle at original position
+            cv2.circle(frame, (int(original_pos[0]), int(original_pos[1])), 5, ghost_color, -1)
+
+            # Label with ghost info
+            label = f"GHOST T{track_id} ({elapsed:.1f}s)"
+
+            # Show velocity info with source indicator
+            vel_source = ghost.get('velocity_source', 'default')
+            learned_vel = ghost.get('learned_velocity_px_sec')
+            if vel_source == 'learned' and learned_vel:
+                vel_label = f"vel={velocity[1]:.1f}px/f (learned: {learned_vel:.0f}px/s)"
+            else:
+                vel_label = f"vel={velocity[1]:.1f}px/f (default)"
+
+            text_size = cv2.getTextSize(label, self.FONT, self.FONT_SCALE_SMALL, 1)[0]
+            label_y = y1 - 25
+            if label_y < 20:
+                label_y = y2 + 20
+
+            # Background for label - wider to fit velocity info
+            vel_text_size = cv2.getTextSize(vel_label, self.FONT, self.FONT_SCALE_SMALL, 1)[0]
+            bg_width = max(text_size[0], vel_text_size[0]) + 12
+            cv2.rectangle(
+                frame,
+                (x1, label_y - text_size[1] - 4),
+                (x1 + bg_width, label_y + 18),
+                (40, 40, 50),
+                -1
+            )
+
+            # Ghost label
+            cv2.putText(
+                frame, label,
+                (x1 + 4, label_y),
+                self.FONT, self.FONT_SCALE_SMALL,
+                ghost_color, 1
+            )
+
+            # Velocity label below
+            cv2.putText(
+                frame, vel_label,
+                (x1 + 4, label_y + 14),
+                self.FONT, self.FONT_SCALE_SMALL,
+                prediction_color, 1
+            )
+
     def _draw_status(
         self,
         frame: np.ndarray,
@@ -414,13 +538,16 @@ class PipelineVisualizer:
         counts_by_class: Dict[str, int],
         tentative_total: int,
         tentative_counts: Dict[str, int],
-        lost_track_count: int = 0
+        lost_track_count: int = 0,
+        tracks_created: int = 0,
+        duplicates_prevented: int = 0,
+        ghost_tracks: int = 0
     ):
         """Draw main status panel with clean modern design."""
         # Calculate panel dimensions
         num_classes = max(len(counts_by_class), 1)
         panel_w = 280
-        panel_h = 380 + (num_classes * self.LINE_HEIGHT_SMALL)  # Increased height for new info
+        panel_h = 420 + (num_classes * self.LINE_HEIGHT_SMALL)  # Increased height for new info
         panel_x = 15
         panel_y = 15
 
@@ -474,7 +601,35 @@ class PipelineVisualizer:
             self.FONT, self.FONT_SCALE_MEDIUM,
             self.COLORS['text_error'], self.FONT_WEIGHT_NORMAL
         )
-        y += self.LINE_HEIGHT_MEDIUM + 10
+        y += self.LINE_HEIGHT_MEDIUM
+
+        # Tracks created (total tracks created this session)
+        cv2.putText(
+            frame, f"Tracks Created: {tracks_created}", (x, y + 12),
+            self.FONT, self.FONT_SCALE_MEDIUM,
+            self.COLORS['text_secondary'], self.FONT_WEIGHT_NORMAL
+        )
+        y += self.LINE_HEIGHT_MEDIUM
+
+        # Duplicates prevented (artifact tracks prevented)
+        if duplicates_prevented > 0:
+            cv2.putText(
+                frame, f"Duplicates Prevented: {duplicates_prevented}", (x, y + 12),
+                self.FONT, self.FONT_SCALE_MEDIUM,
+                self.COLORS['text_success'], self.FONT_WEIGHT_NORMAL
+            )
+            y += self.LINE_HEIGHT_MEDIUM
+
+        # Ghost tracks (currently in recovery buffer)
+        if ghost_tracks > 0:
+            cv2.putText(
+                frame, f"Ghost Tracks: {ghost_tracks}", (x, y + 12),
+                self.FONT, self.FONT_SCALE_MEDIUM,
+                self.COLORS['text_warning'], self.FONT_WEIGHT_NORMAL
+            )
+            y += self.LINE_HEIGHT_MEDIUM
+
+        y += 10
 
         # Divider
         cv2.line(frame, (x, y), (panel_x + panel_w - self.PANEL_PADDING, y),

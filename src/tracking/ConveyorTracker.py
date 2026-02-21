@@ -91,6 +91,9 @@ class TrackedObject:
     created_at: float = field(default_factory=time.time)
     last_seen_at: float = field(default_factory=time.time)
     
+    # Last detected position (for ghost recovery - guaranteed to be from a detection, not drift)
+    last_detected_position: Optional[Tuple[int, int]] = None
+
     # Classification tracking
     classified: bool = False
 
@@ -172,6 +175,9 @@ class TrackedObject:
         self.time_since_update = 0
         self.last_seen_at = time.time()
         
+        # Store the last detected position (guaranteed to be from actual detection)
+        self.last_detected_position = self.center
+
         # Update history (deque automatically maintains maxlen)
         self.position_history.append(self.center)
         self.bbox_history.append(self.bbox)
@@ -216,16 +222,20 @@ class TrackedObject:
         """Mark frame without detection.
 
         ROBUST VELOCITY HANDLING:
-        - Requires minimum hits before trusting velocity for prediction
+        - For individual track drift during active tracking, require minimum hits
         - Clamps velocity to reasonable conveyor speed limits
         - Decays velocity confidence over missed frames
         - Stops drifting after maximum missed frames
+
+        Note: Ghost prediction uses _get_conveyor_velocity() which is more reliable
+        than individual track velocity.
         """
         self.time_since_update += 1
         self.age += 1
 
-        # Constants for robust velocity handling
-        MIN_HITS_FOR_VELOCITY = 8  # Need 8+ detections for reliable velocity
+        # Constants for robust velocity handling during active tracking
+        # Lower threshold since we use conveyor velocity for ghost recovery
+        MIN_HITS_FOR_VELOCITY = 4  # Need 4+ detections for individual track drift
         MAX_VEL_X = 15.0  # Max horizontal pixels/frame (conveyor mostly vertical)
         MAX_VEL_Y = 50.0  # Max vertical pixels/frame
         VELOCITY_DECAY = 0.9  # Decay velocity each missed frame
@@ -235,7 +245,7 @@ class TrackedObject:
         if vel is None or len(self.position_history) == 0:
             return
 
-        # Check if we have enough history to trust velocity
+        # Check if we have enough history to trust velocity for drift
         if self.hits < MIN_HITS_FOR_VELOCITY:
             if self.time_since_update == 1:
                 logger.info(
@@ -378,6 +388,13 @@ class ConveyorTracker(ITracker):
         self._ghost_max_age = getattr(self.config, 'ghost_track_max_age_seconds', 4.0)
         self._ghost_x_tolerance = getattr(self.config, 'ghost_track_x_tolerance_pixels', 50.0)
         self._ghost_max_y_gap_ratio = getattr(self.config, 'ghost_track_max_y_gap_ratio', 0.2)
+        self._last_conveyor_velocity: Optional[Tuple[float, float]] = None  # Historical velocity estimate
+
+        # Learned conveyor velocity (FPS-independent, stored in pixels/second)
+        # This is learned from completed tracks that traveled from center to top
+        self._learned_velocity_px_per_sec: Optional[float] = None  # Y velocity in pixels/second
+        self._velocity_samples: List[float] = []  # Recent velocity samples (px/sec)
+        self._max_velocity_samples = 20  # Keep last N samples for averaging
 
         # Shadow/merge config
         self._merge_bbox_growth = getattr(self.config, 'merge_bbox_growth_threshold', 1.4)
@@ -389,6 +406,10 @@ class ConveyorTracker(ITracker):
         self._thrown_entry_min_velocity = getattr(self.config, 'thrown_entry_min_velocity', 15.0)
         self._thrown_entry_detection_frames = getattr(self.config, 'thrown_entry_detection_frames', 5)
 
+        # Statistics counters
+        self._duplicates_prevented = 0  # Count of prevented duplicate tracks
+        self._tracks_created = 0  # Total tracks actually created
+
         # Log configuration
         multi_criteria = getattr(self.config, 'use_multi_criteria_matching', True)
 
@@ -399,7 +420,72 @@ class ConveyorTracker(ITracker):
             f"multi_criteria={multi_criteria}, second_stage={self._use_second_stage}, "
             f"ghost_max_age={self._ghost_max_age}s, merge_growth={self._merge_bbox_growth}"
         )
-    
+
+    def get_ghost_tracks_for_visualization(self) -> List[Dict]:
+        """
+        Get ghost track data for visualization.
+
+        Returns a list of ghost track info with predicted positions based on
+        conveyor velocity, so the UI can show where the ghost is expected to be.
+
+        Returns:
+            List of dicts with: track_id, predicted_bbox, original_pos, elapsed_seconds, velocity
+        """
+        if not self.ghost_tracks:
+            return []
+
+        result = []
+        conveyor_vel = self._get_conveyor_velocity()
+        target_fps = getattr(self.config, 'target_fps', 17.0)
+        now = time.time()
+
+        for ghost_id, ghost_info in self.ghost_tracks.items():
+            track = ghost_info['track']
+            original_pos = ghost_info['predicted_pos']
+            lost_at = ghost_info['lost_at']
+
+            # Calculate elapsed time and frames
+            elapsed_seconds = now - lost_at
+            elapsed_frames = max(1, int(elapsed_seconds * target_fps))
+
+            # Cap projection to avoid overshooting (max 2 seconds)
+            max_projection_frames = int(target_fps * 2)
+            projection_frames = min(elapsed_frames, max_projection_frames)
+
+            # Predict current position using conveyor velocity
+            pred_x = int(original_pos[0] + conveyor_vel[0] * projection_frames)
+            pred_y = int(original_pos[1] + conveyor_vel[1] * projection_frames)
+
+            # Get original bbox dimensions to create predicted bbox
+            orig_bbox = track.bbox
+            width = orig_bbox[2] - orig_bbox[0]
+            height = orig_bbox[3] - orig_bbox[1]
+
+            # Create predicted bbox centered at predicted position
+            pred_bbox = (
+                pred_x - width // 2,
+                pred_y - height // 2,
+                pred_x + width // 2,
+                pred_y + height // 2
+            )
+
+            result.append({
+                'track_id': ghost_id,
+                'predicted_bbox': pred_bbox,
+                'original_pos': original_pos,
+                'predicted_pos': (pred_x, pred_y),
+                'elapsed_seconds': elapsed_seconds,
+                'elapsed_frames': elapsed_frames,
+                'projection_frames': projection_frames,
+                'velocity': conveyor_vel,
+                'hits': track.hits,
+                'learned_velocity_px_sec': self._learned_velocity_px_per_sec,
+                'velocity_source': 'learned' if self._learned_velocity_px_per_sec else 'default',
+                'missed_frames_before_ghost': ghost_info.get('missed_frames_before_ghost', 0)
+            })
+
+        return result
+
     def _compute_cost_matrix(
         self,
         tracks: List[TrackedObject],
@@ -916,13 +1002,68 @@ class ConveyorTracker(ITracker):
         # Check if detection is already in exit zone (top or bottom)
         # Don't create tracks for objects that are about to leave - they won't have time
         # to accumulate enough hits and will just create unnecessary "track_lost" events
-        _, cy = temp_track.center
+        cx, cy = temp_track.center
 
         if self._is_in_exit_zone(cy):
             return None
 
         if self._is_in_bottom_exit_zone(cy):
             return None
+
+        # DUPLICATE PREVENTION: Don't create new track if an existing track is very close
+        # This prevents detector glitches from creating multiple tracks for the same object
+        # when two bags overlap and detector reports multiple detections
+        #
+        # Check against:
+        # 1. Active tracks
+        # 2. Shadow tracks (attached to active tracks)
+        # 3. Ghost tracks (recently lost, may recover)
+
+        # Collect all positions to check against
+        all_existing_positions = []
+
+        # Active tracks
+        for existing_track in self.tracks.values():
+            all_existing_positions.append((existing_track.track_id, existing_track.center, "active"))
+            # Also check shadows attached to this track
+            for shadow_id, shadow in existing_track.shadow_tracks.items():
+                # Use predicted position for shadow based on conveyor velocity
+                shadow_pos = shadow.last_detected_position or shadow.center
+                all_existing_positions.append((shadow_id, shadow_pos, "shadow"))
+
+        # Ghost tracks (with predicted positions)
+        conveyor_vel = self._get_conveyor_velocity()
+        target_fps = getattr(self.config, 'target_fps', 17.0)
+        now = time.time()
+        for ghost_id, ghost_info in self.ghost_tracks.items():
+            original_pos = ghost_info['predicted_pos']
+            lost_at = ghost_info['lost_at']
+            elapsed_seconds = now - lost_at
+            elapsed_frames = int(elapsed_seconds * target_fps)
+            # Predict where ghost should be now
+            pred_x = int(original_pos[0] + conveyor_vel[0] * elapsed_frames)
+            pred_y = int(original_pos[1] + conveyor_vel[1] * elapsed_frames)
+            all_existing_positions.append((ghost_id, (pred_x, pred_y), "ghost"))
+
+        # Check if new detection is too close to any existing position
+        # Use slightly larger tolerance than merge to catch edge cases
+        dup_x_tol = self._merge_spatial_tol * 1.5  # 75 pixels typically
+        dup_y_tol = self._merge_y_tol * 2.0  # 60 pixels typically (bags can be 30-50px apart vertically)
+
+        for track_id, (ex_cx, ex_cy), track_type in all_existing_positions:
+            x_gap = abs(cx - ex_cx)
+            y_gap = abs(cy - ex_cy)
+
+            # If very close (within duplicate tolerance), don't create new track
+            if x_gap <= dup_x_tol and y_gap <= dup_y_tol:
+                self._duplicates_prevented += 1
+                logger.info(
+                    f"[TRACK_LIFECYCLE] DUPLICATE_PREVENTED | "
+                    f"detection at ({cx}, {cy}) too close to T{track_id} ({track_type}) "
+                    f"at ({ex_cx}, {ex_cy}), gap=({x_gap}, {y_gap}), "
+                    f"total_prevented={self._duplicates_prevented}"
+                )
+                return None
 
         # Determine initial entry type based on Y position
         entry_type = "bottom_entry"
@@ -946,13 +1087,15 @@ class ConveyorTracker(ITracker):
         track.entry_center_y = track.center[1]
         track.entry_center = track.center  # Store full entry position
         track.checkpoint_positions.append(track.center)  # First checkpoint = entry point
+        track.last_detected_position = track.center  # Initialize last detected position
 
         self.tracks[self._next_id] = track
+        self._tracks_created += 1
 
         logger.info(
             f"[TRACK_LIFECYCLE] T{self._next_id} CREATED | "
             f"bbox={detection.bbox} center={track.center} conf={detection.confidence:.2f} "
-            f"entry_type={entry_type}"
+            f"entry_type={entry_type}, total_created={self._tracks_created}"
         )
 
         self._next_id += 1
@@ -1045,6 +1188,10 @@ class ConveyorTracker(ITracker):
                 if event_type == 'track_completed' and track.shadow_tracks:
                     self._complete_with_shadows(track, exit_dir)
 
+                # Learn conveyor velocity from this completed track
+                if event_type == 'track_completed' and exit_dir == 'top':
+                    self._learn_conveyor_velocity(track, event.duration_seconds)
+
                 logger.info(
                     f"[TRACK_LIFECYCLE] T{track_id} COMPLETED | "
                     f"type={event_type} exit={exit_dir} hits={track.hits} missed={track.time_since_update} "
@@ -1077,68 +1224,208 @@ class ConveyorTracker(ITracker):
         if track is None:
             return
 
-        # Predict where the ghost should be
+        # Predict where the ghost should be (uses last_detected_position)
         predicted_pos = self._predict_ghost_position(track)
+
+        # Log discrepancy between detected position and drifted center for debugging
+        drifted_center = track.center
+        last_detected = track.last_detected_position or predicted_pos
+
+        # IMPORTANT: Use track.last_seen_at (when last detected) NOT time.time()
+        # This accounts for the max_frames_without_detection waiting period.
+        # If we use time.time(), we'd miss the distance the object traveled
+        # during the waiting frames before being declared lost.
+        last_detection_time = track.last_seen_at
+        missed_frames = track.time_since_update
 
         self.ghost_tracks[track_id] = {
             'track': track,
-            'lost_at': time.time(),
+            'lost_at': last_detection_time,  # When we LAST SAW it, not now
             'predicted_pos': predicted_pos,
-            'last_velocity': track.velocity
+            'last_velocity': track.velocity,
+            'missed_frames_before_ghost': missed_frames  # For debugging
         }
 
         logger.info(
             f"[TRACK_LIFECYCLE] T{track_id} GHOST | "
-            f"moved to ghost buffer, predicted_pos={predicted_pos}, "
+            f"last_detected={last_detected}, drifted_to={drifted_center}, "
+            f"using_pos={predicted_pos}, missed_frames={missed_frames}, "
             f"will expire in {self._ghost_max_age}s"
+        )
+
+    def _learn_conveyor_velocity(self, track: TrackedObject, duration_seconds: float):
+        """
+        Learn conveyor velocity from a successfully completed track.
+
+        Uses the center-to-exit portion of the track's journey for stable measurement,
+        since the bottom portion may have detection instability.
+
+        Stores velocity in PIXELS PER SECOND (FPS-independent) so it works
+        correctly regardless of camera FPS changes.
+
+        Args:
+            track: The completed track
+            duration_seconds: Total track duration
+        """
+        if not track.position_history or len(track.position_history) < 5:
+            return
+
+        if not self.frame_height or duration_seconds <= 0:
+            return
+
+        positions = list(track.position_history)
+
+        # Find positions in the "stable zone" (center to top of frame)
+        # Use positions where Y < 60% of frame height (upper portion)
+        center_y_threshold = self.frame_height * 0.6  # 432 for 720p
+        exit_y_threshold = self.frame_height * 0.15   # 108 for 720p (near top)
+
+        # Filter to positions in the stable center-to-exit zone
+        stable_positions = [
+            pos for pos in positions
+            if exit_y_threshold < pos[1] < center_y_threshold
+        ]
+
+        if len(stable_positions) < 3:
+            # Not enough positions in stable zone, use full track
+            stable_positions = positions
+
+        if len(stable_positions) < 2:
+            return
+
+        # Calculate Y displacement in stable zone
+        start_pos = stable_positions[0]
+        end_pos = stable_positions[-1]
+
+        y_displacement = end_pos[1] - start_pos[1]  # Should be negative (moving up)
+
+        if y_displacement >= 0:
+            # Track moved down or didn't move, invalid
+            return
+
+        # Estimate time spent in stable zone based on proportion of positions
+        stable_proportion = len(stable_positions) / len(positions)
+        stable_duration = duration_seconds * stable_proportion
+
+        if stable_duration <= 0.1:
+            return
+
+        # Calculate velocity in pixels per second
+        vy_px_per_sec = y_displacement / stable_duration
+
+        # Sanity check: velocity should be reasonable
+        # At 720p, typical velocity is ~140 px/sec (8.2 px/frame * 17 fps)
+        # Allow range of 80-250 px/sec
+        if not (-250 < vy_px_per_sec < -80):
+            logger.debug(
+                f"[VELOCITY_LEARN] T{track.track_id} rejected | "
+                f"vy={vy_px_per_sec:.1f} px/sec out of range"
+            )
+            return
+
+        # Add to samples
+        self._velocity_samples.append(vy_px_per_sec)
+
+        # Keep only last N samples
+        if len(self._velocity_samples) > self._max_velocity_samples:
+            self._velocity_samples = self._velocity_samples[-self._max_velocity_samples:]
+
+        # Update learned velocity (exponential moving average)
+        if self._learned_velocity_px_per_sec is None:
+            self._learned_velocity_px_per_sec = vy_px_per_sec
+        else:
+            alpha = 0.3  # Smoothing factor
+            self._learned_velocity_px_per_sec = (
+                alpha * vy_px_per_sec +
+                (1 - alpha) * self._learned_velocity_px_per_sec
+            )
+
+        logger.info(
+            f"[VELOCITY_LEARN] T{track.track_id} | "
+            f"sample={vy_px_per_sec:.1f} px/sec, "
+            f"learned={self._learned_velocity_px_per_sec:.1f} px/sec, "
+            f"samples={len(self._velocity_samples)}"
         )
 
     def _predict_ghost_position(self, track: TrackedObject) -> Tuple[int, int]:
         """Return the last real observed position as the ghost's reference point.
 
-        Uses position_history[-1] (last actual detection), NOT track.center
-        which has been shifted by mark_missed() velocity predictions and would
-        cause massive overshoot when combined with further velocity projection
-        in _try_recover_ghosts().
+        Uses track.last_detected_position which is guaranteed to be set from
+        an actual detection (not from drift predictions).
+
+        Falls back to position_history[-1] or track.center if not available.
         """
+        # Priority 1: Use dedicated last_detected_position (most reliable)
+        if track.last_detected_position is not None:
+            return track.last_detected_position
+
+        # Priority 2: Use position_history (should contain only detected positions)
         if track.position_history:
             return track.position_history[-1]
+
+        # Priority 3: Fallback to current center (may be drifted)
         return track.center
 
     def _get_conveyor_velocity(self) -> Tuple[float, float]:
         """
-        Estimate conveyor velocity from all active tracks.
+        Estimate conveyor velocity for ghost prediction.
 
-        For a conveyor belt, objects move consistently in the same direction.
-        We use the average velocity from all stable tracks to get a reliable
-        conveyor speed estimate, rather than trusting individual track velocity
-        which may be noisy (especially for tracks with few detections).
+        Priority order:
+        1. Average of active tracks with reliable velocity
+        2. Learned velocity from completed tracks (FPS-independent)
+        3. Historical estimate from previous frames
+        4. Frame-based calculation using learned or default values
 
         Returns:
-            (vx, vy) where vx ≈ 0 (locked horizontal) and vy < 0 (moving toward top)
+            (vx, vy) in PIXELS PER FRAME where vx ≈ 0 and vy < 0 (moving toward top)
         """
+        target_fps = getattr(self.config, 'target_fps', 17.0)
+
+        # Priority 1: Use active tracks if available
         velocities = []
         for track in self.tracks.values():
             vel = track.velocity
-            # Only trust tracks with enough history and moving upward
-            if vel is not None and track.hits >= 8 and vel[1] < 0:
+            # Include tracks with 4+ hits that are moving upward
+            if vel is not None and track.hits >= 4 and vel[1] < 0:
                 velocities.append(vel)
 
-        if not velocities:
-            # Default conveyor velocity (moving toward top at ~10 pixels/frame)
-            return (0.0, -10.0)
+        if velocities:
+            # Average velocity across all contributing tracks
+            avg_vx = sum(v[0] for v in velocities) / len(velocities)
+            avg_vy = sum(v[1] for v in velocities) / len(velocities)
 
-        # Average velocity across all stable tracks
-        avg_vx = sum(v[0] for v in velocities) / len(velocities)
-        avg_vy = sum(v[1] for v in velocities) / len(velocities)
+            # Clamp X to near zero (conveyor moves vertically)
+            clamped_vx = max(-2.0, min(2.0, avg_vx))
 
-        # Clamp X to near zero (conveyor moves vertically, not horizontally)
-        clamped_vx = max(-2.0, min(2.0, avg_vx))
+            # Ensure Y is negative (moving toward top) and reasonable
+            clamped_vy = max(-50.0, min(-3.0, avg_vy))
 
-        # Ensure Y is negative (moving toward top) and reasonable
-        clamped_vy = max(-50.0, min(-3.0, avg_vy))
+            # Store as historical estimate
+            self._last_conveyor_velocity = (clamped_vx, clamped_vy)
 
-        return (clamped_vx, clamped_vy)
+            return (clamped_vx, clamped_vy)
+
+        # Priority 2: Use LEARNED velocity from completed tracks (FPS-independent)
+        if self._learned_velocity_px_per_sec is not None:
+            # Convert from pixels/second to pixels/frame
+            vy_per_frame = self._learned_velocity_px_per_sec / target_fps
+            return (0.0, vy_per_frame)
+
+        # Priority 3: Use historical estimate if available
+        if self._last_conveyor_velocity is not None:
+            return self._last_conveyor_velocity
+
+        # Priority 4: Calculate based on frame dimensions
+        # Default assumption: ~140 px/sec based on measurements
+        # This is FPS-independent
+        if self.frame_height:
+            # Default: objects travel ~560 pixels in ~4 seconds = 140 px/sec
+            default_vy_px_per_sec = -140.0
+            vy_per_frame = default_vy_px_per_sec / target_fps
+            return (0.0, vy_per_frame)
+
+        # Final fallback: -140 px/sec / 17 fps ≈ -8.2 px/frame
+        return (0.0, -140.0 / target_fps)
 
     def _try_recover_ghosts(
         self,
@@ -1259,11 +1546,17 @@ class ConveyorTracker(ITracker):
         return remaining_dets
 
     def _update_ghosts(self):
-        """Expire ghost tracks that exceeded max age."""
+        """Expire ghost tracks that exceeded max age.
+
+        Note: lost_at is set to track.last_seen_at (when last detected),
+        NOT when the track was moved to ghost buffer. This means the elapsed
+        time already includes the max_frames_without_detection waiting period.
+        """
         now = time.time()
         expired = []
 
         for ghost_id, ghost_info in self.ghost_tracks.items():
+            # elapsed includes waiting frames + time in ghost buffer
             elapsed = now - ghost_info['lost_at']
             if elapsed >= self._ghost_max_age:
                 expired.append(ghost_id)
@@ -1303,15 +1596,20 @@ class ConveyorTracker(ITracker):
                 ghost_recovery_count=track.ghost_recovery_count,
                 occlusion_events=list(track.occlusion_events),
                 shadow_of=track.shadow_of,
-                shadow_count=0,
+                shadow_count=len(track.shadow_tracks),  # Record how many shadows were lost
                 merge_events=list(track.merge_events)
             )
             self.completed_tracks.append(event)
 
+            # IMPORTANT: Also mark any attached shadows as track_lost
+            # If the survivor falls off, the shadows fall off too - they should NOT be counted
+            if track.shadow_tracks:
+                self._lose_shadows_with_survivor(track, now)
+
             logger.info(
                 f"[TRACK_LIFECYCLE] T{ghost_id} GHOST_EXPIRED | "
                 f"expired after {self._ghost_max_age}s, exit_pos={last_real_position}, "
-                f"drift_was=({drift_x}, {drift_y})"
+                f"drift_was=({drift_x}, {drift_y}), shadows_lost={len(track.shadow_tracks)}"
             )
 
     # =========================================================================
@@ -1325,12 +1623,19 @@ class ConveyorTracker(ITracker):
         matches: List[Tuple[int, int]]
     ):
         """
-        Check if unmatched tracks were absorbed (merged) by a matched track.
+        Detect when tracks merge due to occlusion/overlap.
 
-        Merge conditions:
-        1. Matched track's bbox grew significantly (>= merge_bbox_growth_threshold)
-        2. The unmatched and matched tracks were spatially adjacent
-        3. Both tracks were moving in the same direction (toward top)
+        IMPROVED LOGIC:
+        - Primary: Position proximity (lost track was near a surviving track)
+        - Secondary: Bbox growth (surviving track grew, indicating merged detection)
+        - Both tracks must be moving in same direction (toward top)
+
+        When two bread bags overlap on the conveyor:
+        1. Detector may see them as one large detection
+        2. One track loses its match (becomes unmatched)
+        3. We attach it as a "shadow" to the surviving track
+        4. Shadow is counted when survivor exits top (both bags reached destination)
+        5. Shadow is marked lost if survivor exits bottom/falls off
         """
         if not matches or not unmatched_track_indices:
             return
@@ -1340,53 +1645,124 @@ class ConveyorTracker(ITracker):
         for unmatched_idx in list(unmatched_track_indices):
             lost_track = track_list[unmatched_idx]
 
-            # Only consider tracks with enough history
+            # Only consider tracks with enough history (not just created)
             if len(lost_track.bbox_history) < 3:
                 continue
 
+            # Skip tracks that are already shadows
+            if lost_track.shadow_of is not None:
+                continue
+
             lost_cx, lost_cy = lost_track.center
+            lost_vel = lost_track.velocity
+
+            # Skip if track is moving downward (falling off)
+            if lost_vel is not None and lost_vel[1] > 5:
+                continue
+
+            best_survivor = None
+            best_score = float('inf')
 
             for survivor, survivor_idx in matched_tracks:
-                # Check 1: Bbox growth
-                if len(survivor.bbox_history) < 4:
+                # Skip if survivor is already a shadow
+                if survivor.shadow_of is not None:
                     continue
 
-                current_width = survivor.bbox[2] - survivor.bbox[0]
-                # Average width over recent history (excluding current)
-                recent_widths = [
-                    b[2] - b[0] for b in list(survivor.bbox_history)[-5:-1]
-                ]
-                if not recent_widths:
-                    continue
-                avg_width = sum(recent_widths) / len(recent_widths)
-
-                if avg_width <= 0:
-                    continue
-                growth_ratio = current_width / avg_width
-                if growth_ratio < self._merge_bbox_growth:
-                    continue
-
-                # Check 2: Spatial adjacency (previous frame)
                 surv_cx, surv_cy = survivor.center
+                surv_vel = survivor.velocity
+
+                # Skip if survivor is moving downward
+                if surv_vel is not None and surv_vel[1] > 5:
+                    continue
+
+                # Check 1: Position proximity (PRIMARY)
+                # Lost track should be very close to survivor
                 x_gap = abs(surv_cx - lost_cx)
                 y_gap = abs(surv_cy - lost_cy)
 
+                # Must be within spatial tolerance
                 if x_gap > self._merge_spatial_tol or y_gap > self._merge_y_tol:
                     continue
 
-                # Check 3: Same direction (both moving toward top = negative vy)
-                lost_vel = lost_track.velocity
-                surv_vel = survivor.velocity
-                if lost_vel is not None and surv_vel is not None:
-                    if lost_vel[1] > 5 or surv_vel[1] > 5:  # Moving downward significantly
-                        continue
+                # Calculate proximity score (lower is better)
+                proximity_score = x_gap + y_gap
 
-                # All checks passed → attach as shadow
-                self._attach_shadow(survivor, lost_track)
-                break  # One merge per lost track
+                # Check 2: Bbox growth (SECONDARY - bonus for detection)
+                # If survivor's bbox grew, it's more likely they merged
+                growth_bonus = 0
+                if len(survivor.bbox_history) >= 4:
+                    current_width = survivor.bbox[2] - survivor.bbox[0]
+                    recent_widths = [b[2] - b[0] for b in list(survivor.bbox_history)[-5:-1]]
+                    if recent_widths:
+                        avg_width = sum(recent_widths) / len(recent_widths)
+                        if avg_width > 0:
+                            growth_ratio = current_width / avg_width
+                            if growth_ratio >= 1.2:  # Lowered from 1.4
+                                growth_bonus = -50  # Reduce score (better match)
+
+                # Check 3: Similar Y position (both at similar height on conveyor)
+                y_similarity_penalty = abs(surv_cy - lost_cy) * 0.5
+
+                final_score = proximity_score + growth_bonus + y_similarity_penalty
+
+                if final_score < best_score:
+                    best_score = final_score
+                    best_survivor = survivor
+
+            # Attach to best survivor if found and score is good enough
+            if best_survivor is not None and best_score < self._merge_spatial_tol:
+                self._attach_shadow(best_survivor, lost_track)
+                # Remove from unmatched set so it's not processed further
+                unmatched_track_indices.discard(unmatched_idx)
 
     def _attach_shadow(self, survivor: TrackedObject, shadow: TrackedObject):
-        """Attach a shadow track to a surviving track."""
+        """
+        Attach a shadow track to a surviving track.
+
+        IMPORTANT: We prefer keeping the MORE ESTABLISHED track as the survivor:
+        - Track with more hits (more detections = more reliable)
+        - Track with bottom_entry (started from valid entry point)
+        - Track that's been alive longer
+
+        If the "shadow" is actually more established, we SWAP them.
+        """
+        # Determine which track should actually be the survivor
+        # Score based on: hits (more = better), entry_type (bottom = better), age
+        def track_quality(t: TrackedObject) -> float:
+            score = t.hits * 10  # More hits = more reliable
+            if t.entry_type == "bottom_entry":
+                score += 100  # Strong preference for bottom entry (real bags)
+            elif t.entry_type == "midway_entry":
+                score -= 50  # Penalty for midway (likely detector artifact)
+            score += (time.time() - t.created_at) * 5  # Older tracks preferred
+            return score
+
+        survivor_quality = track_quality(survivor)
+        shadow_quality = track_quality(shadow)
+
+        # If shadow is actually better quality, swap them
+        if shadow_quality > survivor_quality:
+            logger.info(
+                f"[TRACK_LIFECYCLE] SHADOW_SWAP | "
+                f"T{shadow.track_id} (quality={shadow_quality:.0f}, entry={shadow.entry_type}, hits={shadow.hits}) "
+                f"is more established than "
+                f"T{survivor.track_id} (quality={survivor_quality:.0f}, entry={survivor.entry_type}, hits={survivor.hits}), "
+                f"swapping roles"
+            )
+            # Swap: the better track becomes survivor
+            # We need to update the tracks dictionary to reflect this
+            original_survivor_id = survivor.track_id
+            original_shadow_id = shadow.track_id
+
+            # The original survivor (now shadow) should be removed from active tracks
+            # The original shadow (now survivor) should be added to active tracks
+            if original_survivor_id in self.tracks:
+                del self.tracks[original_survivor_id]
+            self.tracks[original_shadow_id] = shadow
+
+            # Now swap the roles
+            survivor, shadow = shadow, survivor
+
         shadow_id = shadow.track_id
         survivor.shadow_tracks[shadow_id] = shadow
         shadow.shadow_of = survivor.track_id
@@ -1508,6 +1884,52 @@ class ConveyorTracker(ITracker):
                 f"shadow of T{track.track_id} counted on exit"
             )
 
+    def _lose_shadows_with_survivor(self, survivor: TrackedObject, ended_at: float):
+        """
+        Mark all shadows as track_lost when their survivor falls off / times out.
+
+        SAFETY RULE: If a bag falls off the conveyor, any bags that were
+        "hidden" behind it (shadows) are also considered lost - they should
+        NOT be counted because we cannot verify they reached the destination.
+
+        Args:
+            survivor: The track that fell off / timed out
+            ended_at: Timestamp when survivor was marked as lost
+        """
+        for shadow_id, shadow in survivor.shadow_tracks.items():
+            # Build position history from checkpoints
+            final_position_history = list(shadow.checkpoint_positions)
+
+            # Use last known position of shadow (not survivor's position)
+            last_pos = shadow.last_detected_position or shadow.center
+            if not final_position_history or final_position_history[-1] != last_pos:
+                final_position_history.append(last_pos)
+
+            event = TrackEvent(
+                track_id=shadow_id,
+                event_type='track_lost',  # NOT counted - survivor fell off
+                bbox_history=list(shadow.bbox_history),
+                position_history=final_position_history,
+                total_frames=shadow.age + shadow.hits,
+                created_at=shadow.created_at,
+                ended_at=ended_at,
+                avg_confidence=shadow.confidence,
+                exit_direction="survivor_lost",  # Special indicator
+                entry_type=shadow.entry_type,
+                suspected_duplicate=(shadow.entry_type == "midway_entry"),
+                ghost_recovery_count=shadow.ghost_recovery_count,
+                occlusion_events=list(shadow.occlusion_events),
+                shadow_of=survivor.track_id,
+                shadow_count=0,
+                merge_events=list(shadow.merge_events)
+            )
+            self.completed_tracks.append(event)
+
+            logger.info(
+                f"[TRACK_LIFECYCLE] T{shadow_id} SHADOW_LOST | "
+                f"shadow of T{survivor.track_id} lost when survivor fell off"
+            )
+
     # =========================================================================
     # Entry Type Classification (Diagnostics Only)
     # =========================================================================
@@ -1567,6 +1989,27 @@ class ConveyorTracker(ITracker):
         """Get a specific track by ID."""
         return self.tracks.get(track_id)
     
+    def get_statistics(self) -> Dict:
+        """
+        Get tracker statistics for UI display and diagnostics.
+
+        Returns:
+            Dict with statistics including:
+            - tracks_created: Total tracks created
+            - duplicates_prevented: Duplicate tracks prevented
+            - active_tracks: Currently active tracks
+            - ghost_tracks: Currently in ghost buffer
+            - learned_velocity: Learned conveyor velocity (px/sec)
+        """
+        return {
+            'tracks_created': self._tracks_created,
+            'duplicates_prevented': self._duplicates_prevented,
+            'active_tracks': len(self.tracks),
+            'ghost_tracks': len(self.ghost_tracks),
+            'learned_velocity_px_sec': self._learned_velocity_px_per_sec,
+            'next_track_id': self._next_id
+        }
+
     def cleanup(self):
         """Clean up tracker resources."""
         self.tracks.clear()
