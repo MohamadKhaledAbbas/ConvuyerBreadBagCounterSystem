@@ -7,6 +7,7 @@ Enhanced with:
 - Track animation data endpoint
 """
 
+import re
 from typing import Optional
 
 from fastapi import APIRouter, Request, HTTPException, Query
@@ -53,6 +54,46 @@ def _clean_str(val: Optional[str]) -> Optional[str]:
     return val.strip()
 
 
+def _parse_track_search(val: Optional[str]):
+    """
+    Parse track search input into track_ids list or track_id_range tuple.
+
+    Supports:
+      - Single ID:     "10" or "T10"
+      - Comma list:    "10,20,30" or "T10, T20, T30"
+      - Range:         "10-20" or "T10-T20"
+
+    Returns:
+        (track_ids, track_id_range) - one will be set, other None
+    """
+    if val is None or val.strip() == '':
+        return None, None
+
+    cleaned = val.strip().upper().replace('T', '')
+
+    # Check for range pattern: "10-20"
+    range_match = re.match(r'^(\d+)\s*-\s*(\d+)$', cleaned)
+    if range_match:
+        start = int(range_match.group(1))
+        end = int(range_match.group(2))
+        if start > end:
+            start, end = end, start
+        return None, (start, end)
+
+    # Check for comma-separated list: "10,20,30"
+    parts = [p.strip() for p in cleaned.split(',') if p.strip()]
+    ids = []
+    for p in parts:
+        try:
+            ids.append(int(p))
+        except ValueError:
+            continue
+    if ids:
+        return ids, None
+
+    return None, None
+
+
 @router.get("/track-events", response_class=HTMLResponse)
 async def track_events_page(
     request: Request,
@@ -72,6 +113,7 @@ async def track_events_page(
     min_frames: Optional[str] = Query(None),
     has_ghost_recovery: Optional[str] = Query(None),
     show_noise: Optional[str] = Query(None),
+    track_search: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=10, le=200)
 ):
@@ -87,6 +129,8 @@ async def track_events_page(
     - Animated trajectory visualization
 
     Query params:
+        track_search: Search by track ID. Supports: single (T10), comma list (T10,T20),
+                      range (T10-T20). The T prefix is optional.
         start_time: ISO datetime start (optional, defaults to last 24h)
         end_time: ISO datetime end (optional, defaults to now)
         event_type: Filter by type: track_completed, track_lost, track_invalid
@@ -131,6 +175,10 @@ async def track_events_page(
         p_entry_type = _clean_str(entry_type)
         p_exit_direction = _clean_str(exit_direction)
 
+        # Parse track search (single ID, comma list, or range)
+        p_track_ids, p_track_id_range = _parse_track_search(track_search)
+        track_search_str = _clean_str(track_search)
+
         # Convert has_ghost_recovery string to bool
         ghost_recovery_bool = None
         has_ghost_str = _clean_str(has_ghost_recovery)
@@ -162,11 +210,14 @@ async def track_events_page(
             p_min_frames is not None or p_min_confidence is not None
         )
 
+        # When searching specific tracks, disable noise filtering so they always appear
+        searching_tracks = p_track_ids is not None or p_track_id_range is not None
+
         effective_min_hits = p_min_hits
         effective_min_distance = p_min_distance
         effective_min_duration = p_min_duration
 
-        if show_noise != '1' and not user_touched_advanced:
+        if show_noise != '1' and not user_touched_advanced and not searching_tracks:
             # No explicit advanced filter set and user hasn't clicked "show noise"
             effective_min_hits = NOISE_DEFAULT_MIN_HITS
             effective_min_distance = NOISE_DEFAULT_MIN_DISTANCE
@@ -188,6 +239,8 @@ async def track_events_page(
             max_hits=p_max_hits,
             min_frames=p_min_frames,
             has_ghost_recovery=ghost_recovery_bool,
+            track_ids=p_track_ids,
+            track_id_range=p_track_id_range,
             page=page,
             page_size=page_size
         )
@@ -205,7 +258,8 @@ async def track_events_page(
             'pagination': data['pagination'],
             'filter_options': data['filter_options'],
             'noise_filtering_active': noise_filtering_active,
-            'noise_count': noise_count
+            'noise_count': noise_count,
+            'track_search': track_search_str or ''
         }
 
         logger.info(f"[TrackEvents] Rendering {len(data['events'])} events (page {page})")
@@ -235,6 +289,7 @@ async def track_events_api(
     max_hits: Optional[str] = Query(None),
     min_frames: Optional[str] = Query(None),
     has_ghost_recovery: Optional[str] = Query(None),
+    track_search: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=10, le=200)
 ):
@@ -247,7 +302,7 @@ async def track_events_api(
     Supports all filters: event_type, classification, min_confidence,
     min_duration, max_duration, entry_type, exit_direction,
     min_distance, max_distance, min_hits, max_hits, min_frames,
-    has_ghost_recovery (yes/no).
+    has_ghost_recovery (yes/no), track_search (e.g. T10, T10-T20, T10,T20,T30).
     """
     service = _get_service()
 
@@ -274,6 +329,9 @@ async def track_events_api(
         p_entry_type = _clean_str(entry_type)
         p_exit_direction = _clean_str(exit_direction)
 
+        # Parse track search
+        p_track_ids, p_track_id_range = _parse_track_search(track_search)
+
         # Convert has_ghost_recovery string to bool
         ghost_recovery_bool = None
         has_ghost_str = _clean_str(has_ghost_recovery)
@@ -297,6 +355,8 @@ async def track_events_api(
             max_hits=p_max_hits,
             min_frames=p_min_frames,
             has_ghost_recovery=ghost_recovery_bool,
+            track_ids=p_track_ids,
+            track_id_range=p_track_id_range,
             page=page,
             page_size=page_size
         )

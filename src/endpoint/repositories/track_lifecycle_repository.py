@@ -42,6 +42,8 @@ class TrackLifecycleRepository:
         max_hits: Optional[int] = None,
         min_frames: Optional[int] = None,
         has_ghost_recovery: Optional[bool] = None,
+        track_ids: Optional[List[int]] = None,
+        track_id_range: Optional[Tuple[int, int]] = None,
     ) -> Tuple[str, list]:
         """
         Build a reusable WHERE clause and params list from all filter options.
@@ -98,6 +100,13 @@ class TrackLifecycleRepository:
                 conditions.append("ghost_recovery_count > 0")
             else:
                 conditions.append("(ghost_recovery_count IS NULL OR ghost_recovery_count = 0)")
+        if track_ids:
+            placeholders = ','.join('?' * len(track_ids))
+            conditions.append(f"track_id IN ({placeholders})")
+            params.extend(track_ids)
+        if track_id_range:
+            conditions.append("track_id >= ? AND track_id <= ?")
+            params.extend([track_id_range[0], track_id_range[1]])
 
         return " AND ".join(conditions), params
 
@@ -119,28 +128,13 @@ class TrackLifecycleRepository:
         max_hits: Optional[int] = None,
         min_frames: Optional[int] = None,
         has_ghost_recovery: Optional[bool] = None,
+        track_ids: Optional[List[int]] = None,
+        track_id_range: Optional[Tuple[int, int]] = None,
         limit: int = 500,
         offset: int = 0
     ) -> Tuple[List[Dict[str, Any]], int]:
         """
         Get track events for a time range with advanced filtering.
-
-        Args:
-            start_time: Start datetime
-            end_time: End datetime
-            event_type: Filter by event type ('track_completed', 'track_lost', 'track_invalid')
-            classification: Filter by classification result
-            min_confidence: Minimum avg detection confidence
-            min_duration: Minimum track duration in seconds
-            max_duration: Maximum track duration in seconds
-            entry_type: Filter by entry type ('bottom_entry', 'thrown_entry', 'midway_entry')
-            exit_direction: Filter by exit direction ('top', 'bottom', 'left', 'right', 'timeout')
-            has_classification: Filter by whether classification exists
-            limit: Maximum results per page
-            offset: Pagination offset
-
-        Returns:
-            Tuple of (events list, total count)
         """
         where_clause, params = self._build_filter_clause(
             start_time, end_time,
@@ -158,6 +152,8 @@ class TrackLifecycleRepository:
             max_hits=max_hits,
             min_frames=min_frames,
             has_ghost_recovery=has_ghost_recovery,
+            track_ids=track_ids,
+            track_id_range=track_id_range,
         )
 
         # Get total count for pagination
@@ -209,6 +205,8 @@ class TrackLifecycleRepository:
         max_hits: Optional[int] = None,
         min_frames: Optional[int] = None,
         has_ghost_recovery: Optional[bool] = None,
+        track_ids: Optional[List[int]] = None,
+        track_id_range: Optional[Tuple[int, int]] = None,
     ) -> Dict[str, Any]:
         """
         Get enhanced statistics respecting all active filters.
@@ -236,6 +234,8 @@ class TrackLifecycleRepository:
             max_hits=max_hits,
             min_frames=min_frames,
             has_ghost_recovery=has_ghost_recovery,
+            track_ids=track_ids,
+            track_id_range=track_id_range,
         )
 
         # For by-type breakdown: exclude event_type filter so all 3 types are visible
@@ -255,6 +255,8 @@ class TrackLifecycleRepository:
             max_hits=max_hits,
             min_frames=min_frames,
             has_ghost_recovery=has_ghost_recovery,
+            track_ids=track_ids,
+            track_id_range=track_id_range,
         )
 
         with self.db._cursor() as cursor:

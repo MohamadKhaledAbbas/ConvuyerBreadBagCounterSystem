@@ -67,6 +67,12 @@
     <!-- Filter Bar -->
     <form class="filter-bar" method="get" action="/track-events">
         <div class="field">
+            <label for="track_search"><i class="fa-solid fa-search"></i> بحث مسار</label>
+            <input type="text" id="track_search" name="track_search"
+                   value="{{ track_search }}" placeholder="T10 أو T10,T20 أو T10-T20"
+                   style="font-family: monospace; direction: ltr; text-align: left;">
+        </div>
+        <div class="field">
             <label for="start_time">من تاريخ</label>
             <input type="datetime-local" id="start_time" name="start_time"
                    value="{{ meta.start.strftime('%Y-%m-%dT%H:%M') if meta.start else '' }}">

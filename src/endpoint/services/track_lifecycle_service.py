@@ -72,6 +72,8 @@ class TrackLifecycleService:
         max_hits: Optional[int] = None,
         min_frames: Optional[int] = None,
         has_ghost_recovery: Optional[bool] = None,
+        track_ids: Optional[list] = None,
+        track_id_range: Optional[tuple] = None,
         page: int = 1,
         page_size: int = 100
     ) -> Dict[str, Any]:
@@ -122,6 +124,8 @@ class TrackLifecycleService:
             max_hits=max_hits,
             min_frames=min_frames,
             has_ghost_recovery=has_ghost_recovery,
+            track_ids=track_ids,
+            track_id_range=track_id_range,
         )
 
         # Get paginated events with filters
@@ -141,6 +145,8 @@ class TrackLifecycleService:
             max_hits=max_hits,
             min_frames=min_frames,
             has_ghost_recovery=has_ghost_recovery,
+            track_ids=track_ids,
+            track_id_range=track_id_range,
             limit=page_size,
             offset=offset
         )
@@ -309,6 +315,8 @@ class TrackLifecycleService:
         max_hits: Optional[int] = None,
         min_frames: Optional[int] = None,
         has_ghost_recovery: Optional[bool] = None,
+        track_ids: Optional[list] = None,
+        track_id_range: Optional[tuple] = None,
         page: int = 1,
         page_size: int = 100
     ) -> Dict[str, Any]:
@@ -316,7 +324,7 @@ class TrackLifecycleService:
         Get track events as JSON (for API consumption).
 
         Returns a lighter payload without template-specific processing.
-        Supports all filters including distance, hits, frames, and ghost recovery.
+        Supports all filters including distance, hits, frames, ghost recovery, and track search.
         """
         events, total_count = self.repo.get_track_events_page(
             start_time, end_time,
@@ -333,6 +341,8 @@ class TrackLifecycleService:
             max_hits=max_hits,
             min_frames=min_frames,
             has_ghost_recovery=has_ghost_recovery,
+            track_ids=track_ids,
+            track_id_range=track_id_range,
             limit=page_size,
             offset=(page - 1) * page_size
         )
