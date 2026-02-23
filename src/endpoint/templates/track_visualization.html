@@ -454,7 +454,15 @@
                 </div>
                 <div class="legend-item">
                     <div class="legend-color" style="background: #fbbf24;"></div>
-                    <span>Entry/Exit</span>
+                    <span>Entry Point (Start)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #2dd4bf;"></div>
+                    <span>✓ Completed (Exit)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #f87171;"></div>
+                    <span>✗ Lost / Invalid (Exit)</span>
                 </div>
             </div>
         </div>
@@ -680,28 +688,39 @@ function draw() {
         const last = positions[positions.length - 1];
         if (last && last.length >= 2) {
             const [lx, ly] = worldToCanvas(last[0], last[1]);
+            const isCompleted = trackData.summary.event_type === 'track_completed';
+            const exitColor = isCompleted ? 'rgba(45, 212, 191, 0.9)' : 'rgba(248, 113, 113, 0.9)';
+            const exitGlow = isCompleted ? 'rgba(45, 212, 191, 0.3)' : 'rgba(248, 113, 113, 0.3)';
 
             // Outer glow
-            ctx.fillStyle = 'rgba(248, 113, 113, 0.3)';
+            ctx.fillStyle = exitGlow;
             ctx.beginPath();
             ctx.arc(lx, ly, 12, 0, Math.PI * 2);
             ctx.fill();
 
             // Main circle
-            ctx.fillStyle = 'rgba(248, 113, 113, 0.9)';
+            ctx.fillStyle = exitColor;
             ctx.beginPath();
             ctx.arc(lx, ly, 8, 0, Math.PI * 2);
             ctx.fill();
 
-            // X mark
+            // Mark
             ctx.strokeStyle = 'white';
             ctx.lineWidth = 2.5;
             ctx.lineCap = 'round';
             ctx.beginPath();
-            ctx.moveTo(lx - 4, ly - 4);
-            ctx.lineTo(lx + 4, ly + 4);
-            ctx.moveTo(lx + 4, ly - 4);
-            ctx.lineTo(lx - 4, ly + 4);
+            if (isCompleted) {
+                // Checkmark ✓
+                ctx.moveTo(lx - 4, ly);
+                ctx.lineTo(lx - 1, ly + 4);
+                ctx.lineTo(lx + 5, ly - 4);
+            } else {
+                // X mark ✗
+                ctx.moveTo(lx - 4, ly - 4);
+                ctx.lineTo(lx + 4, ly + 4);
+                ctx.moveTo(lx + 4, ly - 4);
+                ctx.lineTo(lx - 4, ly + 4);
+            }
             ctx.stroke();
         }
     }

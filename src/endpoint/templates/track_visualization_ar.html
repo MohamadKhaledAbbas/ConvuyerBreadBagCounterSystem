@@ -160,8 +160,12 @@
                         <span>مسار الحركة</span>
                     </div>
                     <div class="legend-item">
+                        <div class="legend-color" style="background: #2dd4bf;"></div>
+                        <span>✓ = تم بنجاح (نقطة النهاية)</span>
+                    </div>
+                    <div class="legend-item">
                         <div class="legend-color" style="background: #f87171;"></div>
-                        <span>X = نقطة النهاية (الخروج)</span>
+                        <span>✗ = فُقد أو مسار خاطئ (نقطة النهاية)</span>
                     </div>
                 </div>
                 <p style="font-size: 0.7rem; color: var(--text-muted); margin-top: 0.75rem; line-height: 1.4;">
@@ -393,24 +397,34 @@ function draw() {
     ctx.shadowBlur = 6;
     const last = positions[positions.length - 1];
     const [lx, ly] = toCanvas(last[0], last[1]);
-    ctx.fillStyle = 'rgba(248, 113, 113, 0.5)';
+    const isCompleted = trackData.summary.event_type === 'track_completed';
+    const exitColor = isCompleted ? '#2dd4bf' : '#f87171';
+    const exitGlow = isCompleted ? 'rgba(45, 212, 191, 0.5)' : 'rgba(248, 113, 113, 0.5)';
+    ctx.fillStyle = exitGlow;
     ctx.beginPath();
     ctx.arc(lx, ly, 16, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = '#f87171';
+    ctx.fillStyle = exitColor;
     ctx.beginPath();
     ctx.arc(lx, ly, 10, 0, Math.PI * 2);
     ctx.fill();
     ctx.shadowBlur = 0;
-    // X mark
     ctx.strokeStyle = 'white';
     ctx.lineWidth = 2.5;
     ctx.lineCap = 'round';
     ctx.beginPath();
-    ctx.moveTo(lx - 4, ly - 4);
-    ctx.lineTo(lx + 4, ly + 4);
-    ctx.moveTo(lx + 4, ly - 4);
-    ctx.lineTo(lx - 4, ly + 4);
+    if (isCompleted) {
+        // Checkmark ✓
+        ctx.moveTo(lx - 4, ly);
+        ctx.lineTo(lx - 1, ly + 4);
+        ctx.lineTo(lx + 5, ly - 4);
+    } else {
+        // X mark ✗
+        ctx.moveTo(lx - 4, ly - 4);
+        ctx.lineTo(lx + 4, ly + 4);
+        ctx.moveTo(lx + 4, ly - 4);
+        ctx.lineTo(lx - 4, ly + 4);
+    }
     ctx.stroke();
     ctx.restore();
 }
