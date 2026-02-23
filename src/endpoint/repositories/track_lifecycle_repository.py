@@ -24,7 +24,7 @@ class TrackLifecycleRepository:
     def __init__(self, db: DatabaseManager):
         self.db = db
 
-    def get_track_events_page(
+    def _build_filter_clause(
         self,
         start_time: datetime,
         end_time: datetime,
@@ -36,32 +36,21 @@ class TrackLifecycleRepository:
         entry_type: Optional[str] = None,
         exit_direction: Optional[str] = None,
         has_classification: Optional[bool] = None,
-        limit: int = 500,
-        offset: int = 0
-    ) -> Tuple[List[Dict[str, Any]], int]:
+        min_distance: Optional[float] = None,
+        max_distance: Optional[float] = None,
+        min_hits: Optional[int] = None,
+        max_hits: Optional[int] = None,
+        min_frames: Optional[int] = None,
+        has_ghost_recovery: Optional[bool] = None,
+    ) -> Tuple[str, list]:
         """
-        Get track events for a time range with advanced filtering.
-
-        Args:
-            start_time: Start datetime
-            end_time: End datetime
-            event_type: Filter by event type ('track_completed', 'track_lost', 'track_invalid')
-            classification: Filter by classification result
-            min_confidence: Minimum avg detection confidence
-            min_duration: Minimum track duration in seconds
-            max_duration: Maximum track duration in seconds
-            entry_type: Filter by entry type ('bottom_entry', 'thrown_entry', 'midway_entry')
-            exit_direction: Filter by exit direction ('top', 'bottom', 'left', 'right', 'timeout')
-            has_classification: Filter by whether classification exists
-            limit: Maximum results per page
-            offset: Pagination offset
+        Build a reusable WHERE clause and params list from all filter options.
 
         Returns:
-            Tuple of (events list, total count)
+            Tuple of (where_clause_string, params_list)
         """
-        # Build WHERE conditions
         conditions = ["timestamp >= ?", "timestamp <= ?"]
-        params = [start_time.isoformat(), end_time.isoformat()]
+        params: list = [start_time.isoformat(), end_time.isoformat()]
 
         if event_type:
             conditions.append("event_type = ?")
@@ -89,8 +78,87 @@ class TrackLifecycleRepository:
                 conditions.append("classification IS NOT NULL")
             else:
                 conditions.append("classification IS NULL")
+        if min_distance is not None:
+            conditions.append("distance_pixels >= ?")
+            params.append(min_distance)
+        if max_distance is not None:
+            conditions.append("distance_pixels <= ?")
+            params.append(max_distance)
+        if min_hits is not None:
+            conditions.append("total_hits >= ?")
+            params.append(min_hits)
+        if max_hits is not None:
+            conditions.append("total_hits <= ?")
+            params.append(max_hits)
+        if min_frames is not None:
+            conditions.append("total_frames >= ?")
+            params.append(min_frames)
+        if has_ghost_recovery is not None:
+            if has_ghost_recovery:
+                conditions.append("ghost_recovery_count > 0")
+            else:
+                conditions.append("(ghost_recovery_count IS NULL OR ghost_recovery_count = 0)")
 
-        where_clause = " AND ".join(conditions)
+        return " AND ".join(conditions), params
+
+    def get_track_events_page(
+        self,
+        start_time: datetime,
+        end_time: datetime,
+        event_type: Optional[str] = None,
+        classification: Optional[str] = None,
+        min_confidence: Optional[float] = None,
+        min_duration: Optional[float] = None,
+        max_duration: Optional[float] = None,
+        entry_type: Optional[str] = None,
+        exit_direction: Optional[str] = None,
+        has_classification: Optional[bool] = None,
+        min_distance: Optional[float] = None,
+        max_distance: Optional[float] = None,
+        min_hits: Optional[int] = None,
+        max_hits: Optional[int] = None,
+        min_frames: Optional[int] = None,
+        has_ghost_recovery: Optional[bool] = None,
+        limit: int = 500,
+        offset: int = 0
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """
+        Get track events for a time range with advanced filtering.
+
+        Args:
+            start_time: Start datetime
+            end_time: End datetime
+            event_type: Filter by event type ('track_completed', 'track_lost', 'track_invalid')
+            classification: Filter by classification result
+            min_confidence: Minimum avg detection confidence
+            min_duration: Minimum track duration in seconds
+            max_duration: Maximum track duration in seconds
+            entry_type: Filter by entry type ('bottom_entry', 'thrown_entry', 'midway_entry')
+            exit_direction: Filter by exit direction ('top', 'bottom', 'left', 'right', 'timeout')
+            has_classification: Filter by whether classification exists
+            limit: Maximum results per page
+            offset: Pagination offset
+
+        Returns:
+            Tuple of (events list, total count)
+        """
+        where_clause, params = self._build_filter_clause(
+            start_time, end_time,
+            event_type=event_type,
+            classification=classification,
+            min_confidence=min_confidence,
+            min_duration=min_duration,
+            max_duration=max_duration,
+            entry_type=entry_type,
+            exit_direction=exit_direction,
+            has_classification=has_classification,
+            min_distance=min_distance,
+            max_distance=max_distance,
+            min_hits=min_hits,
+            max_hits=max_hits,
+            min_frames=min_frames,
+            has_ghost_recovery=has_ghost_recovery,
+        )
 
         # Get total count for pagination
         count_query = f"SELECT COUNT(*) as total FROM track_events WHERE {where_clause}"
@@ -126,23 +194,72 @@ class TrackLifecycleRepository:
     def get_enhanced_stats(
         self,
         start_time: datetime,
-        end_time: datetime
+        end_time: datetime,
+        event_type: Optional[str] = None,
+        classification: Optional[str] = None,
+        min_confidence: Optional[float] = None,
+        min_duration: Optional[float] = None,
+        max_duration: Optional[float] = None,
+        entry_type: Optional[str] = None,
+        exit_direction: Optional[str] = None,
+        has_classification: Optional[bool] = None,
+        min_distance: Optional[float] = None,
+        max_distance: Optional[float] = None,
+        min_hits: Optional[int] = None,
+        max_hits: Optional[int] = None,
+        min_frames: Optional[int] = None,
+        has_ghost_recovery: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """
-        Get enhanced statistics including:
-        - Classification breakdown
-        - Entry type distribution
-        - Exit direction distribution
-        - Confidence histograms
-        - Duration histograms
-        - Ghost recovery stats
+        Get enhanced statistics respecting all active filters.
+
+        All stat queries apply the same filters as the events table so
+        totals, breakdowns, and histograms match the filtered view.
+
+        For the by-type breakdown, the event_type filter is intentionally
+        excluded so the user always sees completed/lost/invalid counts.
         """
-        start_iso = start_time.isoformat()
-        end_iso = end_time.isoformat()
+        # Full filter clause (all filters)
+        where_clause, params = self._build_filter_clause(
+            start_time, end_time,
+            event_type=event_type,
+            classification=classification,
+            min_confidence=min_confidence,
+            min_duration=min_duration,
+            max_duration=max_duration,
+            entry_type=entry_type,
+            exit_direction=exit_direction,
+            has_classification=has_classification,
+            min_distance=min_distance,
+            max_distance=max_distance,
+            min_hits=min_hits,
+            max_hits=max_hits,
+            min_frames=min_frames,
+            has_ghost_recovery=has_ghost_recovery,
+        )
+
+        # For by-type breakdown: exclude event_type filter so all 3 types are visible
+        where_no_type, params_no_type = self._build_filter_clause(
+            start_time, end_time,
+            event_type=None,  # intentionally excluded
+            classification=classification,
+            min_confidence=min_confidence,
+            min_duration=min_duration,
+            max_duration=max_duration,
+            entry_type=entry_type,
+            exit_direction=exit_direction,
+            has_classification=has_classification,
+            min_distance=min_distance,
+            max_distance=max_distance,
+            min_hits=min_hits,
+            max_hits=max_hits,
+            min_frames=min_frames,
+            has_ghost_recovery=has_ghost_recovery,
+        )
 
         with self.db._cursor() as cursor:
-            # Basic stats by event type
-            cursor.execute("""
+            # Basic stats by event type (uses filters WITHOUT event_type)
+            cursor.execute(f"""
                 SELECT
                     event_type,
                     COUNT(*) as count,
@@ -152,55 +269,55 @@ class TrackLifecycleRepository:
                     MIN(duration_seconds) as min_duration,
                     MAX(duration_seconds) as max_duration
                 FROM track_events
-                WHERE timestamp >= ? AND timestamp <= ?
+                WHERE {where_no_type}
                 GROUP BY event_type
-            """, (start_iso, end_iso))
+            """, params_no_type)
             by_type = {row['event_type']: dict(row) for row in cursor.fetchall()}
 
-            # Classification breakdown
-            cursor.execute("""
+            # Classification breakdown (uses full filters)
+            cursor.execute(f"""
                 SELECT classification, COUNT(*) as count,
                        AVG(classification_confidence) as avg_conf
                 FROM track_events
-                WHERE timestamp >= ? AND timestamp <= ?
+                WHERE {where_clause}
                   AND classification IS NOT NULL
                 GROUP BY classification
                 ORDER BY count DESC
-            """, (start_iso, end_iso))
+            """, params)
             by_classification = [dict(row) for row in cursor.fetchall()]
 
-            # Entry type distribution
-            cursor.execute("""
+            # Entry type distribution (uses full filters)
+            cursor.execute(f"""
                 SELECT entry_type, COUNT(*) as count
                 FROM track_events
-                WHERE timestamp >= ? AND timestamp <= ?
+                WHERE {where_clause}
                 GROUP BY entry_type
-            """, (start_iso, end_iso))
+            """, params)
             by_entry_type = {row['entry_type'] or 'unknown': row['count'] for row in cursor.fetchall()}
 
-            # Exit direction distribution
-            cursor.execute("""
+            # Exit direction distribution (uses full filters)
+            cursor.execute(f"""
                 SELECT exit_direction, COUNT(*) as count
                 FROM track_events
-                WHERE timestamp >= ? AND timestamp <= ?
+                WHERE {where_clause}
                 GROUP BY exit_direction
-            """, (start_iso, end_iso))
+            """, params)
             by_exit_direction = {row['exit_direction'] or 'unknown': row['count'] for row in cursor.fetchall()}
 
-            # Ghost recovery stats
-            cursor.execute("""
+            # Ghost recovery stats (uses full filters)
+            cursor.execute(f"""
                 SELECT
                     SUM(CASE WHEN ghost_recovery_count > 0 THEN 1 ELSE 0 END) as recovered_tracks,
                     SUM(ghost_recovery_count) as total_recoveries,
                     SUM(shadow_count) as total_shadows
                 FROM track_events
-                WHERE timestamp >= ? AND timestamp <= ?
-            """, (start_iso, end_iso))
+                WHERE {where_clause}
+            """, params)
             recovery_row = cursor.fetchone()
             recovery_stats = dict(recovery_row) if recovery_row else {}
 
-            # Duration histogram (buckets: 0-1s, 1-2s, 2-3s, 3-5s, 5+s)
-            cursor.execute("""
+            # Duration histogram (uses full filters)
+            cursor.execute(f"""
                 SELECT
                     CASE
                         WHEN duration_seconds < 1 THEN '0-1s'
@@ -211,13 +328,13 @@ class TrackLifecycleRepository:
                     END as bucket,
                     COUNT(*) as count
                 FROM track_events
-                WHERE timestamp >= ? AND timestamp <= ?
+                WHERE {where_clause}
                 GROUP BY bucket
-            """, (start_iso, end_iso))
+            """, params)
             duration_histogram = {row['bucket']: row['count'] for row in cursor.fetchall()}
 
-            # Confidence histogram (buckets: 0-50%, 50-70%, 70-85%, 85-95%, 95-100%)
-            cursor.execute("""
+            # Confidence histogram (uses full filters)
+            cursor.execute(f"""
                 SELECT
                     CASE
                         WHEN avg_confidence < 0.5 THEN '< 50%'
@@ -228,10 +345,10 @@ class TrackLifecycleRepository:
                     END as bucket,
                     COUNT(*) as count
                 FROM track_events
-                WHERE timestamp >= ? AND timestamp <= ?
+                WHERE {where_clause}
                   AND avg_confidence IS NOT NULL
                 GROUP BY bucket
-            """, (start_iso, end_iso))
+            """, params)
             confidence_histogram = {row['bucket']: row['count'] for row in cursor.fetchall()}
 
             total = sum(r['count'] for r in by_type.values())
@@ -442,3 +559,32 @@ class TrackLifecycleRepository:
             """, (start_time.isoformat(), end_time.isoformat()))
             return [row['classification'] for row in cursor.fetchall()]
 
+    def count_noise_tracks(
+        self,
+        start_time: datetime,
+        end_time: datetime
+    ) -> int:
+        """
+        Count noise tracks in the time range.
+
+        Noise tracks match ANY of these criteria:
+        - ≤2 detection hits (single-frame false detections)
+        - Travel distance < 30px (stationary edge artifacts)
+        - Duration < 0.3s (ultra-short flashes)
+
+        Returns:
+            Count of noise tracks
+        """
+        with self.db._cursor() as cursor:
+            cursor.execute("""
+                SELECT COUNT(*) as count
+                FROM track_events
+                WHERE timestamp >= ? AND timestamp <= ?
+                  AND (
+                      (total_hits IS NULL OR total_hits <= 2)
+                      OR (distance_pixels IS NOT NULL AND distance_pixels < 30)
+                      OR (duration_seconds IS NOT NULL AND duration_seconds < 0.3)
+                  )
+            """, (start_time.isoformat(), end_time.isoformat()))
+            row = cursor.fetchone()
+            return row['count'] if row else 0

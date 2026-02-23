@@ -345,6 +345,55 @@
         <a href="/track-events" style="padding: 0.55rem 1.2rem; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); border-radius: var(--radius-sm); color: var(--text-primary); text-decoration: none; font-weight: 600; font-size: 0.85rem; transition: all 0.2s;" onmouseover="this.style.background='rgba(56, 189, 248, 0.1)'; this.style.borderColor='var(--accent-primary)'" onmouseout="this.style.background='rgba(255,255,255,0.05)'; this.style.borderColor='var(--glass-border)'">
             <i class="fa-solid fa-redo"></i> Reset
         </a>
+
+        <!-- Advanced Filters Toggle -->
+        <div style="width: 100%; margin-top: 0.5rem;">
+            <details {% if noise_filtering_active or meta.min_distance_filter or meta.max_distance_filter or meta.min_hits_filter or meta.max_hits_filter or meta.min_frames_filter or meta.has_ghost_recovery_filter or meta.max_duration_filter %}open{% endif %}>
+                <summary style="cursor: pointer; color: var(--accent-primary); font-size: 0.85rem; font-weight: 600;">
+                    <i class="fa-solid fa-sliders"></i> Advanced Filters
+                </summary>
+                <div class="filter-bar" style="margin-top: 0.5rem; border: none; padding: 0;">
+                    <div class="field">
+                        <label for="max_duration">Max Duration (s)</label>
+                        <input type="number" id="max_duration" name="max_duration" min="0" step="0.1"
+                               value="{{ meta.max_duration_filter or '' }}" placeholder="seconds">
+                    </div>
+                    <div class="field">
+                        <label for="min_distance">Min Distance (px)</label>
+                        <input type="number" id="min_distance" name="min_distance" min="0" step="1"
+                               value="{{ meta.min_distance_filter or '' }}" placeholder="e.g. 50">
+                    </div>
+                    <div class="field">
+                        <label for="max_distance">Max Distance (px)</label>
+                        <input type="number" id="max_distance" name="max_distance" min="0" step="1"
+                               value="{{ meta.max_distance_filter or '' }}" placeholder="e.g. 1000">
+                    </div>
+                    <div class="field">
+                        <label for="min_hits">Min Hits</label>
+                        <input type="number" id="min_hits" name="min_hits" min="0" step="1"
+                               value="{{ meta.min_hits_filter or '' }}" placeholder="e.g. 3">
+                    </div>
+                    <div class="field">
+                        <label for="max_hits">Max Hits</label>
+                        <input type="number" id="max_hits" name="max_hits" min="0" step="1"
+                               value="{{ meta.max_hits_filter or '' }}" placeholder="e.g. 50">
+                    </div>
+                    <div class="field">
+                        <label for="min_frames">Min Frames</label>
+                        <input type="number" id="min_frames" name="min_frames" min="0" step="1"
+                               value="{{ meta.min_frames_filter or '' }}" placeholder="e.g. 10">
+                    </div>
+                    <div class="field">
+                        <label for="has_ghost_recovery">Ghost Recovery</label>
+                        <select id="has_ghost_recovery" name="has_ghost_recovery">
+                            <option value="">All</option>
+                            <option value="yes" {{ 'selected' if meta.has_ghost_recovery_filter == 'yes' else '' }}>Yes (Recovered)</option>
+                            <option value="no" {{ 'selected' if meta.has_ghost_recovery_filter == 'no' else '' }}>No (Never recovered)</option>
+                        </select>
+                    </div>
+                </div>
+            </details>
+        </div>
     </form>
 
     <!-- Stats -->
@@ -444,6 +493,22 @@
     </div>
     {% endif %}
 
+    <!-- Noise Filtering Banner -->
+    {% if noise_filtering_active and noise_count > 0 %}
+    <div style="background: rgba(251, 191, 36, 0.08); border: 1px solid rgba(251, 191, 36, 0.25); border-radius: var(--radius-md); padding: 0.75rem 1.25rem; margin-bottom: 1.5rem; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+        <span style="color: var(--accent-warning); font-size: 0.85rem;">
+            <i class="fa-solid fa-filter-circle-xmark"></i>
+            <strong>{{ noise_count }}</strong> noise tracks hidden
+            (≤2 hits, or distance &lt;30px, or duration &lt;0.3s)
+            — adjust in Advanced Filters
+        </span>
+        <a href="?show_noise=1{% for k,v in request.query_params.items() if k != 'show_noise' %}&{{ k }}={{ v }}{% endfor %}"
+           style="padding: 0.35rem 0.75rem; background: rgba(251, 191, 36, 0.15); border: 1px solid rgba(251, 191, 36, 0.3); border-radius: var(--radius-sm); color: var(--accent-warning); text-decoration: none; font-size: 0.8rem; font-weight: 600; white-space: nowrap;">
+            <i class="fa-solid fa-eye"></i> Show All
+        </a>
+    </div>
+    {% endif %}
+
     <!-- Events Table -->
     {% if events|length == 0 %}
     <div class="empty-state">
@@ -495,6 +560,9 @@
                             <span class="badge badge-invalid">Invalid</span>
                         {% else %}
                             <span class="badge">{{ ev.event_type }}</span>
+                        {% endif %}
+                        {% if ev.total_hits is not none and ev.total_hits <= 2 %}
+                            <span style="display:inline-block;padding:0.1rem 0.4rem;border-radius:4px;font-size:0.65rem;font-weight:700;background:rgba(100,116,139,0.2);color:var(--text-muted);margin-left:3px;">Noise</span>
                         {% endif %}
                     </td>
                     <td class="coord">
@@ -654,6 +722,16 @@ document.addEventListener('DOMContentLoaded', function() {
             String(d.getHours()).padStart(2,'0') + ':' +
             String(d.getMinutes()).padStart(2,'0');
     }
+
+    // Remove empty fields before form submission to keep URLs clean
+    document.querySelector('.filter-bar').addEventListener('submit', function(e) {
+        const inputs = this.querySelectorAll('input, select');
+        inputs.forEach(function(input) {
+            if (input.value === '' || input.value === null) {
+                input.removeAttribute('name');
+            }
+        });
+    });
 });
 </script>
 </body>

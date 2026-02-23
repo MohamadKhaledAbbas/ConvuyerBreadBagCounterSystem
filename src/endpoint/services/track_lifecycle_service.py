@@ -66,6 +66,12 @@ class TrackLifecycleService:
         entry_type: Optional[str] = None,
         exit_direction: Optional[str] = None,
         has_classification: Optional[bool] = None,
+        min_distance: Optional[float] = None,
+        max_distance: Optional[float] = None,
+        min_hits: Optional[int] = None,
+        max_hits: Optional[int] = None,
+        min_frames: Optional[int] = None,
+        has_ghost_recovery: Optional[bool] = None,
         page: int = 1,
         page_size: int = 100
     ) -> Dict[str, Any]:
@@ -99,8 +105,24 @@ class TrackLifecycleService:
             f"type={event_type}, class={classification}, page={page}"
         )
 
-        # Get enhanced stats
-        stats = self.repo.get_enhanced_stats(db_start, db_end)
+        # Get enhanced stats (respects all active filters)
+        stats = self.repo.get_enhanced_stats(
+            db_start, db_end,
+            event_type=event_type,
+            classification=classification,
+            min_confidence=min_confidence,
+            min_duration=min_duration,
+            max_duration=max_duration,
+            entry_type=entry_type,
+            exit_direction=exit_direction,
+            has_classification=has_classification,
+            min_distance=min_distance,
+            max_distance=max_distance,
+            min_hits=min_hits,
+            max_hits=max_hits,
+            min_frames=min_frames,
+            has_ghost_recovery=has_ghost_recovery,
+        )
 
         # Get paginated events with filters
         events, total_count = self.repo.get_track_events_page(
@@ -113,6 +135,12 @@ class TrackLifecycleService:
             entry_type=entry_type,
             exit_direction=exit_direction,
             has_classification=has_classification,
+            min_distance=min_distance,
+            max_distance=max_distance,
+            min_hits=min_hits,
+            max_hits=max_hits,
+            min_frames=min_frames,
+            has_ghost_recovery=has_ghost_recovery,
             limit=page_size,
             offset=offset
         )
@@ -182,7 +210,13 @@ class TrackLifecycleService:
                 'min_duration_filter': min_duration,
                 'max_duration_filter': max_duration,
                 'entry_type_filter': entry_type,
-                'exit_direction_filter': exit_direction
+                'exit_direction_filter': exit_direction,
+                'min_distance_filter': min_distance,
+                'max_distance_filter': max_distance,
+                'min_hits_filter': min_hits,
+                'max_hits_filter': max_hits,
+                'min_frames_filter': min_frames,
+                'has_ghost_recovery_filter': 'yes' if has_ghost_recovery is True else ('no' if has_ghost_recovery is False else None)
             },
             'stats': stats,
             'events': events,
@@ -254,6 +288,10 @@ class TrackLifecycleService:
 
         return animation_data
 
+    def count_noise_tracks(self, start_time: datetime, end_time: datetime) -> int:
+        """Count noise tracks (<=2 hits) in time range for the noise banner."""
+        return self.repo.count_noise_tracks(start_time, end_time)
+
     def get_events_json(
         self,
         start_time: datetime,
@@ -261,6 +299,16 @@ class TrackLifecycleService:
         event_type: Optional[str] = None,
         classification: Optional[str] = None,
         min_confidence: Optional[float] = None,
+        min_duration: Optional[float] = None,
+        max_duration: Optional[float] = None,
+        entry_type: Optional[str] = None,
+        exit_direction: Optional[str] = None,
+        min_distance: Optional[float] = None,
+        max_distance: Optional[float] = None,
+        min_hits: Optional[int] = None,
+        max_hits: Optional[int] = None,
+        min_frames: Optional[int] = None,
+        has_ghost_recovery: Optional[bool] = None,
         page: int = 1,
         page_size: int = 100
     ) -> Dict[str, Any]:
@@ -268,12 +316,23 @@ class TrackLifecycleService:
         Get track events as JSON (for API consumption).
 
         Returns a lighter payload without template-specific processing.
+        Supports all filters including distance, hits, frames, and ghost recovery.
         """
         events, total_count = self.repo.get_track_events_page(
             start_time, end_time,
             event_type=event_type,
             classification=classification,
             min_confidence=min_confidence,
+            min_duration=min_duration,
+            max_duration=max_duration,
+            entry_type=entry_type,
+            exit_direction=exit_direction,
+            min_distance=min_distance,
+            max_distance=max_distance,
+            min_hits=min_hits,
+            max_hits=max_hits,
+            min_frames=min_frames,
+            has_ghost_recovery=has_ghost_recovery,
             limit=page_size,
             offset=(page - 1) * page_size
         )

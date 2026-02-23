@@ -26,6 +26,33 @@ def _get_service() -> TrackLifecycleService:
     return TrackLifecycleService(repo)
 
 
+def _parse_optional_float(val: Optional[str]) -> Optional[float]:
+    """Parse optional float from query param. Returns None for empty/blank strings."""
+    if val is None or val.strip() == '':
+        return None
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return None
+
+
+def _parse_optional_int(val: Optional[str]) -> Optional[int]:
+    """Parse optional int from query param. Returns None for empty/blank strings."""
+    if val is None or val.strip() == '':
+        return None
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return None
+
+
+def _clean_str(val: Optional[str]) -> Optional[str]:
+    """Return None for empty/blank strings."""
+    if val is None or val.strip() == '':
+        return None
+    return val.strip()
+
+
 @router.get("/track-events", response_class=HTMLResponse)
 async def track_events_page(
     request: Request,
@@ -33,11 +60,18 @@ async def track_events_page(
     end_time: Optional[str] = Query(None),
     event_type: Optional[str] = Query(None),
     classification: Optional[str] = Query(None),
-    min_confidence: Optional[float] = Query(None, ge=0, le=1),
-    min_duration: Optional[float] = Query(None, ge=0),
-    max_duration: Optional[float] = Query(None, ge=0),
+    min_confidence: Optional[str] = Query(None),
+    min_duration: Optional[str] = Query(None),
+    max_duration: Optional[str] = Query(None),
     entry_type: Optional[str] = Query(None),
     exit_direction: Optional[str] = Query(None),
+    min_distance: Optional[str] = Query(None),
+    max_distance: Optional[str] = Query(None),
+    min_hits: Optional[str] = Query(None),
+    max_hits: Optional[str] = Query(None),
+    min_frames: Optional[str] = Query(None),
+    has_ghost_recovery: Optional[str] = Query(None),
+    show_noise: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=10, le=200)
 ):
@@ -62,6 +96,12 @@ async def track_events_page(
         max_duration: Maximum track duration in seconds
         entry_type: Filter by entry type: bottom_entry, thrown_entry, midway_entry
         exit_direction: Filter by exit: top, bottom, left, right, timeout
+        min_distance: Minimum travel distance in pixels
+        max_distance: Maximum travel distance in pixels
+        min_hits: Minimum detection hits count
+        max_hits: Maximum detection hits count
+        min_frames: Minimum total frames
+        has_ghost_recovery: 'yes' or 'no' - filter by ghost recovery
         page: Page number (1-based)
         page_size: Events per page (10-200)
     """
@@ -77,18 +117,85 @@ async def track_events_page(
         else:
             start_dt, end_dt = service.get_default_time_range()
 
+        # Parse numeric filters (HTML forms send "" for empty fields)
+        p_min_confidence = _parse_optional_float(min_confidence)
+        p_min_duration = _parse_optional_float(min_duration)
+        p_max_duration = _parse_optional_float(max_duration)
+        p_min_distance = _parse_optional_float(min_distance)
+        p_max_distance = _parse_optional_float(max_distance)
+        p_min_hits = _parse_optional_int(min_hits)
+        p_max_hits = _parse_optional_int(max_hits)
+        p_min_frames = _parse_optional_int(min_frames)
+        p_event_type = _clean_str(event_type)
+        p_classification = _clean_str(classification)
+        p_entry_type = _clean_str(entry_type)
+        p_exit_direction = _clean_str(exit_direction)
+
+        # Convert has_ghost_recovery string to bool
+        ghost_recovery_bool = None
+        has_ghost_str = _clean_str(has_ghost_recovery)
+        if has_ghost_str == 'yes':
+            ghost_recovery_bool = True
+        elif has_ghost_str == 'no':
+            ghost_recovery_bool = False
+
+        # ── Default noise filtering ──────────────────────────────────────
+        # When user lands on the page without touching advanced filters,
+        # we apply sensible defaults that hide noise (edge-of-frame false
+        # detections, single-frame flashes, etc.).
+        #   • min_hits  = 3   → hides ≤2 hit tracks (single-frame noise)
+        #   • min_distance = 30 px → hides 0 px stationary false detections
+        #   • min_duration = 0.3 s → hides ultra-short flashes (<0.3s)
+        # The user can adjust any of these values in the Advanced Filters
+        # panel (they appear pre-filled) or click "Show Noise" to remove
+        # all defaults at once.
+        # ─────────────────────────────────────────────────────────────────
+        NOISE_DEFAULT_MIN_HITS = 3
+        NOISE_DEFAULT_MIN_DISTANCE = 30.0
+        NOISE_DEFAULT_MIN_DURATION = 0.3
+
+        noise_filtering_active = False
+        user_touched_advanced = (
+            p_min_hits is not None or p_max_hits is not None or
+            p_min_distance is not None or p_max_distance is not None or
+            p_min_duration is not None or p_max_duration is not None or
+            p_min_frames is not None or p_min_confidence is not None
+        )
+
+        effective_min_hits = p_min_hits
+        effective_min_distance = p_min_distance
+        effective_min_duration = p_min_duration
+
+        if show_noise != '1' and not user_touched_advanced:
+            # No explicit advanced filter set and user hasn't clicked "show noise"
+            effective_min_hits = NOISE_DEFAULT_MIN_HITS
+            effective_min_distance = NOISE_DEFAULT_MIN_DISTANCE
+            effective_min_duration = NOISE_DEFAULT_MIN_DURATION
+            noise_filtering_active = True
+
         data = service.get_lifecycle_data(
             start_dt, end_dt,
-            event_type=event_type,
-            classification=classification,
-            min_confidence=min_confidence,
-            min_duration=min_duration,
-            max_duration=max_duration,
-            entry_type=entry_type,
-            exit_direction=exit_direction,
+            event_type=p_event_type,
+            classification=p_classification,
+            min_confidence=p_min_confidence,
+            min_duration=effective_min_duration,
+            max_duration=p_max_duration,
+            entry_type=p_entry_type,
+            exit_direction=p_exit_direction,
+            min_distance=effective_min_distance,
+            max_distance=p_max_distance,
+            min_hits=effective_min_hits,
+            max_hits=p_max_hits,
+            min_frames=p_min_frames,
+            has_ghost_recovery=ghost_recovery_bool,
             page=page,
             page_size=page_size
         )
+
+        # Count noise tracks (<=2 hits) for the banner
+        noise_count = 0
+        if noise_filtering_active:
+            noise_count = service.count_noise_tracks(start_dt, end_dt)
 
         context = {
             'request': request,
@@ -96,7 +203,9 @@ async def track_events_page(
             'stats': data['stats'],
             'events': data['events'],
             'pagination': data['pagination'],
-            'filter_options': data['filter_options']
+            'filter_options': data['filter_options'],
+            'noise_filtering_active': noise_filtering_active,
+            'noise_count': noise_count
         }
 
         logger.info(f"[TrackEvents] Rendering {len(data['events'])} events (page {page})")
@@ -115,7 +224,17 @@ async def track_events_api(
     end_time: Optional[str] = Query(None),
     event_type: Optional[str] = Query(None),
     classification: Optional[str] = Query(None),
-    min_confidence: Optional[float] = Query(None, ge=0, le=1),
+    min_confidence: Optional[str] = Query(None),
+    min_duration: Optional[str] = Query(None),
+    max_duration: Optional[str] = Query(None),
+    entry_type: Optional[str] = Query(None),
+    exit_direction: Optional[str] = Query(None),
+    min_distance: Optional[str] = Query(None),
+    max_distance: Optional[str] = Query(None),
+    min_hits: Optional[str] = Query(None),
+    max_hits: Optional[str] = Query(None),
+    min_frames: Optional[str] = Query(None),
+    has_ghost_recovery: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=10, le=200)
 ):
@@ -124,6 +243,11 @@ async def track_events_api(
 
     Returns paginated track events with parsed JSON fields.
     Use this for programmatic access or custom frontends.
+
+    Supports all filters: event_type, classification, min_confidence,
+    min_duration, max_duration, entry_type, exit_direction,
+    min_distance, max_distance, min_hits, max_hits, min_frames,
+    has_ghost_recovery (yes/no).
     """
     service = _get_service()
 
@@ -136,11 +260,43 @@ async def track_events_api(
         else:
             start_dt, end_dt = service.get_default_time_range()
 
+        # Parse numeric filters (may be empty strings)
+        p_min_confidence = _parse_optional_float(min_confidence)
+        p_min_duration = _parse_optional_float(min_duration)
+        p_max_duration = _parse_optional_float(max_duration)
+        p_min_distance = _parse_optional_float(min_distance)
+        p_max_distance = _parse_optional_float(max_distance)
+        p_min_hits = _parse_optional_int(min_hits)
+        p_max_hits = _parse_optional_int(max_hits)
+        p_min_frames = _parse_optional_int(min_frames)
+        p_event_type = _clean_str(event_type)
+        p_classification = _clean_str(classification)
+        p_entry_type = _clean_str(entry_type)
+        p_exit_direction = _clean_str(exit_direction)
+
+        # Convert has_ghost_recovery string to bool
+        ghost_recovery_bool = None
+        has_ghost_str = _clean_str(has_ghost_recovery)
+        if has_ghost_str == 'yes':
+            ghost_recovery_bool = True
+        elif has_ghost_str == 'no':
+            ghost_recovery_bool = False
+
         data = service.get_events_json(
             start_dt, end_dt,
-            event_type=event_type,
-            classification=classification,
-            min_confidence=min_confidence,
+            event_type=p_event_type,
+            classification=p_classification,
+            min_confidence=p_min_confidence,
+            min_duration=p_min_duration,
+            max_duration=p_max_duration,
+            entry_type=p_entry_type,
+            exit_direction=p_exit_direction,
+            min_distance=p_min_distance,
+            max_distance=p_max_distance,
+            min_hits=p_min_hits,
+            max_hits=p_max_hits,
+            min_frames=p_min_frames,
+            has_ghost_recovery=ghost_recovery_bool,
             page=page,
             page_size=page_size
         )

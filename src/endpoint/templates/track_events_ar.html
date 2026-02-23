@@ -94,8 +94,87 @@
                 {% endfor %}
             </select>
         </div>
+        <div class="field">
+            <label for="entry_type">نوع الدخول</label>
+            <select id="entry_type" name="entry_type">
+                <option value="">الكل</option>
+                <option value="bottom_entry" {{ 'selected' if meta.entry_type_filter == 'bottom_entry' else '' }}>دخول من الأسفل</option>
+                <option value="midway_entry" {{ 'selected' if meta.entry_type_filter == 'midway_entry' else '' }}>دخول وسطي</option>
+                <option value="thrown_entry" {{ 'selected' if meta.entry_type_filter == 'thrown_entry' else '' }}>رمي</option>
+            </select>
+        </div>
+        <div class="field">
+            <label for="exit_direction">اتجاه الخروج</label>
+            <select id="exit_direction" name="exit_direction">
+                <option value="">الكل</option>
+                <option value="top" {{ 'selected' if meta.exit_direction_filter == 'top' else '' }}>أعلى</option>
+                <option value="bottom" {{ 'selected' if meta.exit_direction_filter == 'bottom' else '' }}>أسفل</option>
+                <option value="left" {{ 'selected' if meta.exit_direction_filter == 'left' else '' }}>يسار</option>
+                <option value="right" {{ 'selected' if meta.exit_direction_filter == 'right' else '' }}>يمين</option>
+                <option value="timeout" {{ 'selected' if meta.exit_direction_filter == 'timeout' else '' }}>انتهت المهلة</option>
+            </select>
+        </div>
         <button type="submit" class="btn btn-primary"><i class="fa-solid fa-filter"></i> تصفية</button>
         <a href="/track-events" class="btn btn-secondary"><i class="fa-solid fa-redo"></i> مسح الفلاتر</a>
+
+        <!-- Advanced Filters Toggle -->
+        <div style="width: 100%; margin-top: 0.5rem;">
+            <details id="advanced-filters" {% if noise_filtering_active or meta.min_confidence_filter or meta.min_duration_filter or meta.max_duration_filter or meta.min_distance_filter or meta.max_distance_filter or meta.min_hits_filter or meta.max_hits_filter or meta.min_frames_filter or meta.has_ghost_recovery_filter %}open{% endif %}>
+                <summary style="cursor: pointer; color: var(--accent-primary); font-size: 0.85rem; font-weight: 600;">
+                    <i class="fa-solid fa-sliders"></i> فلاتر متقدمة
+                </summary>
+                <div class="filter-bar" style="margin-top: 0.5rem; border: none; padding: 0;">
+                    <div class="field">
+                        <label for="min_confidence">أقل دقة</label>
+                        <input type="number" id="min_confidence" name="min_confidence" min="0" max="1" step="0.05"
+                               value="{{ meta.min_confidence_filter or '' }}" placeholder="0.0 - 1.0">
+                    </div>
+                    <div class="field">
+                        <label for="min_duration">أقل مدة (ثانية)</label>
+                        <input type="number" id="min_duration" name="min_duration" min="0" step="0.1"
+                               value="{{ meta.min_duration_filter or '' }}" placeholder="مثلاً: 0.5">
+                    </div>
+                    <div class="field">
+                        <label for="max_duration">أكبر مدة (ثانية)</label>
+                        <input type="number" id="max_duration" name="max_duration" min="0" step="0.1"
+                               value="{{ meta.max_duration_filter or '' }}" placeholder="مثلاً: 10">
+                    </div>
+                    <div class="field">
+                        <label for="min_distance">أقل مسافة (بكسل)</label>
+                        <input type="number" id="min_distance" name="min_distance" min="0" step="1"
+                               value="{{ meta.min_distance_filter or '' }}" placeholder="مثلاً: 50">
+                    </div>
+                    <div class="field">
+                        <label for="max_distance">أكبر مسافة (بكسل)</label>
+                        <input type="number" id="max_distance" name="max_distance" min="0" step="1"
+                               value="{{ meta.max_distance_filter or '' }}" placeholder="مثلاً: 1000">
+                    </div>
+                    <div class="field">
+                        <label for="min_hits">أقل عدد رصد</label>
+                        <input type="number" id="min_hits" name="min_hits" min="0" step="1"
+                               value="{{ meta.min_hits_filter or '' }}" placeholder="مثلاً: 3">
+                    </div>
+                    <div class="field">
+                        <label for="max_hits">أكبر عدد رصد</label>
+                        <input type="number" id="max_hits" name="max_hits" min="0" step="1"
+                               value="{{ meta.max_hits_filter or '' }}" placeholder="مثلاً: 50">
+                    </div>
+                    <div class="field">
+                        <label for="min_frames">أقل عدد إطارات</label>
+                        <input type="number" id="min_frames" name="min_frames" min="0" step="1"
+                               value="{{ meta.min_frames_filter or '' }}" placeholder="مثلاً: 10">
+                    </div>
+                    <div class="field">
+                        <label for="has_ghost_recovery">استعادة الشبح</label>
+                        <select id="has_ghost_recovery" name="has_ghost_recovery">
+                            <option value="">الكل</option>
+                            <option value="yes" {{ 'selected' if meta.has_ghost_recovery_filter == 'yes' else '' }}>نعم (تمت استعادة)</option>
+                            <option value="no" {{ 'selected' if meta.has_ghost_recovery_filter == 'no' else '' }}>لا (بدون استعادة)</option>
+                        </select>
+                    </div>
+                </div>
+            </details>
+        </div>
     </form>
 
     <!-- Stats -->
@@ -129,6 +208,22 @@
         {% endif %}
     </div>
 
+    <!-- Noise Filtering Banner -->
+    {% if noise_filtering_active and noise_count > 0 %}
+    <div style="background: rgba(251, 191, 36, 0.08); border: 1px solid rgba(251, 191, 36, 0.25); border-radius: var(--radius-md); padding: 0.75rem 1.25rem; margin-bottom: 1.5rem; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+        <span style="color: var(--accent-warning); font-size: 0.85rem;">
+            <i class="fa-solid fa-filter-circle-xmark"></i>
+            تم إخفاء <strong>{{ noise_count }}</strong> مسار تشويش
+            (≤2 رصد، أو مسافة &lt;30px، أو مدة &lt;0.3ث)
+            — يمكنك تعديل القيم من الفلاتر المتقدمة
+        </span>
+        <a href="?show_noise=1{% for k,v in request.query_params.items() if k != 'show_noise' %}&{{ k }}={{ v }}{% endfor %}"
+           style="padding: 0.35rem 0.75rem; background: rgba(251, 191, 36, 0.15); border: 1px solid rgba(251, 191, 36, 0.3); border-radius: var(--radius-sm); color: var(--accent-warning); text-decoration: none; font-size: 0.8rem; font-weight: 600; white-space: nowrap;">
+            <i class="fa-solid fa-eye"></i> عرض الكل
+        </a>
+    </div>
+    {% endif %}
+
     <!-- Events Table -->
     {% if events|length == 0 %}
     <div class="empty-state">
@@ -148,7 +243,9 @@
                     <th>الاتجاه</th>
                     <th>المسافة</th>
                     <th>المدة</th>
+                    <th>عدد الرصد</th>
                     <th>الدقة</th>
+                    <th>نوع الدخول</th>
                     <th>الصنف</th>
                     <th>بداية التتبع</th>
                     <th>نهاية التتبع</th>
@@ -181,18 +278,27 @@
                         {% else %}
                             <span class="badge">{{ ev.event_type }}</span>
                         {% endif %}
+                        {% if ev.total_hits is not none and ev.total_hits <= 2 %}
+                            <span style="display:inline-block;padding:0.1rem 0.4rem;border-radius:4px;font-size:0.65rem;font-weight:700;background:rgba(100,116,139,0.2);color:var(--text-muted);margin-right:2px;">تشويش</span>
+                        {% endif %}
                     </td>
                     <td class="coord">{% if ev.entry_x is not none %}({{ ev.entry_x }}, {{ ev.entry_y }}){% else %}—{% endif %}</td>
                     <td class="coord">{% if ev.exit_x is not none %}({{ ev.exit_x }}, {{ ev.exit_y }}){% else %}—{% endif %}</td>
                     <td>{% if ev.exit_direction %}<span class="dir-badge">{{ ev.exit_direction }}</span>{% else %}—{% endif %}</td>
                     <td class="coord">{% if ev.distance_pixels is not none %}{{ "%.0f"|format(ev.distance_pixels) }}px{% else %}—{% endif %}</td>
                     <td>{% if ev.duration_seconds is not none %}{{ "%.2f"|format(ev.duration_seconds) }}ث{% else %}—{% endif %}</td>
+                    <td class="coord">{% if ev.total_hits is not none %}{{ ev.total_hits }}{% else %}—{% endif %}</td>
                     <td>
                         {% if ev.avg_confidence is not none %}
                             {{ "%.2f"|format(ev.avg_confidence) }}
                             <span class="conf-bar">
                                 <span class="conf-bar-fill" style="width: {{ (ev.avg_confidence * 100)|int }}%; background: {% if ev.avg_confidence >= 0.8 %}var(--accent-success){% elif ev.avg_confidence >= 0.5 %}var(--accent-warning){% else %}var(--accent-danger){% endif %};"></span>
                             </span>
+                        {% else %}—{% endif %}
+                    </td>
+                    <td>
+                        {% if ev.entry_type %}
+                            <span class="dir-badge" style="font-size:0.7rem;">{{ ev.entry_type }}</span>
                         {% else %}—{% endif %}
                     </td>
                     <td>
@@ -205,7 +311,7 @@
                 </tr>
                 {% if ev.details|length > 0 %}
                 <tr class="detail-row" id="detail-{{ ev.track_id }}">
-                    <td colspan="12" class="detail-cell">
+                    <td colspan="14" class="detail-cell">
                         <strong style="color:var(--accent-primary);"><i class="fa-solid fa-list"></i> خطوات دورة الحياة ({{ ev.details|length }})</strong>
                         <ul class="steps-list">
                         {% for step in ev.details %}
@@ -264,6 +370,16 @@ function toggleDetail(trackId) {
         }
     }
 }
+
+// Remove empty fields before form submission to keep URLs clean
+document.querySelector('.filter-bar').addEventListener('submit', function(e) {
+    const inputs = this.querySelectorAll('input, select');
+    inputs.forEach(function(input) {
+        if (input.value === '' || input.value === null) {
+            input.removeAttribute('name');
+        }
+    });
+});
 </script>
 </body>
 </html>
