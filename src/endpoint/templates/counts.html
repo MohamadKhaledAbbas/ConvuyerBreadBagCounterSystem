@@ -396,16 +396,29 @@
     <section id="smInsight" style="margin: 0 0 1.8rem; display:none;">
         <div class="section-label"><i class="fa-solid fa-diagram-project"></i> حالة محرك القرار</div>
         <div style="background:var(--glass-bg); border:1px solid var(--glass-border); border-radius:var(--radius-lg); padding:1.25rem 1.5rem; backdrop-filter:blur(10px);">
-            <!-- Top row: state badge, run class, run progress, last decision -->
-            <div style="display:flex; align-items:center; gap:1.25rem; flex-wrap:wrap;">
+            <!-- Row 1: state badge + confirmed batch class -->
+            <div style="display:flex; align-items:center; gap:1rem; margin-bottom:1rem; flex-wrap:wrap;">
                 <span id="smStateBadge" style="display:inline-flex;align-items:center;gap:6px;padding:5px 14px;border-radius:20px;font-size:.8rem;font-weight:700;border:1px solid;letter-spacing:.03em;">—</span>
-                <div style="min-width:110px;">
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <span style="font-size:.75rem;color:var(--text-muted);">الدفعة:</span>
+                    <span id="smBatchClass" style="font-weight:700;font-size:1.05rem;color:var(--accent-success);">—</span>
+                </div>
+                <div id="smSmoothingStats" style="margin-inline-start:auto;display:flex;align-items:center;gap:8px;font-size:.75rem;color:var(--text-muted);">
+                    <i class="fa-solid fa-wand-magic-sparkles" style="font-size:.65rem;"></i>
+                    <span>تصحيح:</span>
+                    <span id="smSmoothedCount" style="font-family:'Inter',monospace;color:var(--text-secondary);">0/0</span>
+                </div>
+            </div>
+
+            <!-- Row 2: run class + progress bar + last decision -->
+            <div style="display:flex; align-items:center; gap:1.25rem; flex-wrap:wrap;">
+                <div style="min-width:90px;">
                     <div style="font-size:.72rem;color:var(--text-muted);margin-bottom:2px;">الفئة الحالية</div>
                     <div id="smRunClass" style="font-weight:700;color:var(--text-primary);font-size:.95rem;">—</div>
                 </div>
                 <div style="flex:2;min-width:180px;">
                     <div style="display:flex;justify-content:space-between;margin-bottom:4px;font-size:.72rem;color:var(--text-muted);">
-                        <span>تقدم التشغيل</span>
+                        <span id="smRunLabel">تقدم التشغيل</span>
                         <span id="smRunProgress" style="font-family:'Inter',monospace;">0/5</span>
                     </div>
                     <div style="background:rgba(255,255,255,.08);border-radius:4px;height:8px;overflow:hidden;"
@@ -682,8 +695,20 @@ function updateStateMachinePanel(data) {
     badge.style.color        = color;
     badge.style.borderColor  = color + '55';
 
+    // Confirmed batch class
+    const batchEl = $id('smBatchClass');
+    const batchClass = sm.confirmed_batch_class || '\u2014';
+    batchEl.textContent = batchClass;
+    batchEl.style.color = batchClass !== '\u2014' ? 'var(--accent-success)' : 'var(--text-muted)';
+
+    // Smoothing stats
+    const totalSmoothed = sm.total_smoothed || 0;
+    const totalRecords  = sm.total_records  || 0;
+    const ratePct = totalRecords > 0 ? ((totalSmoothed / totalRecords) * 100).toFixed(1) : '0.0';
+    $id('smSmoothedCount').textContent = totalSmoothed + '/' + totalRecords + ' (' + ratePct + '%)';
+
     // Current run class
-    $id('smRunClass').textContent = sm.current_run_class || '—';
+    $id('smRunClass').textContent = sm.current_run_class || '\u2014';
 
     // Run progress bar
     const target  = sm.state === 'TRANSITION' ? sm.transition_confirm_count : sm.run_target;
@@ -694,16 +719,37 @@ function updateStateMachinePanel(data) {
     $id('smRunBar').style.background = sm.state === 'TRANSITION' ? '#f87171' : '#2dd4bf';
     $id('smRunBarTrack').setAttribute('aria-valuenow', Math.round(pct));
 
+    // Progress label - context-aware
+    const labelEl = $id('smRunLabel');
+    if (sm.state === 'TRANSITION') {
+        labelEl.textContent = '\u062F\u0644\u064A\u0644 \u0627\u0644\u0627\u0646\u062A\u0642\u0627\u0644';
+    } else if (sm.state === 'ACCUMULATING') {
+        labelEl.textContent = '\u062A\u062C\u0645\u064A\u0639 \u0627\u0644\u062A\u0634\u063A\u064A\u0644';
+    } else {
+        labelEl.textContent = '\u062A\u0642\u062F\u0645 \u0627\u0644\u062A\u0634\u063A\u064A\u0644';
+    }
+
     // Hint under progress bar
-    const hint = sm.state === 'TRANSITION'
-        ? 'تحقق من الانتقال – يلزم ' + sm.transition_confirm_count + ' عنصر'
-        : sm.state === 'ACCUMULATING'
-        ? 'تحديد الدفعة – يلزم ' + sm.run_target + ' عنصر متتالي'
-        : 'دفعة مؤكدة – الحد الأقصى للانحراف: ' + sm.max_blip;
+    let hint;
+    if (sm.state === 'TRANSITION') {
+        hint = '\u062A\u062D\u0642\u0642 \u0645\u0646 \u0627\u0644\u0627\u0646\u062A\u0642\u0627\u0644 - \u064A\u0644\u0632\u0645 ' + sm.transition_confirm_count + ' \u0639\u0646\u0635\u0631 (\u0627\u0644\u0645\u0631\u0641\u0648\u0636 \u0645\u062D\u0627\u064A\u062F)';
+    } else if (sm.state === 'ACCUMULATING') {
+        hint = '\u062A\u062D\u062F\u064A\u062F \u0627\u0644\u062F\u0641\u0639\u0629 - \u064A\u0644\u0632\u0645 ' + sm.run_target + ' \u0639\u0646\u0635\u0631 \u0645\u062A\u062A\u0627\u0644\u064A';
+    } else {
+        hint = '\u062F\u0641\u0639\u0629 \u0645\u0624\u0643\u062F\u0629: ' + batchClass + ' | \u0627\u0644\u062D\u062F \u0627\u0644\u0623\u0642\u0635\u0649 \u0644\u0644\u0627\u0646\u062D\u0631\u0627\u0641: ' + sm.max_blip;
+    }
     $id('smRunHint').textContent = hint;
 
-    // Last decision
-    $id('smLastDecision').textContent = sm.last_decision || '—';
+    // Last decision - humanize
+    let decision = sm.last_decision || '\u2014';
+    if (decision === 'matches_batch') decision = '\u062A\u0637\u0627\u0628\u0642 \u0627\u0644\u062F\u0641\u0639\u0629';
+    else if (decision === 'transition_start') decision = '\u0628\u062F\u0627\u064A\u0629 \u0627\u0646\u062A\u0642\u0627\u0644';
+    else if (decision === 'rejected_to_batch') decision = '\u0645\u0631\u0641\u0648\u0636 \u2192 \u062F\u0641\u0639\u0629';
+    else if (decision.startsWith('batch_transition:')) decision = '\u062A\u063A\u064A\u064A\u0631: ' + decision.split(':').slice(1).join(':');
+    else if (decision.startsWith('blip_absorbed:')) decision = '\u0627\u0633\u062A\u064A\u0639\u0627\u0628 \u0627\u0646\u062D\u0631\u0627\u0641';
+    else if (decision.startsWith('transition_resolved')) decision = '\u062A\u062D\u0648\u064A\u0644 \u2192 \u062F\u0641\u0639\u0629 \u062C\u062F\u064A\u0629';
+    else if (decision === 'pre_run_absorbed') decision = '\u0627\u0633\u062A\u064A\u0639\u0627\u0628 \u0645\u0627 \u0642\u0628\u0644 \u0627\u0644\u062A\u0634\u063A\u064A\u0644';
+    $id('smLastDecision').textContent = decision;
 
     // Transition history
     _renderTransitionHistory(hist);

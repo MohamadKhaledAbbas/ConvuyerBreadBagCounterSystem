@@ -287,6 +287,372 @@ def test_short_accum_run_resets():
 
 # ── run all tests ─────────────────────────────────────────────────────────────
 
+# ── test 11: rejected during transition → transition confirms ─────────────────
+
+def test_rejected_neutral_during_confirmed_transition():
+    """
+    Rejected items during a genuine batch transition should NOT suppress
+    the transition.  They are held neutrally and assigned to the NEW batch
+    class once the transition is confirmed.
+
+    Sequence: Brown batch → Red, Rejected, Red, Red → Red batch confirmed
+    """
+    sm = make_sm(min_run=3, max_blip=2, transition_confirm=3)
+    # Establish Brown batch
+    add_many(sm, 'Brown', 4, start_id=1)
+    assert sm.confirmed_batch_class == 'Brown'
+
+    # Start transition: Red, Rejected, Red, Red
+    add(sm, 'Red', 10)        # evidence=1
+    assert sm.state == RunLengthStateMachine.TRANSITION
+    add(sm, 'Rejected', 11)   # neutral — should NOT count as Brown evidence
+    assert sm.state == RunLengthStateMachine.TRANSITION
+    add(sm, 'Red', 12)        # evidence=2
+    assert sm.state == RunLengthStateMachine.TRANSITION
+    add(sm, 'Red', 13)        # evidence=3 → threshold reached
+
+    assert sm.confirmed_batch_class == 'Red', (
+        f"Expected Red after transition, got {sm.confirmed_batch_class}"
+    )
+    assert sm.state == RunLengthStateMachine.CONFIRMED_BATCH
+
+    # The Rejected item (track 11) should have been smoothed to Red (new batch)
+    smoothed_rejected = [
+        r for r in sm.confirmed_records
+        if r.original_class == 'Rejected' and r.track_id == 11
+    ]
+    # It may not be emitted yet (output queue drains one per call), so drain
+    for i in range(10):
+        add(sm, 'Red', 100 + i)
+    smoothed_rejected = [
+        r for r in sm.confirmed_records
+        if r.original_class == 'Rejected' and r.track_id == 11
+    ]
+    assert len(smoothed_rejected) == 1, (
+        f"Expected 1 smoothed Rejected→Red record for T11; "
+        f"found {len(smoothed_rejected)}"
+    )
+    assert smoothed_rejected[0].class_name == 'Red', (
+        f"Neutral Rejected should be assigned to NEW batch (Red), "
+        f"got {smoothed_rejected[0].class_name}"
+    )
+    assert smoothed_rejected[0].smoothed is True
+    print("PASS test_rejected_neutral_during_confirmed_transition")
+
+
+# ── test 12: rejected during transition → blip absorbed ──────────────────────
+
+def test_rejected_neutral_during_blip_absorption():
+    """
+    If a transition turns out to be a blip (reverts to old batch),
+    neutral Rejected items are assigned to the OLD batch class.
+
+    Sequence: Brown batch → Red, Rejected, Brown → blip absorbed to Brown
+    """
+    sm = make_sm(min_run=3, max_blip=2, transition_confirm=3)
+    # Establish Brown batch
+    add_many(sm, 'Brown', 4, start_id=1)
+    assert sm.confirmed_batch_class == 'Brown'
+
+    # Start transition, then revert
+    add(sm, 'Red', 10)        # evidence=1
+    add(sm, 'Rejected', 11)   # neutral
+    add(sm, 'Brown', 12)      # revert → blip absorbed
+
+    assert sm.confirmed_batch_class == 'Brown'
+    assert sm.state == RunLengthStateMachine.CONFIRMED_BATCH
+
+    # Drain the output queue
+    for i in range(10):
+        add(sm, 'Brown', 100 + i)
+
+    # The Rejected item (track 11) should have been smoothed to Brown (old batch)
+    smoothed_rejected = [
+        r for r in sm.confirmed_records
+        if r.original_class == 'Rejected' and r.track_id == 11
+    ]
+    assert len(smoothed_rejected) == 1, (
+        f"Expected 1 smoothed Rejected→Brown record for T11; "
+        f"found {len(smoothed_rejected)}"
+    )
+    assert smoothed_rejected[0].class_name == 'Brown', (
+        f"Neutral Rejected should be assigned to OLD batch (Brown) on blip, "
+        f"got {smoothed_rejected[0].class_name}"
+    )
+    print("PASS test_rejected_neutral_during_blip_absorption")
+
+
+# ── test 13: interleaved rejected + candidate confirms transition ─────────────
+
+def test_interleaved_rejected_and_candidate():
+    """
+    Rejected items interleaved with candidate items should not prevent
+    the candidate evidence counter from reaching the threshold.
+
+    Sequence: Brown → Red, Rejected, Red, Rejected, Red → Red confirmed
+    """
+    sm = make_sm(min_run=3, max_blip=2, transition_confirm=3)
+    add_many(sm, 'Brown', 4, start_id=1)
+
+    # Interleaved: Red, Rejected, Red, Rejected, Red
+    add(sm, 'Red', 10)        # evidence=1
+    add(sm, 'Rejected', 11)   # neutral
+    add(sm, 'Red', 12)        # evidence=2
+    add(sm, 'Rejected', 13)   # neutral
+    add(sm, 'Red', 14)        # evidence=3 → confirm
+
+    assert sm.confirmed_batch_class == 'Red', (
+        f"Expected Red, got {sm.confirmed_batch_class}"
+    )
+    assert sm.state == RunLengthStateMachine.CONFIRMED_BATCH
+
+    # Both Rejected items should be smoothed to Red
+    for i in range(10):
+        add(sm, 'Red', 100 + i)
+    rejected_records = [
+        r for r in sm.confirmed_records if r.original_class == 'Rejected'
+    ]
+    for r in rejected_records:
+        assert r.class_name == 'Red', (
+            f"Neutral Rejected should become Red, got {r.class_name}"
+        )
+    print("PASS test_interleaved_rejected_and_candidate")
+
+
+# ── test 14: many rejected don't trigger overflow ─────────────────────────────
+
+def test_many_rejected_dont_cause_overflow():
+    """
+    A stream of Rejected items during transition should NOT trigger overflow
+    (they are neutral). Only third-class items count toward overflow.
+
+    Sequence: Brown → Red, Rejected x4, Red, Red → Red confirmed
+    (With max_blip=2, transition_confirm=3, even 4 Rejected items don't overflow)
+    """
+    sm = make_sm(min_run=3, max_blip=2, transition_confirm=3)
+    add_many(sm, 'Brown', 4, start_id=1)
+
+    add(sm, 'Red', 10)         # evidence=1
+    add(sm, 'Rejected', 20)    # neutral
+    add(sm, 'Rejected', 21)    # neutral
+    add(sm, 'Rejected', 22)    # neutral
+    add(sm, 'Rejected', 23)    # neutral — still in TRANSITION, not absorbed
+    assert sm.state == RunLengthStateMachine.TRANSITION, (
+        f"Expected TRANSITION with 4 neutrals, got {sm.state}"
+    )
+    add(sm, 'Red', 30)         # evidence=2
+    add(sm, 'Red', 31)         # evidence=3 → confirm
+
+    assert sm.confirmed_batch_class == 'Red', (
+        f"Expected Red after transition with neutrals, got {sm.confirmed_batch_class}"
+    )
+    print("PASS test_many_rejected_dont_cause_overflow")
+
+
+# ── test 15: third-class items still trigger overflow ─────────────────────────
+
+def test_third_class_triggers_overflow():
+    """
+    Third-class items (not candidate, not old batch, not Rejected) should
+    still trigger overflow via the noise counter.
+    """
+    sm = make_sm(min_run=3, max_blip=2, transition_confirm=3)
+    add_many(sm, 'Brown', 4, start_id=1)
+
+    add(sm, 'Red', 10)     # candidate=Red, evidence=1
+    add(sm, 'Green', 20)   # noise=1
+    add(sm, 'Green', 21)   # noise=2
+    add(sm, 'Green', 22)   # noise=3 > max_blip(2) → overflow → absorb to Brown
+
+    # After overflow, should settle back to Brown
+    # May need a Brown to settle if overflow triggers mini-transition
+    for i in range(3):
+        add(sm, 'Brown', 100 + i)
+
+    assert sm.confirmed_batch_class == 'Brown', (
+        f"Expected Brown after overflow, got {sm.confirmed_batch_class}"
+    )
+    assert sm.state == RunLengthStateMachine.CONFIRMED_BATCH
+    print("PASS test_third_class_triggers_overflow")
+
+
+# ── test 16: rejected before transition start (in confirmed batch) ────────────
+
+def test_rejected_before_transition_start():
+    """
+    Rejected items arriving in CONFIRMED_BATCH (before any transition starts)
+    should still be immediately smoothed to the current batch class.
+    """
+    sm = make_sm(min_run=3, max_blip=2, transition_confirm=3)
+    add_many(sm, 'Brown', 4, start_id=1)
+
+    # Rejected in steady state
+    r1 = add(sm, 'Rejected', 50)
+    r2 = add(sm, 'Rejected', 51)
+    # Then a real transition
+    add(sm, 'Red', 60)
+    add(sm, 'Red', 61)
+    add(sm, 'Red', 62)  # confirm transition
+
+    assert sm.confirmed_batch_class == 'Red'
+
+    # Drain and check
+    for i in range(10):
+        add(sm, 'Red', 200 + i)
+
+    # The Rejected items before transition should be Brown (old batch)
+    rejected_before = [
+        r for r in sm.confirmed_records
+        if r.original_class == 'Rejected' and r.track_id in (50, 51)
+    ]
+    for r in rejected_before:
+        assert r.class_name == 'Brown', (
+            f"Pre-transition Rejected should be Brown, got {r.class_name}"
+        )
+    print("PASS test_rejected_before_transition_start")
+
+
+# ── test 17: rejected-only stream hits hard cap ──────────────────────────────
+
+def test_rejected_only_stream_hits_hard_cap():
+    """
+    If only Rejected items arrive during transition (no candidate evidence,
+    no noise), the hard cap (_MAX_TRANSITION_BUFFER) eventually forces
+    resolution by absorbing to old batch (since evidence < threshold).
+    """
+    sm = make_sm(min_run=3, max_blip=2, transition_confirm=3)
+    add_many(sm, 'Brown', 4, start_id=1)
+
+    # Start transition with one Red
+    add(sm, 'Red', 10)  # evidence=1
+    assert sm.state == RunLengthStateMachine.TRANSITION
+
+    # Feed only Rejected items up to the hard cap
+    cap = RunLengthStateMachine._MAX_TRANSITION_BUFFER
+    for i in range(cap + 5):  # well past the cap
+        add(sm, 'Rejected', 100 + i)
+
+    # After hard cap, should have been force-resolved
+    # evidence=1 < transition_confirm=3, so absorbed to Brown
+    assert sm.state == RunLengthStateMachine.CONFIRMED_BATCH, (
+        f"Expected CONFIRMED_BATCH after hard cap, got {sm.state}"
+    )
+    assert sm.confirmed_batch_class == 'Brown', (
+        f"Expected Brown (absorbed) after hard cap, got {sm.confirmed_batch_class}"
+    )
+    print("PASS test_rejected_only_stream_hits_hard_cap")
+
+
+# ── test 18: hard cap with enough evidence confirms transition ────────────────
+
+def test_hard_cap_with_enough_evidence_confirms():
+    """
+    If the hard cap is hit but there IS enough candidate evidence,
+    the transition should be confirmed rather than absorbed.
+    """
+    sm = make_sm(min_run=3, max_blip=2, transition_confirm=3)
+    add_many(sm, 'Brown', 4, start_id=1)
+
+    # Start transition: 2 Red items (not enough yet)
+    add(sm, 'Red', 10)   # evidence=1
+    add(sm, 'Red', 11)   # evidence=2
+
+    # Lots of Rejected items, then a 3rd Red to reach threshold before cap
+    for i in range(10):
+        add(sm, 'Rejected', 100 + i)
+    add(sm, 'Red', 12)   # evidence=3 → should confirm on this item, before cap
+
+    assert sm.confirmed_batch_class == 'Red', (
+        f"Expected Red after evidence threshold, got {sm.confirmed_batch_class}"
+    )
+    print("PASS test_hard_cap_with_enough_evidence_confirms")
+
+
+# ── test 19: transition with rejected doesn't break run_length property ───────
+
+def test_transition_run_length_reflects_evidence():
+    """
+    current_run_length during TRANSITION should reflect candidate evidence
+    count, not total buffer size (which includes neutral Rejected items).
+    """
+    sm = make_sm(min_run=3, max_blip=2, transition_confirm=5)
+    add_many(sm, 'Brown', 4, start_id=1)
+
+    add(sm, 'Red', 10)        # evidence=1
+    add(sm, 'Rejected', 11)   # neutral (buf=2, evidence=1)
+    add(sm, 'Red', 12)        # evidence=2 (buf=3, evidence=2)
+    add(sm, 'Rejected', 13)   # neutral (buf=4, evidence=2)
+
+    assert sm.state == RunLengthStateMachine.TRANSITION
+    assert sm.current_run_length == 2, (
+        f"current_run_length should be evidence count (2), "
+        f"got {sm.current_run_length}"
+    )
+    assert sm.current_run_class == 'Red'
+    print("PASS test_transition_run_length_reflects_evidence")
+
+
+# ── test 20: realistic conveyor scenario ──────────────────────────────────────
+
+def test_realistic_conveyor_batch_change():
+    """
+    Simulate a realistic conveyor scenario:
+    - 10 Brown bags, then a batch change to Red
+    - At the boundary: 2 flipped (Rejected) bags
+    - Then Red bags continue
+
+    The Rejected bags at the boundary should NOT prevent the transition.
+    """
+    sm = make_sm(min_run=5, max_blip=3, transition_confirm=5)
+
+    # Brown batch
+    for i in range(10):
+        add(sm, 'Brown', i)
+    assert sm.confirmed_batch_class == 'Brown'
+
+    # Boundary: operator switching batches, a couple bags are flipped
+    add(sm, 'Rejected', 100)  # still in CONFIRMED_BATCH → smoothed to Brown
+    add(sm, 'Rejected', 101)  # still in CONFIRMED_BATCH → smoothed to Brown
+
+    # New batch starts
+    add(sm, 'Red', 200)       # TRANSITION starts
+    add(sm, 'Rejected', 201)  # neutral during transition
+    add(sm, 'Red', 202)
+    add(sm, 'Red', 203)
+    add(sm, 'Rejected', 204)  # neutral during transition
+    add(sm, 'Red', 205)
+    add(sm, 'Red', 206)       # evidence=5 → transition confirmed
+
+    assert sm.confirmed_batch_class == 'Red', (
+        f"Expected Red after realistic batch change, got {sm.confirmed_batch_class}"
+    )
+
+    # Drain and verify all items are counted
+    for i in range(20):
+        add(sm, 'Red', 300 + i)
+
+    # Check that T201 and T204 (Rejected during transition) became Red
+    boundary_rejected = [
+        r for r in sm.confirmed_records
+        if r.original_class == 'Rejected' and r.track_id in (201, 204)
+    ]
+    for r in boundary_rejected:
+        assert r.class_name == 'Red', (
+            f"Boundary Rejected T{r.track_id} should be Red, got {r.class_name}"
+        )
+
+    # Check that T100/T101 (Rejected before transition) became Brown
+    pre_boundary_rejected = [
+        r for r in sm.confirmed_records
+        if r.original_class == 'Rejected' and r.track_id in (100, 101)
+    ]
+    for r in pre_boundary_rejected:
+        assert r.class_name == 'Brown', (
+            f"Pre-boundary Rejected T{r.track_id} should be Brown, got {r.class_name}"
+        )
+    print("PASS test_realistic_conveyor_batch_change")
+
+
 if __name__ == '__main__':
     test_accumulation_establishes_batch()
     test_pre_run_items_absorbed()
@@ -298,4 +664,15 @@ if __name__ == '__main__':
     test_flush_remaining()
     test_statistics_interface()
     test_short_accum_run_resets()
-    print("\nAll RunLengthStateMachine tests passed ✓")
+    # New tests for neutral-rejected behavior
+    test_rejected_neutral_during_confirmed_transition()
+    test_rejected_neutral_during_blip_absorption()
+    test_interleaved_rejected_and_candidate()
+    test_many_rejected_dont_cause_overflow()
+    test_third_class_triggers_overflow()
+    test_rejected_before_transition_start()
+    test_rejected_only_stream_hits_hard_cap()
+    test_hard_cap_with_enough_evidence_confirms()
+    test_transition_run_length_reflects_evidence()
+    test_realistic_conveyor_batch_change()
+    print("\nAll RunLengthStateMachine tests passed!")

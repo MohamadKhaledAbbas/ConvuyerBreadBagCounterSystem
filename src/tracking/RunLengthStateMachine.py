@@ -17,6 +17,17 @@ Key parameters (all configurable via env vars via tracking_config):
 - max_blip:                 Max consecutive non-matching items absorbed as noise (default 3)
 - transition_confirm_count: Items of new class needed to confirm a batch change (default 5)
 
+Rejected / flipped-bag handling:
+- CONFIRMED_BATCH: Rejected items are immediately overridden to the batch class
+  (bags are present, just unreadable — they belong to the current batch).
+- TRANSITION: Rejected items are **held neutrally** in the transition buffer
+  without counting as evidence for or against the transition.  When the
+  transition resolves (confirmed new batch or absorbed as blip), they are
+  assigned to the *winning* class.  This prevents rejected bags from
+  suppressing a legitimate batch change.
+- ACCUMULATING: Rejected items are buffered and later absorbed to whichever
+  class is confirmed as the first batch.
+
 Interface:
     Same as BidirectionalSmoother — add_classification() → Optional[ClassificationRecord]
     Drop-in replacement with no changes needed at call sites.
@@ -43,6 +54,17 @@ class RunLengthStateMachine:
                        → CONFIRMED_BATCH (new class) when run >= transition_confirm_count
                        → CONFIRMED_BATCH (old class) when class reverts within max_blip items
 
+    Rejected handling strategy:
+      - CONFIRMED_BATCH: override to batch class immediately (bag is on the belt,
+        just flipped/unreadable — it belongs to the current batch).
+      - TRANSITION: hold neutrally in buffer. Rejected items do NOT count as
+        evidence for the old batch or the new candidate. They are resolved when
+        the transition completes: assigned to new batch on confirm, or old batch
+        on blip absorption.  This prevents flipped bags between batches from
+        suppressing legitimate transitions.
+      - ACCUMULATING: buffered in pre-run list; absorbed to whatever class is
+        eventually confirmed as the first batch.
+
     Drop-in replacement for BidirectionalSmoother:
       - Same add_classification() → Optional[ClassificationRecord] interface
       - Same flush_remaining(), check_timeout(), get_statistics(),
@@ -59,6 +81,8 @@ class RunLengthStateMachine:
     # History size limits
     _MAX_CONFIRMED_RECORDS = 100
     _MAX_TRANSITION_HISTORY = 20
+    # Hard cap on transition buffer to prevent unbounded growth from neutral items
+    _MAX_TRANSITION_BUFFER = 50
 
     def __init__(
         self,
@@ -96,6 +120,8 @@ class RunLengthStateMachine:
         # TRANSITION phase buffer
         self._transition_buffer: List[ClassificationRecord] = []
         self._transition_candidate_class: Optional[str] = None
+        self._candidate_evidence_count: int = 0   # non-Rejected candidate items only
+        self._transition_noise_count: int = 0     # non-candidate, non-Rejected items (third-class)
 
         # Confirmed-but-not-yet-returned items (emitted one per add_classification call)
         self._output_queue: deque = deque()
@@ -132,9 +158,9 @@ class RunLengthStateMachine:
 
     @property
     def current_run_length(self) -> int:
-        """Length of the active run (transition buffer when in TRANSITION state)."""
+        """Length of the active run (candidate evidence count when in TRANSITION state)."""
         if self._state == self.TRANSITION:
-            return len(self._transition_buffer)
+            return self._candidate_evidence_count
         return len(self._current_run)
 
     @property
@@ -251,6 +277,8 @@ class RunLengthStateMachine:
             self._output_queue.append(item)
         self._transition_buffer = []
         self._transition_candidate_class = None
+        self._candidate_evidence_count = 0
+        self._transition_noise_count = 0
 
         # Drain output queue and collect results
         confirmed: List[ClassificationRecord] = []
@@ -515,6 +543,7 @@ class RunLengthStateMachine:
         self._state = self.TRANSITION
         self._transition_candidate_class = class_name
         self._transition_buffer = [record]
+        self._candidate_evidence_count = 1  # first item counts as evidence
 
     # ── TRANSITION ────────────────────────────────────────────────────────────
 
@@ -522,62 +551,107 @@ class RunLengthStateMachine:
         """
         Evaluate whether the new class run is a real batch change or a blip.
 
-        - Continues candidate class → extend transition buffer.
+        - Candidate class → extend transition buffer (counts as evidence).
           → Reaches transition_confirm_count: confirm real transition.
         - Returns to old batch class → absorb buffer as blip.
-        - Mixed / third class → extend buffer; absorb if too large.
-        - Rejected → treat as old batch class (blip continuation).
+        - Mixed / third class → extend buffer; increment noise counter.
+          → Noise count exceeds max_blip: force-absorb as overflow.
+        - Rejected → hold neutrally in buffer (no evidence for either side,
+          no noise contribution).  Resolved when transition completes.
+
+        This neutral handling prevents flipped/unreadable bags at batch
+        boundaries from suppressing legitimate transitions.
         """
         batch_class     = self._confirmed_batch_class
         candidate_class = self._transition_candidate_class
         class_name      = record.class_name
 
-        # Rejected during transition → treat as old batch class
+        # ── Rejected during transition: hold neutrally ───────────────────
+        #    Does NOT count as evidence for either side.
+        #    Does NOT count as noise toward overflow.
+        #    Safety valve: hard cap prevents unbounded buffer growth.
         if class_name == 'Rejected':
-            record     = self._create_smoothed(record, batch_class, 'rejected_during_transition')
-            class_name = batch_class
-
-        if class_name == candidate_class:
-            # Extends the candidate run
             self._transition_buffer.append(record)
             logger.debug(
-                f"[RLSM] TRANSITION | "
-                f"candidate={candidate_class}×{len(self._transition_buffer)}"
+                f"[RLSM] TRANSITION | T{record.track_id} Rejected → held neutral "
+                f"(buf={len(self._transition_buffer)} evidence={self._candidate_evidence_count} "
+                f"noise={self._transition_noise_count})"
             )
-            if len(self._transition_buffer) >= self.transition_confirm_count:
-                self._confirm_transition()
+            # Hard cap: if buffer grows excessively (e.g. long stream of only
+            # Rejected items), force-resolve based on available evidence.
+            if len(self._transition_buffer) >= self._MAX_TRANSITION_BUFFER:
+                if self._candidate_evidence_count >= self.transition_confirm_count:
+                    logger.info(
+                        f"[RLSM] TRANSITION_BUFFER_CAP | buf={len(self._transition_buffer)} "
+                        f"evidence={self._candidate_evidence_count} → confirming transition"
+                    )
+                    self._confirm_transition()
+                else:
+                    logger.info(
+                        f"[RLSM] TRANSITION_BUFFER_CAP | buf={len(self._transition_buffer)} "
+                        f"evidence={self._candidate_evidence_count} → absorbing to {batch_class}"
+                    )
+                    self._absorb_blip(None, reason='buffer_cap_exceeded')
+            return
 
-        elif class_name == batch_class:
-            # Reverted to old class → absorb blip
-            self._absorb_blip(record, reason='class_reverted')
-
-        else:
-            # Third / mixed class — extend buffer; force-absorb if it grows too large
+        # ── Candidate class: evidence for the transition ─────────────────
+        if class_name == candidate_class:
             self._transition_buffer.append(record)
-            max_wait = self.max_blip + self.transition_confirm_count
-            if len(self._transition_buffer) > max_wait:
-                logger.info(
-                    f"[RLSM] TRANSITION_OVERFLOW | "
-                    f"buf={len(self._transition_buffer)} absorbing to {batch_class}"
-                )
-                self._absorb_blip(None, reason='transition_overflow')
+            self._candidate_evidence_count += 1
+            logger.debug(
+                f"[RLSM] TRANSITION | "
+                f"candidate={candidate_class} evidence={self._candidate_evidence_count} "
+                f"buf={len(self._transition_buffer)}"
+            )
+            if self._candidate_evidence_count >= self.transition_confirm_count:
+                self._confirm_transition()
+            return
+
+        # ── Old batch class: revert → absorb blip ───────────────────────
+        if class_name == batch_class:
+            self._absorb_blip(record, reason='class_reverted')
+            return
+
+        # ── Third / mixed class: noise toward overflow ───────────────────
+        self._transition_buffer.append(record)
+        self._transition_noise_count += 1
+        if self._transition_noise_count > self.max_blip:
+            logger.info(
+                f"[RLSM] TRANSITION_OVERFLOW | "
+                f"noise={self._transition_noise_count} buf={len(self._transition_buffer)} "
+                f"absorbing to {batch_class}"
+            )
+            self._absorb_blip(None, reason='transition_overflow')
 
     def _confirm_transition(self):
-        """Commit a confirmed batch change and emit all transition-buffer items."""
+        """
+        Commit a confirmed batch change and emit all transition-buffer items.
+
+        Non-candidate items (including neutral Rejected items) are smoothed
+        to the new batch class — they were between batches, and the new batch
+        won the transition.
+        """
         old_class = self._confirmed_batch_class
         new_class = self._transition_candidate_class
+        neutral_count = sum(1 for r in self._transition_buffer if r.class_name == 'Rejected')
         logger.info(
             f"[RLSM] TRANSITION_CONFIRMED | "
-            f"{old_class}->{new_class} run={len(self._transition_buffer)}"
+            f"{old_class}->{new_class} evidence={self._candidate_evidence_count} "
+            f"buf={len(self._transition_buffer)} neutrals={neutral_count}"
         )
         self._confirmed_batch_class       = new_class
         self._state                       = self.CONFIRMED_BATCH
         self._last_decision_reason        = f'batch_transition:{old_class}->{new_class}'
 
         for item in self._transition_buffer:
+            if item.class_name != new_class:
+                # Neutral Rejected items and any stray items → assign to new batch
+                item = self._create_smoothed(item, new_class, 'transition_resolved_to_new_batch')
             self._output_queue.append(item)
         self._transition_buffer           = []
         self._transition_candidate_class  = None
+        self._candidate_evidence_count    = 0
+        self._transition_noise_count      = 0
 
         self._record_transition(
             old_class, new_class, 'batch_transition', self.transition_confirm_count
@@ -591,16 +665,20 @@ class RunLengthStateMachine:
         """
         Override all transition-buffer items to the confirmed batch class (blip absorption).
 
+        Non-matching items (including neutral Rejected items) are smoothed
+        to the old batch class — the transition was a false alarm.
+
         Args:
             extra_record: The triggering item that should also be confirmed (may be None).
             reason:       Descriptive reason for absorption.
         """
         batch_class = self._confirmed_batch_class
+        neutral_count = sum(1 for r in self._transition_buffer if r.class_name == 'Rejected')
         logger.info(
             f"[RLSM] BLIP_ABSORBED | "
             f"candidate={self._transition_candidate_class} "
-            f"len={len(self._transition_buffer)} reason={reason} "
-            f"absorb_to={batch_class}"
+            f"len={len(self._transition_buffer)} neutrals={neutral_count} "
+            f"reason={reason} absorb_to={batch_class}"
         )
         self._last_decision_reason = f'blip_absorbed:{reason}'
 
@@ -610,6 +688,8 @@ class RunLengthStateMachine:
             self._output_queue.append(item)
         self._transition_buffer          = []
         self._transition_candidate_class = None
+        self._candidate_evidence_count   = 0
+        self._transition_noise_count     = 0
         self._state                      = self.CONFIRMED_BATCH
 
         if extra_record is not None:

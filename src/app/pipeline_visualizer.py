@@ -900,15 +900,15 @@ class PipelineVisualizer:
         Draw a compact Run-Length State Machine panel in the bottom-right corner.
 
         Shows:
-        - State badge (color-coded: yellow=ACCUMULATING, green=CONFIRMED_BATCH, red=TRANSITION)
-        - Confirmed batch class
-        - Current run: class × N / target (with filled progress bar)
-        - Last decision reason (truncated)
-        - Total batch transitions so far
+        - State badge (color-coded) + confirmed batch class on same row
+        - Current run: class x evidence / target (with progress bar)
+        - Smoothing stats: corrected / total items
+        - Last decision reason
+        - Transition count
         """
         h, w = frame.shape[:2]
 
-        # State → display color
+        # State -> display color
         STATE_COLORS = {
             'ACCUMULATING':    (30,  210, 220),   # yellow (BGR)
             'CONFIRMED_BATCH': (80,  230, 100),   # green
@@ -917,8 +917,8 @@ class PipelineVisualizer:
         state = sm_info.get('state', 'ACCUMULATING')
         state_color = STATE_COLORS.get(state, self.COLORS['text_secondary'])
 
-        panel_w = 290
-        panel_h = 195
+        panel_w = 300
+        panel_h = 220
         panel_x = w - panel_w - 15
         panel_y = h - panel_h - 15
 
@@ -928,73 +928,133 @@ class PipelineVisualizer:
 
         x     = panel_x + self.PANEL_PADDING
         right = panel_x + panel_w - self.PANEL_PADDING
+        content_w = panel_w - self.PANEL_PADDING * 2
 
-        # ── State badge ──────────────────────────────────────────────────────
+        # ── Row 1: State badge + batch class ─────────────────────────────────
         STATE_LABELS = {
-            'ACCUMULATING':    'ACCUMULATING',
-            'CONFIRMED_BATCH': 'CONFIRMED',
-            'TRANSITION':      'TRANSITION',
+            'ACCUMULATING':    'ACCUM',
+            'CONFIRMED_BATCH': 'LOCKED',
+            'TRANSITION':      'TRANSIT',
         }
-        badge_text = STATE_LABELS.get(state, state)
-        badge_w    = cv2.getTextSize(badge_text, self.FONT, self.FONT_SCALE_SMALL, self.FONT_WEIGHT_BOLD)[0][0] + 14
+        badge_text = STATE_LABELS.get(state, state[:8])
+        badge_w = cv2.getTextSize(badge_text, self.FONT, self.FONT_SCALE_SMALL, self.FONT_WEIGHT_BOLD)[0][0] + 14
         cv2.rectangle(frame, (x, y), (x + badge_w, y + 20), state_color, -1)
         cv2.putText(
             frame, badge_text, (x + 7, y + 14),
             self.FONT, self.FONT_SCALE_SMALL,
             (20, 20, 25), self.FONT_WEIGHT_BOLD
         )
+
+        # Batch class right of badge
+        batch_class = sm_info.get('batch_class') or '...'
+        bc_trunc = batch_class if len(batch_class) <= 16 else batch_class[:13] + ".."
+        bc_color = self.COLORS['text_success'] if batch_class != '...' else self.COLORS['text_secondary']
+        cv2.putText(frame, bc_trunc, (x + badge_w + 10, y + 14),
+                    self.FONT, self.FONT_SCALE_SMALL,
+                    bc_color, self.FONT_WEIGHT_BOLD)
         y += 28
 
-        # ── Confirmed batch class ─────────────────────────────────────────────
-        batch_class = sm_info.get('batch_class') or 'N/A'
-        cv2.putText(frame, "Batch:", (x, y + 12),
-                    self.FONT, self.FONT_SCALE_SMALL,
-                    self.COLORS['text_secondary'], self.FONT_WEIGHT_NORMAL)
-        bc_trunc = batch_class if len(batch_class) <= 20 else batch_class[:17] + "..."
-        cv2.putText(frame, bc_trunc, (x + 52, y + 12),
-                    self.FONT, self.FONT_SCALE_SMALL,
-                    self.COLORS['text_success'] if batch_class != 'N/A' else self.COLORS['text_secondary'],
-                    self.FONT_WEIGHT_BOLD)
-        y += self.LINE_HEIGHT_MEDIUM
-
-        # ── Run progress ──────────────────────────────────────────────────────
-        run_class  = sm_info.get('run_class')  or 'N/A'
+        # ── Row 2: Run progress label ────────────────────────────────────────
+        run_class  = sm_info.get('run_class')  or '...'
         run_len    = sm_info.get('run_length',  0)
         run_target = sm_info.get('run_target',  5)
         run_pct    = min(1.0, run_len / run_target) if run_target > 0 else 0.0
 
-        run_label = f"Run: {run_class[:12]} {run_len}/{run_target}"
+        if state == 'TRANSITION':
+            run_label = f"Evidence: {run_class[:10]} {run_len}/{run_target}"
+        elif state == 'ACCUMULATING':
+            run_label = f"Run: {run_class[:10]} {run_len}/{run_target}"
+        else:
+            run_label = f"Run: {run_class[:10]} {run_len}/{run_target}"
+
         cv2.putText(frame, run_label, (x, y + 12),
                     self.FONT, self.FONT_SCALE_SMALL,
                     state_color, self.FONT_WEIGHT_NORMAL)
         y += self.LINE_HEIGHT_MEDIUM
 
-        # Progress bar
-        bar_w  = panel_w - self.PANEL_PADDING * 2
-        bar_h  = 9
+        # ── Row 3: Progress bar ──────────────────────────────────────────────
+        bar_w  = content_w
+        bar_h  = 10
         bar_y  = y
+        # Background track
         cv2.rectangle(frame, (x, bar_y), (x + bar_w, bar_y + bar_h),
                       (60, 60, 70), -1)
+        # Filled portion
         filled = int(bar_w * run_pct)
         if filled > 0:
             cv2.rectangle(frame, (x, bar_y), (x + filled, bar_y + bar_h),
                           state_color, -1)
-        y += bar_h + 10
+        # Threshold marker (subtle white tick at target)
+        if run_target > 0:
+            tick_x = x + int(bar_w * min(1.0, 1.0))  # always at 100%
+            cv2.line(frame, (tick_x, bar_y), (tick_x, bar_y + bar_h),
+                     (200, 200, 200), 1)
+        y += bar_h + 8
 
-        # ── Last decision (truncated) ─────────────────────────────────────────
-        decision = sm_info.get('last_decision') or 'N/A'
-        decision_short = decision if len(decision) <= 28 else decision[:25] + "..."
-        cv2.putText(frame, "Dec:", (x, y + 12),
+        # ── Row 4: Smoothing stats ───────────────────────────────────────────
+        total_smoothed = sm_info.get('total_smoothed', 0)
+        total_records  = sm_info.get('total_records', 0)
+        if total_records > 0:
+            rate_pct = (total_smoothed / total_records) * 100
+            stats_text = f"Smoothed: {total_smoothed}/{total_records} ({rate_pct:.0f}%)"
+        else:
+            stats_text = "Smoothed: 0/0"
+        cv2.putText(frame, stats_text, (x, y + 12),
                     self.FONT, self.FONT_SCALE_SMALL,
                     self.COLORS['text_secondary'], self.FONT_WEIGHT_NORMAL)
-        cv2.putText(frame, decision_short, (x + 38, y + 12),
+
+        # Max blip (right-aligned on same row)
+        max_blip = sm_info.get('max_blip', 0)
+        blip_text = f"blip:{max_blip}"
+        blip_w = cv2.getTextSize(blip_text, self.FONT, self.FONT_SCALE_SMALL, self.FONT_WEIGHT_NORMAL)[0][0]
+        cv2.putText(frame, blip_text, (right - blip_w, y + 12),
                     self.FONT, self.FONT_SCALE_SMALL,
-                    self.COLORS['text_info'], self.FONT_WEIGHT_NORMAL)
+                    self.COLORS['text_secondary'], self.FONT_WEIGHT_NORMAL)
         y += self.LINE_HEIGHT_MEDIUM
 
-        # ── Transitions count ─────────────────────────────────────────────────
+        # ── Row 5: Last decision ─────────────────────────────────────────────
+        decision = sm_info.get('last_decision') or 'N/A'
+        # Humanize common decision reasons
+        DECISION_DISPLAY = {
+            'matches_batch':       'Batch match',
+            'transition_start':    'Transition started',
+            'rejected_to_batch':   'Rejected -> batch',
+        }
+        if decision in DECISION_DISPLAY:
+            decision_display = DECISION_DISPLAY[decision]
+        elif decision.startswith('batch_transition:'):
+            decision_display = decision.replace('batch_transition:', 'Batch: ')
+        elif decision.startswith('blip_absorbed:'):
+            decision_display = 'Blip absorbed'
+        elif decision.startswith('transition_resolved'):
+            decision_display = 'Resolved -> new'
+        else:
+            decision_display = decision
+
+        decision_short = decision_display if len(decision_display) <= 26 else decision_display[:23] + ".."
+        cv2.putText(frame, "Last:", (x, y + 12),
+                    self.FONT, self.FONT_SCALE_SMALL,
+                    self.COLORS['text_secondary'], self.FONT_WEIGHT_NORMAL)
+        # Color-code decision: green for batch match, orange for smoothed, red for transition
+        if 'match' in decision_display.lower():
+            dec_color = self.COLORS['text_success']
+        elif 'transition' in decision_display.lower() or 'Transit' in decision_display:
+            dec_color = (80, 80, 250)  # red
+        elif 'blip' in decision_display.lower() or 'absorbed' in decision_display.lower():
+            dec_color = self.COLORS['text_warning']
+        elif 'resolved' in decision_display.lower() or 'Rejected' in decision_display:
+            dec_color = self.COLORS['text_info']
+        else:
+            dec_color = self.COLORS['text_info']
+
+        cv2.putText(frame, decision_short, (x + 42, y + 12),
+                    self.FONT, self.FONT_SCALE_SMALL,
+                    dec_color, self.FONT_WEIGHT_NORMAL)
+        y += self.LINE_HEIGHT_MEDIUM
+
+        # ── Row 6: Transitions count ─────────────────────────────────────────
         t_count = sm_info.get('transition_count', 0)
-        cv2.putText(frame, f"Transitions: {t_count}", (x, y + 12),
+        cv2.putText(frame, f"Batch changes: {t_count}", (x, y + 12),
                     self.FONT, self.FONT_SCALE_SMALL,
                     self.COLORS['text_secondary'], self.FONT_WEIGHT_NORMAL)
 

@@ -517,6 +517,9 @@ class ConveyorCounterApp:
                                      else sm.min_run_length),
                 'last_decision':    sm.last_decision_reason,
                 'transition_count': len(sm.transition_history),
+                'total_smoothed':   sm.smoothed_records,
+                'total_records':    sm.total_records,
+                'max_blip':         sm.max_blip,
             }
 
         # Store detection data for on-demand snapshot annotation
@@ -832,6 +835,8 @@ class ConveyorCounterApp:
                     "transition_confirm_count": self._smoother.transition_confirm_count,
                     "max_blip":               self._smoother.max_blip,
                     "last_decision":          self._smoother.last_decision_reason,
+                    "total_smoothed":         self._smoother.smoothed_records,
+                    "total_records":          self._smoother.total_records,
                 }
                 transition_history = self._smoother.transition_history[-5:]
             else:
