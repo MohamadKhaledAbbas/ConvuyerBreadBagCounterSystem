@@ -91,13 +91,25 @@ def _empty_state() -> Dict[str, Any]:
         "just_classified_total": 0,
         "smoothing_rate": 0.0,
         "window_status": {
-            "size": 7,
+            "size": 5,
             "current_items": 0,
-            "next_confirmation_in": 7
+            "next_confirmation_in": 5
         },
         "recent_events": [],
         "current_batch_type": None,
         "previous_batch_type": None,
         "last_classified_type": None,
+        "state_machine": {
+            "algorithm": "run_length",
+            "state": "ACCUMULATING",
+            "confirmed_batch_class": None,
+            "current_run_class": None,
+            "current_run_length": 0,
+            "run_target": 5,
+            "transition_confirm_count": 5,
+            "max_blip": 3,
+            "last_decision": None,
+        },
+        "transition_history": [],
         "_updated_at": 0
     }
