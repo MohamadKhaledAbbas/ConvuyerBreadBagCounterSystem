@@ -392,6 +392,38 @@
     <!-- Connecting arrow to class cards -->
     <div class="connect-arrow" id="connectArrow">▼</div>
 
+    <!-- ── State Machine Insight ── -->
+    <section id="smInsight" style="margin: 0 0 1.8rem; display:none;">
+        <div class="section-label"><i class="fa-solid fa-diagram-project"></i> حالة محرك القرار</div>
+        <div style="background:var(--glass-bg); border:1px solid var(--glass-border); border-radius:var(--radius-lg); padding:1.25rem 1.5rem; backdrop-filter:blur(10px);">
+            <!-- Top row: state badge, run class, run progress, last decision -->
+            <div style="display:flex; align-items:center; gap:1.25rem; flex-wrap:wrap;">
+                <span id="smStateBadge" style="display:inline-flex;align-items:center;gap:6px;padding:5px 14px;border-radius:20px;font-size:.8rem;font-weight:700;border:1px solid;letter-spacing:.03em;">—</span>
+                <div style="min-width:110px;">
+                    <div style="font-size:.72rem;color:var(--text-muted);margin-bottom:2px;">الفئة الحالية</div>
+                    <div id="smRunClass" style="font-weight:700;color:var(--text-primary);font-size:.95rem;">—</div>
+                </div>
+                <div style="flex:2;min-width:180px;">
+                    <div style="display:flex;justify-content:space-between;margin-bottom:4px;font-size:.72rem;color:var(--text-muted);">
+                        <span>تقدم التشغيل</span>
+                        <span id="smRunProgress" style="font-family:'Inter',monospace;">0/5</span>
+                    </div>
+                    <div style="background:rgba(255,255,255,.08);border-radius:4px;height:8px;overflow:hidden;"
+                         role="progressbar" aria-valuemin="0" aria-valuemax="100" id="smRunBarTrack">
+                        <div id="smRunBar" style="background:var(--accent-success);height:100%;border-radius:4px;width:0%;transition:width .35s ease;"></div>
+                    </div>
+                    <div id="smRunHint" style="font-size:.68rem;color:var(--text-muted);margin-top:3px;">—</div>
+                </div>
+                <div style="min-width:130px;text-align:right;">
+                    <div style="font-size:.72rem;color:var(--text-muted);margin-bottom:2px;">آخر قرار</div>
+                    <div id="smLastDecision" style="font-size:.78rem;color:var(--text-secondary);word-break:break-all;">—</div>
+                </div>
+            </div>
+            <!-- Transition history -->
+            <div id="smTransitionHistory"></div>
+        </div>
+    </section>
+
     <!-- Confirmed class cards — all types, analytics-style -->
     <div class="section-label">العدد حسب النوع</div>
     <section class="grid-container" id="classGrid">
@@ -617,6 +649,91 @@ function updateBatchTimeline(data, allPending) {
     }
 }
 
+// ── State Machine Insight panel ──
+const SM_STATE_COLORS = {
+    'ACCUMULATING':    '#fbbf24',
+    'CONFIRMED_BATCH': '#2dd4bf',
+    'TRANSITION':      '#f87171',
+    'WINDOW':          '#94a3b8'
+};
+const SM_STATE_LABELS = {
+    'ACCUMULATING':    'تجميع',
+    'CONFIRMED_BATCH': 'دفعة مؤكدة',
+    'TRANSITION':      'انتقال',
+    'WINDOW':          'نافذة'
+};
+
+function updateStateMachinePanel(data) {
+    const sm   = data.state_machine;
+    const hist = data.transition_history || [];
+    const panel = $id('smInsight');
+
+    if (!sm || sm.algorithm !== 'run_length') {
+        panel.style.display = 'none';
+        return;
+    }
+    panel.style.display = '';
+
+    // State badge
+    const badge = $id('smStateBadge');
+    const color = SM_STATE_COLORS[sm.state] || '#94a3b8';
+    badge.textContent = SM_STATE_LABELS[sm.state] || sm.state;
+    badge.style.background   = color + '22';
+    badge.style.color        = color;
+    badge.style.borderColor  = color + '55';
+
+    // Current run class
+    $id('smRunClass').textContent = sm.current_run_class || '—';
+
+    // Run progress bar
+    const target  = sm.state === 'TRANSITION' ? sm.transition_confirm_count : sm.run_target;
+    const current = sm.current_run_length || 0;
+    const pct     = target > 0 ? Math.min(100, (current / target) * 100) : 0;
+    $id('smRunProgress').textContent = current + '/' + target;
+    $id('smRunBar').style.width      = pct + '%';
+    $id('smRunBar').style.background = sm.state === 'TRANSITION' ? '#f87171' : '#2dd4bf';
+    $id('smRunBarTrack').setAttribute('aria-valuenow', Math.round(pct));
+
+    // Hint under progress bar
+    const hint = sm.state === 'TRANSITION'
+        ? 'تحقق من الانتقال – يلزم ' + sm.transition_confirm_count + ' عنصر'
+        : sm.state === 'ACCUMULATING'
+        ? 'تحديد الدفعة – يلزم ' + sm.run_target + ' عنصر متتالي'
+        : 'دفعة مؤكدة – الحد الأقصى للانحراف: ' + sm.max_blip;
+    $id('smRunHint').textContent = hint;
+
+    // Last decision
+    $id('smLastDecision').textContent = sm.last_decision || '—';
+
+    // Transition history
+    _renderTransitionHistory(hist);
+}
+
+function _renderTransitionHistory(history) {
+    const el = $id('smTransitionHistory');
+    if (!history || !history.length) { el.innerHTML = ''; return; }
+
+    const rows = history.slice(-5).reverse().map(t => {
+        const from    = escHtml(t.from_class || '—');
+        const to      = escHtml(t.to_class || '—');
+        const ts      = t.timestamp ? new Date(t.timestamp * 1000).toLocaleTimeString('ar') : '';
+        const lbl     = t.type === 'initial_batch' ? 'بدء دفعة' : 'تغيير دفعة';
+        const toColor = t.type === 'initial_batch' ? 'var(--accent-success)' : 'var(--accent-warning)';
+        return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-top:1px solid rgba(255,255,255,.05);font-size:.78rem;">
+            <span style="color:var(--text-muted);min-width:65px;font-size:.7rem;">${ts}</span>
+            <span style="color:var(--text-secondary);">${from}</span>
+            <span style="color:var(--text-muted);">→</span>
+            <span style="font-weight:700;color:${toColor};">${to}</span>
+            <span style="color:var(--text-muted);margin-inline-start:auto;font-size:.7rem;">${lbl}</span>
+            <span style="color:var(--text-muted);font-size:.7rem;font-family:'Inter',monospace;">×${t.run_length || 0}</span>
+        </div>`;
+    }).join('');
+
+    el.innerHTML =
+        '<div style="font-size:.73rem;color:var(--text-muted);margin:10px 0 4px;">سجل التحولات</div>' +
+        rows;
+}
+
 // ── Main UI update ──
 function updateUI(data) {
     const ct = data.confirmed_total || 0;
@@ -637,6 +754,9 @@ function updateUI(data) {
 
     // Batch timeline (current + previous)
     updateBatchTimeline(data, allPending);
+
+    // State machine insight panel
+    updateStateMachinePanel(data);
 
     // Confirmed type cards
     updateClassCards(data.confirmed, allPending);

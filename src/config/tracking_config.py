@@ -340,7 +340,42 @@ class TrackingConfig:
     """Comma-separated list of labels to filter from voting."""
     
     # ==========================================================================
-    # Bidirectional Smoothing Parameters
+    # Run-Length State Machine Parameters
+    # ==========================================================================
+
+    smoothing_algorithm: str = _parse_str_env("SMOOTHING_ALGORITHM", "run_length")
+    """
+    Smoothing algorithm to use.
+    'run_length' (default) — RunLengthStateMachine (batch-aware, state-machine approach).
+    'window'               — BidirectionalSmoother (legacy sliding-window approach).
+    """
+
+    run_length_min_run: int = _parse_int_env("RUN_LENGTH_MIN_RUN", 5)
+    """
+    Minimum consecutive same-class items required to establish/confirm a batch.
+    Controls how quickly the state machine locks onto a batch identity.
+    Lower values = faster response; higher values = more stability.
+    """
+
+    run_length_max_blip: int = _parse_int_env("RUN_LENGTH_MAX_BLIP", 3)
+    """
+    Maximum consecutive non-matching items treated as noise (blip).
+    If a run of different-class items is shorter than this and then reverts
+    to the original batch class, the items are absorbed (overridden) rather
+    than treated as a real batch transition.
+    """
+
+    run_length_transition_confirm_count: int = _parse_int_env(
+        "RUN_LENGTH_TRANSITION_CONFIRM_COUNT", 5
+    )
+    """
+    Number of consecutive new-class items required to confirm a batch transition.
+    Until this threshold is reached the state machine stays in TRANSITION and
+    holds the items before deciding.
+    """
+
+    # ==========================================================================
+    # Bidirectional Smoothing Parameters (legacy — used when smoothing_algorithm='window')
     # ==========================================================================
     
     bidirectional_smoothing_enabled: bool = _parse_bool_env("BIDIRECTIONAL_SMOOTHING_ENABLED", True)

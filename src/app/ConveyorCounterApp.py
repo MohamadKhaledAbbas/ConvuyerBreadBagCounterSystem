@@ -56,6 +56,7 @@ from src.frame_source.FrameSourceFactory import FrameSourceFactory
 from src.logging.Database import DatabaseManager
 from src.endpoint.pipeline_state import write_state as write_pipeline_state
 from src.tracking.BidirectionalSmoother import BidirectionalSmoother, ClassificationRecord
+from src.tracking.RunLengthStateMachine import RunLengthStateMachine
 from src.tracking.ConveyorTracker import ConveyorTracker
 from src.utils.AppLogging import logger
 
@@ -418,12 +419,23 @@ class ConveyorCounterApp:
         )
 
         # Bidirectional smoother (uses sliding window approach)
-        self._smoother = BidirectionalSmoother(
-            confidence_threshold=self.tracking_config.bidirectional_confidence_threshold,
-            vote_ratio_threshold=self.tracking_config.evidence_ratio_threshold,
-            window_size=self.tracking_config.bidirectional_buffer_size,
-            window_timeout_seconds=self.tracking_config.bidirectional_inactivity_timeout_ms / 1000.0
-        )
+        algorithm = getattr(self.tracking_config, 'smoothing_algorithm', 'run_length')
+        if algorithm == 'window':
+            self._smoother = BidirectionalSmoother(
+                confidence_threshold=self.tracking_config.bidirectional_confidence_threshold,
+                vote_ratio_threshold=self.tracking_config.evidence_ratio_threshold,
+                window_size=self.tracking_config.bidirectional_buffer_size,
+                window_timeout_seconds=self.tracking_config.bidirectional_inactivity_timeout_ms / 1000.0
+            )
+            logger.info("[ConveyorCounterApp] Smoother: BidirectionalSmoother (window algorithm)")
+        else:
+            self._smoother = RunLengthStateMachine(
+                min_run_length=self.tracking_config.run_length_min_run,
+                max_blip=self.tracking_config.run_length_max_blip,
+                transition_confirm_count=self.tracking_config.run_length_transition_confirm_count,
+                window_timeout_seconds=self.tracking_config.bidirectional_inactivity_timeout_ms / 1000.0
+            )
+            logger.info("[ConveyorCounterApp] Smoother: RunLengthStateMachine (run_length algorithm)")
 
         logger.info("[ConveyorCounterApp] Components initialized with modular architecture")
 
@@ -600,6 +612,13 @@ class ConveyorCounterApp:
             non_rejected_rois=non_rejected_rois
         )
 
+        # For RunLengthStateMachine, derive current_batch_type from confirmed_batch_class
+        if isinstance(self._smoother, RunLengthStateMachine):
+            rlsm_batch = self._smoother.confirmed_batch_class
+            if rlsm_batch and rlsm_batch != self._current_batch_type:
+                self._previous_batch_type = self._current_batch_type
+                self._current_batch_type = rlsm_batch
+
         # Update pending smoothing count
         self.state.pending_smoothing = len(self._smoother.get_pending_records())
 
@@ -718,15 +737,6 @@ class ConveyorCounterApp:
         # Log to database
         if self._db is not None:
             try:
-                # # Optionally save ROI image for debugging
-                # if roi is not None:
-                #     roi_dir = os.path.join(self.tracking_config.spool_dir, "rois")
-                #     os.makedirs(roi_dir, exist_ok=True)
-                #     image_filename = f"track_{record.track_id}_{int(time.time() * 1000)}.jpg"
-                #     image_path = os.path.join(roi_dir, image_filename)
-                #     cv2.imwrite(image_path, roi)
-                #     logger.debug(f"[ConveyorCounterApp] Saved ROI for debugging: {image_path}")
-
                 import json
                 self._db.add_event(
                     timestamp=datetime.fromtimestamp(record.timestamp).isoformat(),
@@ -739,6 +749,31 @@ class ConveyorCounterApp:
                         'original_class': record.original_class
                     })
                 )
+                # Log state-machine decision detail for RunLengthStateMachine
+                if isinstance(self._smoother, RunLengthStateMachine):
+                    self._db.enqueue_write(
+                        """INSERT INTO track_event_details
+                           (track_id, timestamp, step_type, class_name, confidence,
+                            is_rejected, detail)
+                           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            record.track_id,
+                            datetime.fromtimestamp(record.timestamp).isoformat(),
+                            'smoothing_decision',
+                            record.class_name,
+                            record.confidence,
+                            1 if record.class_name == 'Rejected' else 0,
+                            json.dumps({
+                                'algorithm':      'run_length',
+                                'state':          self._smoother.state,
+                                'run_class':      self._smoother.current_run_class,
+                                'run_length':     self._smoother.current_run_length,
+                                'decision':       'smoothed' if record.smoothed else 'confirmed',
+                                'original_class': record.original_class,
+                                'final_class':    record.class_name,
+                            })
+                        )
+                    )
             except Exception as e:
                 logger.error(f"[ConveyorCounterApp] Failed to log event to database: {e}")
 
@@ -769,6 +804,34 @@ class ConveyorCounterApp:
                 {"ts": ts, "msg": msg} for ts, msg in raw_events
             ]
 
+            # Build state-machine insight block
+            if isinstance(self._smoother, RunLengthStateMachine):
+                state_machine = {
+                    "algorithm":              "run_length",
+                    "state":                  self._smoother.state,
+                    "confirmed_batch_class":  self._smoother.confirmed_batch_class,
+                    "current_run_class":      self._smoother.current_run_class,
+                    "current_run_length":     self._smoother.current_run_length,
+                    "run_target":             self._smoother.min_run_length,
+                    "transition_confirm_count": self._smoother.transition_confirm_count,
+                    "max_blip":               self._smoother.max_blip,
+                    "last_decision":          self._smoother.last_decision_reason,
+                }
+                transition_history = self._smoother.transition_history[-5:]
+            else:
+                state_machine = {
+                    "algorithm":              "window",
+                    "state":                  "WINDOW",
+                    "confirmed_batch_class":  self._current_batch_type,
+                    "current_run_class":      self._smoother.get_dominant_class(),
+                    "current_run_length":     len(self._smoother.window_buffer),
+                    "run_target":             self._smoother.window_size,
+                    "transition_confirm_count": self._smoother.window_size,
+                    "max_blip":               0,
+                    "last_decision":          None,
+                }
+                transition_history = []
+
             state = {
                 "confirmed": self.state.get_counts_snapshot(),
                 "pending": pending_summary,
@@ -785,7 +848,9 @@ class ConveyorCounterApp:
                 "recent_events": recent_events,
                 "current_batch_type": self._current_batch_type,
                 "previous_batch_type": self._previous_batch_type,
-                "last_classified_type": self._last_classified_type
+                "last_classified_type": self._last_classified_type,
+                "state_machine": state_machine,
+                "transition_history": transition_history,
             }
             write_pipeline_state(state)
         except Exception as e:
@@ -882,6 +947,7 @@ class ConveyorCounterApp:
         self._init_components()
         
         # Reset pipeline state file to clear old data (ensures counts page shows only today's data)
+        ws = self._smoother.window_size if self._smoother else 7
         initial_state = {
             "confirmed": {},
             "pending": {},
@@ -891,14 +957,26 @@ class ConveyorCounterApp:
             "just_classified_total": 0,
             "smoothing_rate": 0.0,
             "window_status": {
-                "size": self._smoother.window_size if self._smoother else 7,
+                "size": ws,
                 "current_items": 0,
-                "next_confirmation_in": self._smoother.window_size if self._smoother else 7
+                "next_confirmation_in": ws
             },
             "recent_events": [],
             "current_batch_type": None,
             "previous_batch_type": None,
-            "last_classified_type": None
+            "last_classified_type": None,
+            "state_machine": {
+                "algorithm": "run_length" if isinstance(self._smoother, RunLengthStateMachine) else "window",
+                "state": "ACCUMULATING",
+                "confirmed_batch_class": None,
+                "current_run_class": None,
+                "current_run_length": 0,
+                "run_target": ws,
+                "transition_confirm_count": ws,
+                "max_blip": 0,
+                "last_decision": None,
+            },
+            "transition_history": [],
         }
         write_pipeline_state(initial_state)
         logger.info("[ConveyorCounterApp] Pipeline state reset - counts page will show today's data only")
