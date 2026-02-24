@@ -393,9 +393,25 @@
             </div>
 
             <!-- Quality Metrics -->
-            {% if data.summary.ghost_recovery_count or data.summary.shadow_count %}
+            {% if data.summary.ghost_recovery_count or data.summary.shadow_count or data.summary.ghost_exit_promoted or data.summary.concurrent_track_count %}
             <div class="info-card">
                 <h3><i class="fa-solid fa-ghost"></i> Recovery Stats</h3>
+                {% if data.summary.ghost_exit_promoted %}
+                <div class="info-row">
+                    <span class="info-label">Ghost Exit:</span>
+                    {% if data.summary.event_type == 'track_completed' %}
+                    <span class="info-value" style="color: #10b981; font-weight: 700;">Companion (counted)</span>
+                    {% else %}
+                    <span class="info-value" style="color: #f59e0b; font-weight: 700;">Near Top (uncounted)</span>
+                    {% endif %}
+                </div>
+                {% endif %}
+                {% if data.summary.concurrent_track_count %}
+                <div class="info-row">
+                    <span class="info-label">Concurrent Tracks:</span>
+                    <span class="info-value">{{ data.summary.concurrent_track_count }}</span>
+                </div>
+                {% endif %}
                 {% if data.summary.ghost_recovery_count %}
                 <div class="info-row">
                     <span class="info-label">Ghost Recoveries:</span>

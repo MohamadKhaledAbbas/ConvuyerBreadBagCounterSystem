@@ -194,6 +194,50 @@ class TrackingConfig:
     Default increased to 0.3 (30%) to handle fast-moving bags on conveyor.
     """
 
+    # --------------------------------------------------------------------------
+    # Ghost Exit Validation (promote near-top ghosts to completed)
+    # --------------------------------------------------------------------------
+
+    ghost_exit_validation_enabled: bool = _parse_bool_env("GHOST_EXIT_VALIDATION_ENABLED", True)
+    """
+    When a ghost track expires, validate whether it would have reached the top
+    exit zone based on predicted conveyor trajectory. If yes, promote to
+    track_completed instead of track_lost.
+
+    This prevents silent undercounting of bags that lose detection near the top
+    of the frame but clearly would have exited.
+    """
+
+    ghost_exit_near_top_ratio: float = _parse_float_env("GHOST_EXIT_NEAR_TOP_RATIO", 0.35)
+    """
+    Maximum Y ratio (from top) for a ghost's last real position to qualify for
+    exit validation. The last detected position must be in the upper portion
+    of the frame (y <= frame_height * ratio).
+    Default: 0.35 = top 35% of frame. For 720p this is y <= 252.
+    """
+
+    ghost_exit_min_travel_ratio: float = _parse_float_env("GHOST_EXIT_MIN_TRAVEL_RATIO", 0.40)
+    """
+    Minimum vertical travel as fraction of frame height required for ghost exit
+    validation. The track must have traveled at least this ratio downward-to-upward
+    (entry_y - last_y) / frame_height.
+    Default: 0.40 = at least 40% of frame traveled. For 720p = 288px.
+    """
+
+    ghost_exit_min_hits: int = _parse_int_env("GHOST_EXIT_MIN_HITS", 5)
+    """
+    Minimum detection hits required for a ghost track to qualify for exit
+    validation. Prevents promoting tracks with too little evidence.
+    """
+
+    ghost_exit_predicted_top_ratio: float = _parse_float_env("GHOST_EXIT_PREDICTED_TOP_RATIO", 0.20)
+    """
+    Maximum Y ratio (from top) for the conveyor-predicted position to qualify.
+    The predicted position (using conveyor velocity over elapsed time) must be
+    in the top portion of the frame (pred_y <= frame_height * ratio).
+    Default: 0.20 = top 20% of frame. For 720p this is y <= 144.
+    """
+
     # ==========================================================================
     # Shadow / Merge Detection
     # ==========================================================================

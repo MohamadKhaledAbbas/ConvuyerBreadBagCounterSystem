@@ -88,6 +88,10 @@ class TrackEvent(Protocol):
     shadow_count: int  # Number of shadow tracks when this track exited
     merge_events: List[dict]  # [{merged_track_id, merge_y, unmerge_y}]
 
+    # Ghost exit validation fields
+    ghost_exit_promoted: bool  # True if promoted from track_lost to track_completed
+    concurrent_track_count: int  # Number of distinct overlapping tracks during lifetime
+
     @property
     def duration_seconds(self) -> float:
         """Track duration in seconds."""

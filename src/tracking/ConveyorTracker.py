@@ -114,7 +114,12 @@ class TrackedObject:
     shadow_tracks: Dict = field(default_factory=dict)  # {track_id: TrackedObject} shadows riding on this track
     shadow_count: int = 0  # Number of shadow tracks when exited
     merge_events: list = field(default_factory=list)  # [{merged_track_id, merge_y, unmerge_y}]
-    
+
+    # Concurrent/overlapping track tracking (for ghost exit validation)
+    # Records IDs of other tracks that were spatially close during this track's lifetime.
+    # Used as evidence that detection loss was due to overlap (not the bag disappearing).
+    concurrent_track_ids: set = field(default_factory=set)
+
     @property
     def center(self) -> Tuple[int, int]:
         """Return center point of current bbox."""
@@ -313,6 +318,10 @@ class TrackEvent:
     shadow_count: int = 0  # Number of shadow tracks when this track exited
     merge_events: list = field(default_factory=list)  # [{merged_track_id, merge_y, unmerge_y}]
 
+    # Ghost exit validation fields
+    ghost_exit_promoted: bool = False  # True if promoted from track_lost to track_completed
+    concurrent_track_count: int = 0  # Number of distinct tracks that overlapped during lifetime
+
     @property
     def duration_seconds(self) -> float:
         """Track duration in seconds."""
@@ -390,6 +399,13 @@ class ConveyorTracker(ITracker):
         self._ghost_max_y_gap_ratio = getattr(self.config, 'ghost_track_max_y_gap_ratio', 0.2)
         self._last_conveyor_velocity: Optional[Tuple[float, float]] = None  # Historical velocity estimate
 
+        # Ghost exit validation config (promote near-top ghosts to completed)
+        self._ghost_exit_validation_enabled = getattr(self.config, 'ghost_exit_validation_enabled', True)
+        self._ghost_exit_near_top_ratio = getattr(self.config, 'ghost_exit_near_top_ratio', 0.35)
+        self._ghost_exit_min_travel_ratio = getattr(self.config, 'ghost_exit_min_travel_ratio', 0.40)
+        self._ghost_exit_min_hits = getattr(self.config, 'ghost_exit_min_hits', 5)
+        self._ghost_exit_predicted_top_ratio = getattr(self.config, 'ghost_exit_predicted_top_ratio', 0.20)
+
         # Learned conveyor velocity (FPS-independent, stored in pixels/second)
         # This is learned from completed tracks that traveled from center to top
         self._learned_velocity_px_per_sec: Optional[float] = None  # Y velocity in pixels/second
@@ -409,6 +425,7 @@ class ConveyorTracker(ITracker):
         # Statistics counters
         self._duplicates_prevented = 0  # Count of prevented duplicate tracks
         self._tracks_created = 0  # Total tracks actually created
+        self._ghost_exits_promoted = 0  # Ghosts that would have exited top (diagnostic)
 
         # Log configuration
         multi_criteria = getattr(self.config, 'use_multi_criteria_matching', True)
@@ -418,7 +435,8 @@ class ConveyorTracker(ITracker):
             f"max_age={self.config.max_frames_without_detection}, min_hits={self.config.min_track_duration_frames}, "
             f"min_conf_new_track={self._min_conf_new_track:.2f}, "
             f"multi_criteria={multi_criteria}, second_stage={self._use_second_stage}, "
-            f"ghost_max_age={self._ghost_max_age}s, merge_growth={self._merge_bbox_growth}"
+            f"ghost_max_age={self._ghost_max_age}s, merge_growth={self._merge_bbox_growth}, "
+            f"ghost_exit_validation={self._ghost_exit_validation_enabled}"
         )
 
     def get_ghost_tracks_for_visualization(self) -> List[Dict]:
@@ -977,6 +995,9 @@ class ConveyorTracker(ITracker):
         # Check for completed tracks
         self._check_completed_tracks()
 
+        # Update concurrent track proximity (for ghost exit validation evidence)
+        self._update_concurrent_tracks()
+
         # Update ghosts (expire old ones)
         self._update_ghosts()
 
@@ -1102,6 +1123,46 @@ class ConveyorTracker(ITracker):
         
         return track
 
+    def _update_concurrent_tracks(self):
+        """
+        Record which active tracks are spatially close to each other.
+
+        For each pair of active tracks, if their bounding boxes overlap or
+        are nearly touching (within a small margin), record each as concurrent
+        with the other.  This is lightweight — O(N^2) for N active tracks, but
+        N is typically ≤ 5 on a conveyor.
+
+        Used by ghost exit validation: a track that was never near another
+        track should not be promoted (detection loss from overlap is the
+        primary failure mode we are recovering from).
+        """
+        track_list = list(self.tracks.values())
+        n = len(track_list)
+        if n < 2:
+            return
+
+        # Use a generous bbox-edge margin: if the horizontal gap between
+        # bbox edges is ≤ margin, they are "near". With bags on conveyor
+        # this catches side-by-side and overlapping scenarios.
+        bbox_edge_margin = self._merge_spatial_tol  # 50px default
+        y_margin = self._merge_y_tol * 4  # 120px — generous vertical tolerance
+
+        for i in range(n):
+            t_a = track_list[i]
+            ax1, ay1, ax2, ay2 = t_a.bbox
+            for j in range(i + 1, n):
+                t_b = track_list[j]
+                bx1, by1, bx2, by2 = t_b.bbox
+
+                # Horizontal gap between bbox edges (negative = overlap)
+                x_gap = max(0, max(ax1, bx1) - min(ax2, bx2))
+                # Vertical gap between bbox edges
+                y_gap = max(0, max(ay1, by1) - min(ay2, by2))
+
+                if x_gap <= bbox_edge_margin and y_gap <= y_margin:
+                    t_a.concurrent_track_ids.add(t_b.track_id)
+                    t_b.concurrent_track_ids.add(t_a.track_id)
+
     def _check_completed_tracks(self):
         """
         Check for tracks that should be marked as completed.
@@ -1109,100 +1170,117 @@ class ConveyorTracker(ITracker):
         Core counting rule: A bread bag is COUNTED if and only if its track
         exits from the TOP of the frame. Lost tracks are NEVER counted - they
         are moved to the ghost buffer for potential re-association.
+
+        ORDERING IS IMPORTANT:
+        1. First identify and move LOST tracks to ghost buffer
+        2. Then process EXITING tracks (completions)
+
+        This ordering ensures that when a track exits top, any concurrent
+        lost tracks are already in the ghost buffer and can be found by
+        _complete_ghost_companions().  Example: T304 exits top in the same
+        frame that T305 exceeds max_frames_without_detection — T305 must
+        be in the ghost buffer before T304's companion check runs.
         """
-        tracks_to_remove = []
         tracks_to_ghost = []
-        
+        tracks_to_complete = []  # (track_id, track)
+
         for track_id, track in self.tracks.items():
-            should_complete = False
-            event_type = 'track_completed'
-            
             # Check if track exceeded max age (lost)
             if track.time_since_update > self.config.max_frames_without_detection:
-                # Lost tracks are NEVER counted. Move to ghost buffer for possible recovery.
                 tracks_to_ghost.append(track_id)
-                continue
-
             # Check if track is exiting frame and has been tracked long enough
             elif (
                 track.hits >= self.config.min_track_duration_frames and
                 self._is_exiting_frame(track)
             ):
-                should_complete = True
-                # Validate full travel path (bottom → top)
-                if self._has_valid_travel_path(track):
-                    event_type = 'track_completed'
-                else:
-                    event_type = 'track_invalid'
-            
-            if should_complete:
-                # Calculate average confidence
-                avg_conf = track.confidence  # Use last confidence for now
+                tracks_to_complete.append((track_id, track))
 
-                # Get exit direction
-                exit_dir = self._get_exit_direction(track) or "timeout"
-
-                # Calculate track statistics
-                velocity = track.velocity
-                vel_str = f"vel=({velocity[0]:.1f},{velocity[1]:.1f})" if velocity else "vel=None"
-
-                # Build position history from checkpoints for DB storage
-                # Checkpoints are saved every N frames, plus entry and exit
-                final_position_history = list(track.checkpoint_positions)
-
-                # Always include the final/exit position if different from last checkpoint
-                exit_position = track.center
-                if not final_position_history or final_position_history[-1] != exit_position:
-                    final_position_history.append(exit_position)
-
-                # Calculate distance using entry and exit points
-                distance = 0.0
-                if len(final_position_history) >= 2:
-                    start = final_position_history[0]
-                    end = final_position_history[-1]
-                    distance = ((end[0]-start[0])**2 + (end[1]-start[1])**2)**0.5
-
-                # Emit completion event with enriched lifecycle data
-                event = TrackEvent(
-                    track_id=track_id,
-                    event_type=event_type,
-                    bbox_history=list(track.bbox_history),
-                    position_history=final_position_history,
-                    total_frames=track.age + track.hits,
-                    created_at=track.created_at,
-                    ended_at=time.time(),
-                    avg_confidence=avg_conf,
-                    exit_direction=exit_dir,
-                    entry_type=track.entry_type,
-                    suspected_duplicate=(track.entry_type == "midway_entry"),
-                    ghost_recovery_count=track.ghost_recovery_count,
-                    occlusion_events=list(track.occlusion_events),
-                    shadow_of=track.shadow_of,
-                    shadow_count=len(track.shadow_tracks),
-                    merge_events=list(track.merge_events)
-                )
-                self.completed_tracks.append(event)
-                tracks_to_remove.append(track_id)
-
-                # Also emit events for any shadow tracks riding on this track
-                if event_type == 'track_completed' and track.shadow_tracks:
-                    self._complete_with_shadows(track, exit_dir)
-
-                # Learn conveyor velocity from this completed track
-                if event_type == 'track_completed' and exit_dir == 'top':
-                    self._learn_conveyor_velocity(track, event.duration_seconds)
-
-                logger.info(
-                    f"[TRACK_LIFECYCLE] T{track_id} COMPLETED | "
-                    f"type={event_type} exit={exit_dir} hits={track.hits} missed={track.time_since_update} "
-                    f"duration={event.duration_seconds:.2f}s distance={distance:.0f}px {vel_str} "
-                    f"positions={len(track.position_history)} avg_conf={avg_conf:.2f} "
-                    f"entry_type={track.entry_type} ghosts={track.ghost_recovery_count} shadows={len(track.shadow_tracks)}"
-                )
-
-        # Move lost tracks to ghost buffer
+        # STEP 1: Move lost tracks to ghost buffer FIRST
+        # This ensures they are available for companion completion in step 2.
         for track_id in tracks_to_ghost:
             self._move_to_ghost(track_id)
+
+        # STEP 2: Process exiting tracks (completions)
+        tracks_to_remove = []
+        for track_id, track in tracks_to_complete:
+            # Validate full travel path (bottom → top)
+            if self._has_valid_travel_path(track):
+                event_type = 'track_completed'
+            else:
+                event_type = 'track_invalid'
+
+            # Calculate average confidence
+            avg_conf = track.confidence  # Use last confidence for now
+
+            # Get exit direction
+            exit_dir = self._get_exit_direction(track) or "timeout"
+
+            # Calculate track statistics
+            velocity = track.velocity
+            vel_str = f"vel=({velocity[0]:.1f},{velocity[1]:.1f})" if velocity else "vel=None"
+
+            # Build position history from checkpoints for DB storage
+            # Checkpoints are saved every N frames, plus entry and exit
+            final_position_history = list(track.checkpoint_positions)
+
+            # Always include the final/exit position if different from last checkpoint
+            exit_position = track.center
+            if not final_position_history or final_position_history[-1] != exit_position:
+                final_position_history.append(exit_position)
+
+            # Calculate distance using entry and exit points
+            distance = 0.0
+            if len(final_position_history) >= 2:
+                start = final_position_history[0]
+                end = final_position_history[-1]
+                distance = ((end[0]-start[0])**2 + (end[1]-start[1])**2)**0.5
+
+            # Emit completion event with enriched lifecycle data
+            event = TrackEvent(
+                track_id=track_id,
+                event_type=event_type,
+                bbox_history=list(track.bbox_history),
+                position_history=final_position_history,
+                total_frames=track.age + track.hits,
+                created_at=track.created_at,
+                ended_at=time.time(),
+                avg_confidence=avg_conf,
+                exit_direction=exit_dir,
+                entry_type=track.entry_type,
+                suspected_duplicate=(track.entry_type == "midway_entry"),
+                ghost_recovery_count=track.ghost_recovery_count,
+                occlusion_events=list(track.occlusion_events),
+                shadow_of=track.shadow_of,
+                shadow_count=len(track.shadow_tracks),
+                merge_events=list(track.merge_events),
+                concurrent_track_count=len(track.concurrent_track_ids),
+            )
+            self.completed_tracks.append(event)
+            tracks_to_remove.append(track_id)
+
+            # Also emit events for any shadow tracks riding on this track
+            if event_type == 'track_completed' and track.shadow_tracks:
+                self._complete_with_shadows(track, exit_dir)
+
+            # GHOST COMPANION COMPLETION:
+            # When this track exits top, check the ghost buffer for concurrent
+            # companions — tracks that were traveling alongside this one but
+            # lost detection due to overlap. The survivor's successful exit
+            # is hard evidence that companions also reached the destination.
+            if event_type == 'track_completed' and exit_dir == 'top':
+                self._complete_ghost_companions(track)
+
+            # Learn conveyor velocity from this completed track
+            if event_type == 'track_completed' and exit_dir == 'top':
+                self._learn_conveyor_velocity(track, event.duration_seconds)
+
+            logger.info(
+                f"[TRACK_LIFECYCLE] T{track_id} COMPLETED | "
+                f"type={event_type} exit={exit_dir} hits={track.hits} missed={track.time_since_update} "
+                f"duration={event.duration_seconds:.2f}s distance={distance:.0f}px {vel_str} "
+                f"positions={len(track.position_history)} avg_conf={avg_conf:.2f} "
+                f"entry_type={track.entry_type} ghosts={track.ghost_recovery_count} shadows={len(track.shadow_tracks)}"
+            )
 
         # Remove completed tracks
         for track_id in set(tracks_to_remove):
@@ -1551,6 +1629,14 @@ class ConveyorTracker(ITracker):
         Note: lost_at is set to track.last_seen_at (when last detected),
         NOT when the track was moved to ghost buffer. This means the elapsed
         time already includes the max_frames_without_detection waiting period.
+
+        GHOST NEAR-TOP DIAGNOSTICS (v2.7):
+        When a ghost expires, check if the track would have reached the top
+        exit zone based on conveyor velocity prediction. If so, flag it as
+        ghost_would_have_exited=True on the track_lost event for monitoring.
+        This does NOT change counting — ghosts are ALWAYS track_lost. The
+        flag lets us measure how often the detector loses bags near the top
+        so we can track detector improvement over time.
         """
         now = time.time()
         expired = []
@@ -1580,7 +1666,25 @@ class ConveyorTracker(ITracker):
             drift_x = drifted_center[0] - last_real_position[0]
             drift_y = drifted_center[1] - last_real_position[1]
 
-            # Finalize as track_lost (not counted)
+            # DIAGNOSTIC: Check if this ghost *would have* reached the top exit
+            # This is for monitoring only — it does NOT change counting.
+            ghost_exit_result = self._validate_ghost_as_completed(
+                ghost_id, track, ghost_info, last_real_position, now
+            )
+            would_have_exited = ghost_exit_result is not None
+
+            if would_have_exited:
+                self._ghost_exits_promoted += 1  # counter name kept for stats compatibility
+                logger.info(
+                    f"[TRACK_LIFECYCLE] T{ghost_id} GHOST_NEAR_TOP_UNCOUNTED | "
+                    f"would have exited top but NOT counted (diagnostic only) | "
+                    f"last_real_pos={last_real_position}, entry_y={track.entry_center_y}, "
+                    f"hits={track.hits}, travel_ratio={ghost_exit_result['travel_ratio']:.2f}, "
+                    f"concurrent_tracks={ghost_exit_result.get('concurrent_count', 0)}, "
+                    f"total_near_top={self._ghost_exits_promoted}"
+                )
+
+            # Always emit as track_lost — counting is ONLY at top_exit
             event = TrackEvent(
                 track_id=ghost_id,
                 event_type='track_lost',
@@ -1596,21 +1700,163 @@ class ConveyorTracker(ITracker):
                 ghost_recovery_count=track.ghost_recovery_count,
                 occlusion_events=list(track.occlusion_events),
                 shadow_of=track.shadow_of,
-                shadow_count=len(track.shadow_tracks),  # Record how many shadows were lost
-                merge_events=list(track.merge_events)
+                shadow_count=len(track.shadow_tracks),
+                merge_events=list(track.merge_events),
+                ghost_exit_promoted=would_have_exited,  # diagnostic flag only
+                concurrent_track_count=len(track.concurrent_track_ids),
             )
             self.completed_tracks.append(event)
 
-            # IMPORTANT: Also mark any attached shadows as track_lost
-            # If the survivor falls off, the shadows fall off too - they should NOT be counted
+            # If this ghost had shadows, mark them as lost too
             if track.shadow_tracks:
                 self._lose_shadows_with_survivor(track, now)
 
             logger.info(
                 f"[TRACK_LIFECYCLE] T{ghost_id} GHOST_EXPIRED | "
                 f"expired after {self._ghost_max_age}s, exit_pos={last_real_position}, "
-                f"drift_was=({drift_x}, {drift_y}), shadows_lost={len(track.shadow_tracks)}"
+                f"drift_was=({drift_x}, {drift_y}), shadows_lost={len(track.shadow_tracks)}, "
+                f"would_have_exited={would_have_exited}"
             )
+
+    def _validate_ghost_as_completed(
+        self,
+        ghost_id: int,
+        track: TrackedObject,
+        ghost_info: dict,
+        last_real_position: Tuple[int, int],
+        now: float
+    ) -> Optional[Dict]:
+        """
+        Validate whether an expiring ghost track should be promoted to track_completed.
+
+        This is a CONSERVATIVE validation to prevent undercounting of bags that lose
+        detection near the top of the frame but clearly would have exited. All checks
+        must pass for promotion.
+
+        Criteria (ALL must be met):
+        1. Ghost exit validation is enabled
+        2. Frame dimensions are known
+        3. Track is NOT a shadow (shadows are handled by their survivor)
+        4. Track entered from bottom zone (not midway/thrown)
+        5. Track has minimum detection hits (enough evidence)
+        6. Last real detected position is in the upper portion of the frame
+        7. Track traveled at least min_travel_ratio of the frame height (bottom→up)
+        8. Predicted conveyor position would be in/past the top exit zone
+
+        Args:
+            ghost_id: Track ID of the ghost
+            track: The TrackedObject
+            ghost_info: Ghost buffer info dict
+            last_real_position: Last actually-detected position (not drifted)
+            now: Current timestamp
+
+        Returns:
+            Dict with validation details if promoted, None if rejected.
+        """
+        # --- Gate 0: Feature enabled? ---
+        if not self._ghost_exit_validation_enabled:
+            return None
+
+        # --- Gate 1: Frame dimensions known? ---
+        if not self.frame_height or not self.frame_width:
+            logger.debug(f"[GHOST_EXIT] T{ghost_id} REJECT: frame dimensions unknown")
+            return None
+
+        # --- Gate 2: Not a shadow track (shadows are handled by survivor) ---
+        if track.shadow_of is not None:
+            logger.debug(f"[GHOST_EXIT] T{ghost_id} REJECT: shadow of T{track.shadow_of}")
+            return None
+
+        # --- Gate 3: Entry type must be bottom_entry (most reliable path) ---
+        if track.entry_type not in ("bottom_entry",):
+            logger.debug(
+                f"[GHOST_EXIT] T{ghost_id} REJECT: entry_type={track.entry_type} "
+                f"(only bottom_entry qualifies)"
+            )
+            return None
+
+        # --- Gate 4: Minimum detection hits ---
+        if track.hits < self._ghost_exit_min_hits:
+            logger.debug(
+                f"[GHOST_EXIT] T{ghost_id} REJECT: hits={track.hits} < "
+                f"min={self._ghost_exit_min_hits}"
+            )
+            return None
+
+        # --- Gate 5: Last real position must be in upper portion of frame ---
+        last_y = last_real_position[1]
+        near_top_threshold = int(self.frame_height * self._ghost_exit_near_top_ratio)
+        if last_y > near_top_threshold:
+            logger.debug(
+                f"[GHOST_EXIT] T{ghost_id} REJECT: last_y={last_y} > "
+                f"near_top_threshold={near_top_threshold} "
+                f"(not close enough to top)"
+            )
+            return None
+
+        # --- Gate 6: Sufficient vertical travel (bottom → up) ---
+        entry_y = track.entry_center_y
+        if entry_y is None:
+            logger.debug(f"[GHOST_EXIT] T{ghost_id} REJECT: no entry_center_y")
+            return None
+
+        vertical_travel = entry_y - last_y  # positive = moved upward
+        travel_ratio = vertical_travel / self.frame_height
+        if travel_ratio < self._ghost_exit_min_travel_ratio:
+            logger.debug(
+                f"[GHOST_EXIT] T{ghost_id} REJECT: travel_ratio={travel_ratio:.2f} < "
+                f"min={self._ghost_exit_min_travel_ratio} "
+                f"(entry_y={entry_y}, last_y={last_y}, traveled={vertical_travel}px)"
+            )
+            return None
+
+        # --- Gate 7: Predicted conveyor position reaches top exit zone ---
+        conveyor_vel = self._get_conveyor_velocity()
+        lost_at = ghost_info['lost_at']
+        elapsed_seconds = now - lost_at
+        target_fps = getattr(self.config, 'target_fps', 17.0)
+        elapsed_frames = max(1, int(elapsed_seconds * target_fps))
+
+        # Predict where the bag would be now using conveyor velocity
+        pred_y = int(last_real_position[1] + conveyor_vel[1] * elapsed_frames)
+        predicted_top_threshold = int(self.frame_height * self._ghost_exit_predicted_top_ratio)
+
+        if pred_y > predicted_top_threshold:
+            logger.debug(
+                f"[GHOST_EXIT] T{ghost_id} REJECT: predicted_y={pred_y} > "
+                f"top_threshold={predicted_top_threshold} "
+                f"(conveyor_vel_y={conveyor_vel[1]:.1f}, elapsed_frames={elapsed_frames})"
+            )
+            return None
+
+        # --- Gate 8: Must have had concurrent/overlapping tracks ---
+        # Detection loss near top typically happens due to bag overlap.
+        # If the track was always alone (no nearby tracks during its lifetime),
+        # detection loss is suspicious and we should NOT promote.
+        concurrent_count = len(track.concurrent_track_ids)
+        if concurrent_count == 0:
+            logger.debug(
+                f"[GHOST_EXIT] T{ghost_id} REJECT: no concurrent tracks "
+                f"(detection loss without overlap is not eligible)"
+            )
+            return None
+
+        # --- All gates passed: promote to track_completed ---
+        logger.info(
+            f"[GHOST_EXIT] T{ghost_id} VALIDATED | "
+            f"entry_y={entry_y}, last_y={last_y}, pred_y={pred_y}, "
+            f"travel_ratio={travel_ratio:.2f}, hits={track.hits}, "
+            f"concurrent_tracks={concurrent_count} ({sorted(track.concurrent_track_ids)}), "
+            f"elapsed={elapsed_seconds:.1f}s, "
+            f"conveyor_vy={conveyor_vel[1]:.1f} px/frame"
+        )
+
+        return {
+            'predicted_y': pred_y,
+            'travel_ratio': travel_ratio,
+            'elapsed_seconds': elapsed_seconds,
+            'concurrent_count': concurrent_count,
+        }
 
     # =========================================================================
     # Shadow Track / Merge Detection
@@ -1695,10 +1941,8 @@ class ConveyorTracker(ITracker):
                     recent_widths = [b[2] - b[0] for b in list(survivor.bbox_history)[-5:-1]]
                     if recent_widths:
                         avg_width = sum(recent_widths) / len(recent_widths)
-                        if avg_width > 0:
-                            growth_ratio = current_width / avg_width
-                            if growth_ratio >= 1.2:  # Lowered from 1.4
-                                growth_bonus = -50  # Reduce score (better match)
+                        if growth_bonus >= 1.2:  # Lowered from 1.4
+                            growth_bonus = -50  # Reduce score (better match)
 
                 # Check 3: Similar Y position (both at similar height on conveyor)
                 y_similarity_penalty = abs(surv_cy - lost_cy) * 0.5
@@ -1882,6 +2126,140 @@ class ConveyorTracker(ITracker):
             logger.info(
                 f"[TRACK_LIFECYCLE] T{shadow_id} SHADOW_COMPLETED | "
                 f"shadow of T{track.track_id} counted on exit"
+            )
+
+    def _complete_ghost_companions(self, exiting_track: TrackedObject):
+        """
+        Complete ghost tracks that were concurrent with a track exiting the top.
+
+        When two bags travel side-by-side and both lose detection near the top
+        (because they overlap), the merge/shadow system can't help because there
+        is no survivor — both went unmatched simultaneously. However, if one
+        of them is later re-detected and exits top successfully, that exit is
+        hard evidence that its companion also made it.
+
+        This method checks the ghost buffer for tracks that:
+        1. Were recorded as concurrent with the exiting track
+        2. Entered from bottom (real bags, not noise)
+        3. Had enough detection hits (minimum evidence)
+        4. Had their last real position in the upper portion of the frame
+        5. Were traveling upward (not falling off)
+
+        Companions are emitted as track_completed with ghost_exit_promoted=True
+        so the UI can show them distinctly.
+        """
+        if not self.ghost_tracks or not exiting_track.concurrent_track_ids:
+            return
+
+        if self.frame_height is None or self.frame_height <= 0:
+            return
+
+        # Find ghosts that were concurrent with the exiting track
+        companions_to_complete = []
+        near_top_threshold = int(self.frame_height * self._ghost_exit_near_top_ratio)
+        min_hits = max(3, self._ghost_exit_min_hits)  # at least 3
+
+        for ghost_id, ghost_info in self.ghost_tracks.items():
+            # Gate 1: Must have been concurrent with the exiting track
+            if ghost_id not in exiting_track.concurrent_track_ids:
+                continue
+
+            ghost_track = ghost_info['track']
+
+            # Gate 2: Must have entered from bottom
+            if ghost_track.entry_type != "bottom_entry":
+                logger.debug(
+                    f"[GHOST_COMPANION] T{ghost_id} SKIP: entry_type="
+                    f"{ghost_track.entry_type} (not bottom_entry)"
+                )
+                continue
+
+            # Gate 3: Must have enough detections
+            if ghost_track.hits < min_hits:
+                logger.debug(
+                    f"[GHOST_COMPANION] T{ghost_id} SKIP: hits="
+                    f"{ghost_track.hits} < {min_hits}"
+                )
+                continue
+
+            # Gate 4: Last real position must be in upper portion of frame
+            last_real_pos = ghost_info['predicted_pos']  # Last REAL detection pos
+            if last_real_pos is None:
+                continue
+            last_y = last_real_pos[1]
+
+            if last_y > near_top_threshold:
+                logger.debug(
+                    f"[GHOST_COMPANION] T{ghost_id} SKIP: last_y={last_y} > "
+                    f"threshold={near_top_threshold}"
+                )
+                continue
+
+            # Gate 5: Must have been moving upward (not falling off)
+            ghost_vel = ghost_track.velocity
+            if ghost_vel is not None and ghost_vel[1] > 5:  # moving down
+                logger.debug(
+                    f"[GHOST_COMPANION] T{ghost_id} SKIP: moving downward "
+                    f"vy={ghost_vel[1]:.1f}"
+                )
+                continue
+
+            # Gate 6: Must not be a shadow (already handled by shadow system)
+            if ghost_track.shadow_of is not None:
+                continue
+
+            companions_to_complete.append(ghost_id)
+
+        # Complete each companion
+        now = time.time()
+        for ghost_id in companions_to_complete:
+            ghost_info = self.ghost_tracks.pop(ghost_id)
+            ghost_track = ghost_info['track']
+            last_real_pos = ghost_info['predicted_pos']
+
+            # Build position history
+            final_position_history = list(ghost_track.checkpoint_positions)
+            if not final_position_history or final_position_history[-1] != last_real_pos:
+                final_position_history.append(last_real_pos)
+
+            # Append the exiting track's exit position as the companion's exit
+            exit_position = exiting_track.center
+            if final_position_history[-1] != exit_position:
+                final_position_history.append(exit_position)
+
+            event = TrackEvent(
+                track_id=ghost_id,
+                event_type='track_completed',
+                bbox_history=list(ghost_track.bbox_history),
+                position_history=final_position_history,
+                total_frames=ghost_track.age + ghost_track.hits,
+                created_at=ghost_track.created_at,
+                ended_at=now,
+                avg_confidence=ghost_track.confidence,
+                exit_direction='top',
+                entry_type=ghost_track.entry_type,
+                suspected_duplicate=False,
+                ghost_recovery_count=ghost_track.ghost_recovery_count,
+                occlusion_events=list(ghost_track.occlusion_events),
+                shadow_of=None,
+                shadow_count=0,
+                merge_events=list(ghost_track.merge_events),
+                ghost_exit_promoted=True,
+                concurrent_track_count=len(ghost_track.concurrent_track_ids),
+            )
+            self.completed_tracks.append(event)
+            self._ghost_exits_promoted += 1
+
+            # Also complete any shadows attached to this companion
+            if ghost_track.shadow_tracks:
+                self._complete_with_shadows(ghost_track, 'top')
+
+            logger.info(
+                f"[TRACK_LIFECYCLE] T{ghost_id} GHOST_COMPANION_COMPLETED | "
+                f"concurrent ghost completed by T{exiting_track.track_id} exit | "
+                f"last_real_pos={last_real_pos}, hits={ghost_track.hits}, "
+                f"entry_y={ghost_track.entry_center_y}, "
+                f"total_companions={self._ghost_exits_promoted}"
             )
 
     def _lose_shadows_with_survivor(self, survivor: TrackedObject, ended_at: float):

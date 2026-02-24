@@ -295,8 +295,9 @@ class PipelineCore:
                     classification, classification_confidence,
                     position_history,
                     entry_type, suspected_duplicate, ghost_recovery_count,
-                    shadow_of, shadow_count, occlusion_events, merge_events
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    shadow_of, shadow_count, occlusion_events, merge_events,
+                    ghost_exit_promoted, concurrent_track_count
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     event.track_id, event.event_type,
                     datetime.fromtimestamp(event.ended_at).isoformat(),
@@ -313,7 +314,9 @@ class PipelineCore:
                     getattr(event, 'shadow_of', None),
                     getattr(event, 'shadow_count', 0),
                     occlusion_events_json,
-                    merge_events_json
+                    merge_events_json,
+                    1 if getattr(event, 'ghost_exit_promoted', False) else 0,
+                    getattr(event, 'concurrent_track_count', 0),
                 )
             )
         except Exception as e:
@@ -330,7 +333,9 @@ class PipelineCore:
                 'suspected_duplicate': getattr(event, 'suspected_duplicate', False),
                 'ghost_recovery_count': getattr(event, 'ghost_recovery_count', 0),
                 'shadow_of': getattr(event, 'shadow_of', None),
-                'shadow_count': getattr(event, 'shadow_count', 0)
+                'shadow_count': getattr(event, 'shadow_count', 0),
+                'ghost_exit_promoted': getattr(event, 'ghost_exit_promoted', False),
+                'concurrent_track_count': getattr(event, 'concurrent_track_count', 0),
             }
 
             self._db.enqueue_track_event_detail(

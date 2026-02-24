@@ -193,6 +193,8 @@ class DatabaseManager:
             ("shadow_count", "INTEGER DEFAULT 0"),
             ("occlusion_events", "TEXT"),
             ("merge_events", "TEXT"),
+            ("ghost_exit_promoted", "INTEGER DEFAULT 0"),
+            ("concurrent_track_count", "INTEGER DEFAULT 0"),
         ]
         try:
             conn = self._get_connection()

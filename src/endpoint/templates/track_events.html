@@ -439,6 +439,12 @@
             <div class="stat-label"><i class="fa-solid fa-wand-magic-sparkles"></i> Ghost Recovered</div>
         </div>
         {% endif %}
+        {% if stats.recovery_stats and stats.recovery_stats.get('ghost_exit_promoted') %}
+        <div class="stat-card">
+            <div class="stat-value" style="color: #f59e0b;">{{ stats.recovery_stats.get('ghost_exit_promoted', 0)|int }}</div>
+            <div class="stat-label"><i class="fa-solid fa-arrow-up-from-bracket"></i> Ghost Near Top / Companion</div>
+        </div>
+        {% endif %}
     </div>
 
     <!-- Enhanced Stats Panels -->
@@ -569,6 +575,13 @@
                         {% endif %}
                         {% if ev.total_hits is not none and ev.total_hits <= 2 %}
                             <span style="display:inline-block;padding:0.1rem 0.4rem;border-radius:4px;font-size:0.65rem;font-weight:700;background:rgba(100,116,139,0.2);color:var(--text-muted);margin-left:3px;">Noise</span>
+                        {% endif %}
+                        {% if ev.ghost_exit_promoted %}
+                            {% if ev.event_type == 'track_completed' %}
+                            <span style="display:inline-block;padding:0.1rem 0.4rem;border-radius:4px;font-size:0.65rem;font-weight:700;background:rgba(16,185,129,0.15);color:#10b981;margin-left:3px;" title="Ghost companion completed when concurrent track T{{ ev.concurrent_track_count }} exited top — counted">Companion</span>
+                            {% else %}
+                            <span style="display:inline-block;padding:0.1rem 0.4rem;border-radius:4px;font-size:0.65rem;font-weight:700;background:rgba(245,158,11,0.15);color:#f59e0b;margin-left:3px;" title="Ghost was near top exit with concurrent tracks ({{ ev.concurrent_track_count }}) — lost, not counted">Near Top</span>
+                            {% endif %}
                         {% endif %}
                     </td>
                     <td class="coord">

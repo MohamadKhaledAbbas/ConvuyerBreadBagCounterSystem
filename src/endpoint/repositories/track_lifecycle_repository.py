@@ -311,7 +311,9 @@ class TrackLifecycleRepository:
                 SELECT
                     SUM(CASE WHEN ghost_recovery_count > 0 THEN 1 ELSE 0 END) as recovered_tracks,
                     SUM(ghost_recovery_count) as total_recoveries,
-                    SUM(shadow_count) as total_shadows
+                    SUM(shadow_count) as total_shadows,
+                    SUM(CASE WHEN ghost_exit_promoted = 1 THEN 1 ELSE 0 END) as ghost_exit_promoted,
+                    AVG(concurrent_track_count) as avg_concurrent_tracks
                 FROM track_events
                 WHERE {where_clause}
             """, params)
