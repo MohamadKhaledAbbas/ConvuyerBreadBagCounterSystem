@@ -280,6 +280,11 @@ class PipelineVisualizer:
         if debug_info:
             self._draw_debug_panel(annotated, debug_info, tracks)
 
+        # Draw state machine panel (bottom-right) when RLSM is active
+        sm_info = debug_info.get('sm_info') if debug_info else None
+        if sm_info:
+            self._draw_sm_panel(annotated, sm_info)
+
         # Draw recent events log (bottom)
         if debug_info and 'recent_events' in debug_info:
             self._draw_event_log(annotated, debug_info['recent_events'])
@@ -775,13 +780,26 @@ class PipelineVisualizer:
 
         # Pipeline stages
         stages = [
-            ("DETECT", f"{len(tracks)} objects", "🔍"),
-            ("TRACK", f"{len(tracks)} active", "📍"),
-            ("ROI COLLECT", f"+{debug_info.get('rois_collected', 0)}", "📷"),
-            ("CLASSIFY", f"{debug_info.get('pending_classify', 0)} queue", "🏷"),
-            ("SMOOTH", f"{debug_info.get('pending_smooth', 0)} batch", "📊"),
-            ("COUNT", f"{debug_info.get('rejected', 0)} reject", "✓"),
+            ("DETECT",     f"{len(tracks)} objects",                           "🔍"),
+            ("TRACK",      f"{len(tracks)} active",                            "📍"),
+            ("ROI COLLECT",f"+{debug_info.get('rois_collected', 0)}",          "📷"),
+            ("CLASSIFY",   f"{debug_info.get('pending_classify', 0)} queue",   "🏷"),
         ]
+
+        # SMOOTH stage — richer info when RLSM is active
+        sm_info = debug_info.get('sm_info')
+        if sm_info:
+            sm_state_short = {
+                'ACCUMULATING':    'ACCUM',
+                'CONFIRMED_BATCH': 'LOCKED',
+                'TRANSITION':      'TRANSIT',
+            }.get(sm_info['state'], sm_info['state'])
+            smooth_info = f"{sm_state_short} {sm_info['run_length']}/{sm_info['run_target']}"
+        else:
+            smooth_info = f"{debug_info.get('pending_smooth', 0)} batch"
+
+        stages.append(("SMOOTH", smooth_info, "📊"))
+        stages.append(("COUNT",  f"{debug_info.get('rejected', 0)} reject", "✓"))
 
         stage_h = 32
         stage_gap = 8
@@ -876,6 +894,109 @@ class PipelineVisualizer:
             self.FONT, self.FONT_SCALE_SMALL,
             proc_color, self.FONT_WEIGHT_NORMAL
         )
+
+    def _draw_sm_panel(self, frame: np.ndarray, sm_info: Dict):
+        """
+        Draw a compact Run-Length State Machine panel in the bottom-right corner.
+
+        Shows:
+        - State badge (color-coded: yellow=ACCUMULATING, green=CONFIRMED_BATCH, red=TRANSITION)
+        - Confirmed batch class
+        - Current run: class × N / target (with filled progress bar)
+        - Last decision reason (truncated)
+        - Total batch transitions so far
+        """
+        h, w = frame.shape[:2]
+
+        # State → display color
+        STATE_COLORS = {
+            'ACCUMULATING':    (30,  210, 220),   # yellow (BGR)
+            'CONFIRMED_BATCH': (80,  230, 100),   # green
+            'TRANSITION':      (80,  80,  250),   # red
+        }
+        state = sm_info.get('state', 'ACCUMULATING')
+        state_color = STATE_COLORS.get(state, self.COLORS['text_secondary'])
+
+        panel_w = 290
+        panel_h = 195
+        panel_x = w - panel_w - 15
+        panel_y = h - panel_h - 15
+
+        self._draw_panel_background(frame, panel_x, panel_y, panel_w, panel_h)
+        y = self._draw_header(frame, "STATE MACHINE", panel_x, panel_y, panel_w)
+        y += 6
+
+        x     = panel_x + self.PANEL_PADDING
+        right = panel_x + panel_w - self.PANEL_PADDING
+
+        # ── State badge ──────────────────────────────────────────────────────
+        STATE_LABELS = {
+            'ACCUMULATING':    'ACCUMULATING',
+            'CONFIRMED_BATCH': 'CONFIRMED',
+            'TRANSITION':      'TRANSITION',
+        }
+        badge_text = STATE_LABELS.get(state, state)
+        badge_w    = cv2.getTextSize(badge_text, self.FONT, self.FONT_SCALE_SMALL, self.FONT_WEIGHT_BOLD)[0][0] + 14
+        cv2.rectangle(frame, (x, y), (x + badge_w, y + 20), state_color, -1)
+        cv2.putText(
+            frame, badge_text, (x + 7, y + 14),
+            self.FONT, self.FONT_SCALE_SMALL,
+            (20, 20, 25), self.FONT_WEIGHT_BOLD
+        )
+        y += 28
+
+        # ── Confirmed batch class ─────────────────────────────────────────────
+        batch_class = sm_info.get('batch_class') or 'N/A'
+        cv2.putText(frame, "Batch:", (x, y + 12),
+                    self.FONT, self.FONT_SCALE_SMALL,
+                    self.COLORS['text_secondary'], self.FONT_WEIGHT_NORMAL)
+        bc_trunc = batch_class if len(batch_class) <= 20 else batch_class[:17] + "..."
+        cv2.putText(frame, bc_trunc, (x + 52, y + 12),
+                    self.FONT, self.FONT_SCALE_SMALL,
+                    self.COLORS['text_success'] if batch_class != 'N/A' else self.COLORS['text_secondary'],
+                    self.FONT_WEIGHT_BOLD)
+        y += self.LINE_HEIGHT_MEDIUM
+
+        # ── Run progress ──────────────────────────────────────────────────────
+        run_class  = sm_info.get('run_class')  or 'N/A'
+        run_len    = sm_info.get('run_length',  0)
+        run_target = sm_info.get('run_target',  5)
+        run_pct    = min(1.0, run_len / run_target) if run_target > 0 else 0.0
+
+        run_label = f"Run: {run_class[:12]} {run_len}/{run_target}"
+        cv2.putText(frame, run_label, (x, y + 12),
+                    self.FONT, self.FONT_SCALE_SMALL,
+                    state_color, self.FONT_WEIGHT_NORMAL)
+        y += self.LINE_HEIGHT_MEDIUM
+
+        # Progress bar
+        bar_w  = panel_w - self.PANEL_PADDING * 2
+        bar_h  = 9
+        bar_y  = y
+        cv2.rectangle(frame, (x, bar_y), (x + bar_w, bar_y + bar_h),
+                      (60, 60, 70), -1)
+        filled = int(bar_w * run_pct)
+        if filled > 0:
+            cv2.rectangle(frame, (x, bar_y), (x + filled, bar_y + bar_h),
+                          state_color, -1)
+        y += bar_h + 10
+
+        # ── Last decision (truncated) ─────────────────────────────────────────
+        decision = sm_info.get('last_decision') or 'N/A'
+        decision_short = decision if len(decision) <= 28 else decision[:25] + "..."
+        cv2.putText(frame, "Dec:", (x, y + 12),
+                    self.FONT, self.FONT_SCALE_SMALL,
+                    self.COLORS['text_secondary'], self.FONT_WEIGHT_NORMAL)
+        cv2.putText(frame, decision_short, (x + 38, y + 12),
+                    self.FONT, self.FONT_SCALE_SMALL,
+                    self.COLORS['text_info'], self.FONT_WEIGHT_NORMAL)
+        y += self.LINE_HEIGHT_MEDIUM
+
+        # ── Transitions count ─────────────────────────────────────────────────
+        t_count = sm_info.get('transition_count', 0)
+        cv2.putText(frame, f"Transitions: {t_count}", (x, y + 12),
+                    self.FONT, self.FONT_SCALE_SMALL,
+                    self.COLORS['text_secondary'], self.FONT_WEIGHT_NORMAL)
 
     def _draw_event_log(self, frame: np.ndarray, recent_events: List[Tuple[float, str]]):
         """Draw recent events log with modern styling."""

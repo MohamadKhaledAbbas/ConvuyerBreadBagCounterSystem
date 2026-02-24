@@ -503,6 +503,22 @@ class ConveyorCounterApp:
             debug_info['duplicates_prevented'] = tracker_stats.get('duplicates_prevented', 0)
             debug_info['ghost_tracks'] = tracker_stats.get('ghost_tracks', 0)
 
+        # Add state-machine info for visualizer overlay
+        if isinstance(self._smoother, RunLengthStateMachine):
+            sm = self._smoother
+            in_transition = sm.state == RunLengthStateMachine.TRANSITION
+            debug_info['sm_info'] = {
+                'algorithm':        'run_length',
+                'state':            sm.state,
+                'batch_class':      sm.confirmed_batch_class,
+                'run_class':        sm.current_run_class,
+                'run_length':       sm.current_run_length,
+                'run_target':       (sm.transition_confirm_count if in_transition
+                                     else sm.min_run_length),
+                'last_decision':    sm.last_decision_reason,
+                'transition_count': len(sm.transition_history),
+            }
+
         # Store detection data for on-demand snapshot annotation
         self._last_detections = detections
         self._last_tracks = active_tracks
