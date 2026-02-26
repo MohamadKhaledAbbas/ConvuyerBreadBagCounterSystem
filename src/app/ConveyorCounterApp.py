@@ -366,6 +366,9 @@ class ConveyorCounterApp:
             min_sharpness=self.tracking_config.min_sharpness,
             min_brightness=self.tracking_config.min_mean_brightness,
             max_brightness=self.tracking_config.max_mean_brightness,
+            # Brightness quality factor (shadow protection)
+            optimal_brightness=self.tracking_config.optimal_brightness,
+            brightness_penalty_weight=self.tracking_config.brightness_penalty_weight,
             # Diversity controls
             min_frame_spacing=self.tracking_config.roi_min_frame_spacing,
             min_position_change=self.tracking_config.roi_min_position_change,

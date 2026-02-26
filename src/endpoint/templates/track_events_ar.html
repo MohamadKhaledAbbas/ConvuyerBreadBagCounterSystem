@@ -96,7 +96,7 @@
             <select id="classification" name="classification">
                 <option value="">جميع الأصناف</option>
                 {% for cls in filter_options.classifications %}
-                <option value="{{ cls }}" {{ 'selected' if meta.classification_filter == cls else '' }}>{{ cls }}</option>
+                <option value="{{ cls }}" {{ 'selected' if meta.classification_filter == cls else '' }}>{{ name_to_arabic.get(cls, cls) }}</option>
                 {% endfor %}
             </select>
         </div>
@@ -322,7 +322,7 @@
                     </td>
                     <td>
                         {% if ev.classification %}
-                            <span class="class-pill {{ 'rejected' if ev.classification == 'Rejected' else '' }}">{{ ev.classification }}</span>
+                            <span class="class-pill {{ 'rejected' if ev.classification == 'Rejected' else '' }}">{{ name_to_arabic.get(ev.classification, ev.classification) }}</span>
                         {% else %}—{% endif %}
                     </td>
                     <td style="font-size:0.75rem;color:var(--text-muted);">{{ ev.created_at[:19] if ev.created_at else '—' }}</td>
@@ -337,7 +337,7 @@
                             <li>
                                 <span class="step-type" style="color: {% if 'completed' in step.step_type %}var(--accent-success){% elif 'lost' in step.step_type %}var(--accent-danger){% elif 'roi' in step.step_type %}var(--accent-purple){% else %}var(--accent-primary){% endif %};">{{ step.step_type }}</span>
                                 <span style="color: var(--text-secondary);">
-                                    {% if step.class_name %}<span class="class-pill">{{ step.class_name }}</span>{% endif %}
+                                    {% if step.class_name %}<span class="class-pill">{{ name_to_arabic.get(step.class_name, step.class_name) }}</span>{% endif %}
                                     {% if step.confidence %}{{ "%.3f"|format(step.confidence) }}{% endif %}
                                     <span style="color:var(--text-muted);margin-right:0.5rem;">{{ step.timestamp[:19] if step.timestamp else '' }}</span>
                                 </span>

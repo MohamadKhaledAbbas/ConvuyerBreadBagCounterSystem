@@ -30,14 +30,18 @@ class ROIQualityConfig:
     min_size: int = 20
     upper_half_penalty: float = 0.5  # Quality multiplier for ROIs above half screen (Y axis)
 
+    # Brightness quality factor (penalizes shadow/dark ROIs that pass the hard gate)
+    optimal_brightness: float = 120.0  # Ideal brightness for color-based classification
+    brightness_penalty_weight: float = 0.4  # How strongly brightness deviation penalizes quality (0-1)
+
     # Diversity/spacing controls
     min_frame_spacing: int = 3  # Minimum frames between ROI collection
     min_position_change: float = 20.0  # Minimum pixel movement (centroid) between ROIs
 
-    # Enhanced position penalty (gradual from center to top)
+    # Enhanced position penalty (gradual from top 30% of frame)
     enable_gradual_position_penalty: bool = True  # Use gradual penalty vs binary
-    position_penalty_start_ratio: float = 0.5  # Start applying penalty at this Y ratio (0.5 = center)
-    position_penalty_max_ratio: float = 0.15  # Max penalty at this Y ratio (0.15 = top 15%)
+    position_penalty_start_ratio: float = 0.3  # Start applying penalty at this Y ratio (0.3 = top 30%)
+    position_penalty_max_ratio: float = 0.10  # Max penalty at this Y ratio (0.10 = top 10%)
     position_penalty_min_multiplier: float = 0.3  # Minimum quality multiplier at top
 
 
@@ -211,7 +215,9 @@ class ROICollectorService(IROICollector):
         logger.info(
             f"[ROICollector] Initialized: max_rois_per_track={max_rois_per_track}, "
             f"quality_thresholds=(sharpness≥{self.quality_config.min_sharpness}, "
-            f"brightness={self.quality_config.min_brightness}-{self.quality_config.max_brightness}), "
+            f"brightness={self.quality_config.min_brightness}-{self.quality_config.max_brightness}, "
+            f"optimal_brightness={self.quality_config.optimal_brightness}, "
+            f"brightness_penalty_weight={self.quality_config.brightness_penalty_weight}), "
             f"temporal_weighting={'enabled' if enable_temporal_weighting else 'disabled'}"
             f"{f', decay_rate={temporal_decay_rate:.2f}' if enable_temporal_weighting else ''}"
         )
@@ -331,7 +337,7 @@ class ROICollectorService(IROICollector):
         bbox_center_y = centroid_y
 
         if self.quality_config.enable_gradual_position_penalty:
-            # Gradual penalty from center to top
+            # Gradual penalty in the top portion of the frame
             # y_ratio: 0.0 = top of frame, 1.0 = bottom of frame
             y_ratio = bbox_center_y / h
 
@@ -341,8 +347,8 @@ class ROICollectorService(IROICollector):
 
             if y_ratio < penalty_start:
                 # Calculate gradual penalty
-                # At penalty_start (e.g., 0.5 center): no penalty (1.0x)
-                # At penalty_max (e.g., 0.15 top): max penalty (e.g., 0.3x)
+                # At penalty_start (e.g., 0.3 top 30%): no penalty (1.0x)
+                # At penalty_max (e.g., 0.10 top 10%): max penalty (e.g., 0.3x)
                 if y_ratio <= penalty_max:
                     # At or above max penalty zone
                     penalty_multiplier = min_multiplier
@@ -470,8 +476,30 @@ class ROICollectorService(IROICollector):
         if brightness > self.quality_config.max_brightness:
             return sharpness, False, f"too_bright (brightness={brightness:.1f})"
 
-        # Quality score (using sharpness as primary metric)
+        # Quality score starts with sharpness as primary metric
         quality = sharpness
+
+        # Apply brightness quality factor - penalize deviation from optimal brightness
+        # This protects against shadow zones where colors appear washed/darker
+        optimal = self.quality_config.optimal_brightness
+        brightness_weight = self.quality_config.brightness_penalty_weight
+        if optimal > 0 and brightness_weight > 0:
+            # Calculate how far brightness deviates from optimal (0 = perfect, 1 = at min/max gate)
+            brightness_range = max(
+                optimal - self.quality_config.min_brightness,
+                self.quality_config.max_brightness - optimal
+            )
+            brightness_deviation = abs(brightness - optimal) / max(brightness_range, 1.0)
+            brightness_deviation = min(brightness_deviation, 1.0)
+
+            # brightness_factor: 1.0 at optimal, approaches (1 - weight) at extremes
+            brightness_factor = 1.0 - (brightness_weight * brightness_deviation)
+            quality *= brightness_factor
+
+            logger.debug(
+                f"[ROI_QUALITY] brightness={brightness:.1f} optimal={optimal:.0f} "
+                f"deviation={brightness_deviation:.2f} factor={brightness_factor:.3f} quality={quality:.1f}"
+            )
 
         return quality, True, "ok"
 

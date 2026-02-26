@@ -293,21 +293,28 @@ class DatabaseManager:
     def _seed_default_bag_types(self):
         """Seed default bag types if they don't exist (fallback schema path)."""
         default_bag_types = [
-            (1, 'Brown_Orange', 'Brown_Orange', 0, 'data/classes/Brown_Orange_Family/Brown_Orange_Family.jpg', '2026-02-03 03:31:05'),
-            (2, 'Red_Yellow', 'Red_Yellow', 0, 'data/classes/Red_Yellow/Red_Yellow.jpg', '2026-02-03 03:31:05'),
-            (3, 'Wheatberry', 'Wheatberry', 0, 'data/classes/Wheatberry/Wheatberry.jpg', '2026-02-03 10:52:21'),
-            (4, 'Blue_Yellow', 'Blue_Yellow', 0, 'data/classes/Blue_Yellow/Blue_Yellow.jpg', '2026-02-06 01:39:32'),
-            (5, 'Green_Yellow', 'Green_Yellow', 0, 'data/classes/Green_Yellow/Green_Yellow.jpg', '2026-02-06 01:55:36'),
-            (6, 'Bran', 'Bran', 0, 'data/classes/Bran/Bran.jpg', '2026-02-08 18:16:49'),
-            (7, 'Black_Orange', 'Black_Orange', 0, 'data/classes/Black_Orange/Black_Orange.jpg', '2026-02-10 00:00:00'),
-            (8, 'Purple_Yellow', 'Purple_Yellow', 0, 'data/classes/Purple_Yellow/Purple_Yellow.jpg', '2026-02-10 00:00:00'),
-            (9, 'Rejected', 'Rejected', 0, 'data/classes/Rejected/Rejected.jpg', '2026-02-06 01:51:49'),
+            (1, 'Brown_Orange', 'عربي', 0, 'data/classes/Brown_Orange_Family/Brown_Orange_Family.jpg', '2026-02-03 03:31:05'),
+            (2, 'Red_Yellow', '11 رغيف', 0, 'data/classes/Red_Yellow/Red_Yellow.jpg', '2026-02-03 03:31:05'),
+            (3, 'Wheatberry', 'قمحة ', 0, 'data/classes/Wheatberry/Wheatberry.jpg', '2026-02-03 10:52:21'),
+            (4, 'Blue_Yellow', '12 رغيف', 0, 'data/classes/Blue_Yellow/Blue_Yellow.jpg', '2026-02-06 01:39:32'),
+            (5, 'Green_Yellow', '14 رغيف', 0, 'data/classes/Green_Yellow/Green_Yellow.jpg', '2026-02-06 01:55:36'),
+            (6, 'Bran', 'نخالة', 0, 'data/classes/Bran/Bran.jpg', '2026-02-08 18:16:49'),
+            (7, 'Black_Orange', 'عشرات', 0, 'data/classes/Black_Orange/Black_Orange.jpg', '2026-02-10 00:00:00'),
+            (8, 'Purple_Yellow', 'شاورما', 0, 'data/classes/Purple_Yellow/Purple_Yellow.jpg', '2026-02-10 00:00:00'),
+            (9, 'Rejected', 'غير واضحة', 0, 'data/classes/Rejected/Rejected.jpg', '2026-02-06 01:51:49'),
         ]
         with self._cursor() as cursor:
             cursor.executemany(
                 "INSERT OR IGNORE INTO bag_types (id, name, arabic_name, weight, thumb, created_at) VALUES (?, ?, ?, ?, ?, ?)",
                 default_bag_types
             )
+            # Migrate existing records: update arabic_name if it still equals the English name
+            arabic_name_map = {row[1]: row[2] for row in default_bag_types}
+            for eng_name, ar_name in arabic_name_map.items():
+                cursor.execute(
+                    "UPDATE bag_types SET arabic_name = ? WHERE name = ? AND (arabic_name = name OR arabic_name IS NULL)",
+                    (ar_name, eng_name)
+                )
         logger.info("[DatabaseManager] Default bag types seeded")
     def get_or_create_bag_type(self, name: str, arabic_name: Optional[str] = None,
                                weight: float = 0, thumb: Optional[str] = None) -> int:

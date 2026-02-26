@@ -250,6 +250,11 @@ async def track_events_page(
         if noise_filtering_active:
             noise_count = service.count_noise_tracks(start_dt, end_dt)
 
+        # Build name→arabic_name mapping for template display
+        db = get_db()
+        bag_types = db.get_all_bag_types()
+        name_to_arabic = {bt['name']: bt.get('arabic_name', bt['name']) for bt in bag_types}
+
         context = {
             'request': request,
             'meta': data['meta'],
@@ -259,7 +264,8 @@ async def track_events_page(
             'filter_options': data['filter_options'],
             'noise_filtering_active': noise_filtering_active,
             'noise_count': noise_count,
-            'track_search': track_search_str or ''
+            'track_search': track_search_str or '',
+            'name_to_arabic': name_to_arabic
         }
 
         logger.info(f"[TrackEvents] Rendering {len(data['events'])} events (page {page})")
@@ -515,10 +521,16 @@ async def track_visualization_page(request: Request, track_id: int):
         if animation_data is None:
             raise HTTPException(404, f"Track {track_id} not found")
 
+        # Build name→arabic_name mapping for template display
+        db = get_db()
+        bag_types = db.get_all_bag_types()
+        name_to_arabic = {bt['name']: bt.get('arabic_name', bt['name']) for bt in bag_types}
+
         context = {
             'request': request,
             'track_id': track_id,
-            'data': animation_data
+            'data': animation_data,
+            'name_to_arabic': name_to_arabic
         }
 
         return templates.TemplateResponse('track_visualization_ar.html', context)

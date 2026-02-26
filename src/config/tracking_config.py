@@ -346,22 +346,39 @@ class TrackingConfig:
     Smoother quality degradation from bottom (best) to top (worst).
     """
 
-    position_penalty_start_ratio: float = _parse_float_env("POSITION_PENALTY_START_RATIO", 0.5)
+    position_penalty_start_ratio: float = _parse_float_env("POSITION_PENALTY_START_RATIO", 0.3)
     """
     Y-axis ratio where position penalty starts (0.0=top, 1.0=bottom).
-    Default: 0.5 (center of frame) - no penalty below this line.
+    Default: 0.3 (top 30% of frame) - no penalty below this line.
+    Relaxed from 0.5 (center) to allow more of the frame to be penalty-free.
     """
 
-    position_penalty_max_ratio: float = _parse_float_env("POSITION_PENALTY_MAX_RATIO", 0.15)
+    position_penalty_max_ratio: float = _parse_float_env("POSITION_PENALTY_MAX_RATIO", 0.10)
     """
     Y-axis ratio where maximum penalty is applied (0.0=top, 1.0=bottom).
-    Default: 0.15 (top 15% of frame) - full penalty at or above this line.
+    Default: 0.10 (top 10% of frame) - full penalty at or above this line.
     """
 
     position_penalty_min_multiplier: float = _parse_float_env("POSITION_PENALTY_MIN_MULTIPLIER", 0.3)
     """
     Minimum quality multiplier at top of frame (0-1).
     Default: 0.3 (70% quality reduction at top).
+    """
+
+    # Brightness Quality Factor (shadow protection)
+    optimal_brightness: float = _parse_float_env("OPTIMAL_BRIGHTNESS", 120.0)
+    """
+    Optimal brightness value for color-based classification (0-255).
+    ROIs closer to this value get higher quality scores.
+    Default: 120.0 (mid-range, ideal for accurate color representation).
+    """
+
+    brightness_penalty_weight: float = _parse_float_env("BRIGHTNESS_PENALTY_WEIGHT", 0.4)
+    """
+    How strongly brightness deviation penalizes quality score (0-1).
+    0.0 = no penalty (brightness only does hard min/max gate).
+    1.0 = maximum penalty (ROI at min/max brightness gets 0 quality).
+    Default: 0.4 (moderate penalty - shadow ROIs get ~60% quality reduction).
     """
 
     # ==========================================================================

@@ -104,7 +104,7 @@
                 {% if data.summary.classification %}
                 <div class="info-row">
                     <span class="info-label">الصنف:</span>
-                    <span class="info-value">{{ data.summary.classification }}</span>
+                    <span class="info-value">{{ name_to_arabic.get(data.summary.classification, data.summary.classification) }}</span>
                 </div>
                 {% endif %}
             </div>
