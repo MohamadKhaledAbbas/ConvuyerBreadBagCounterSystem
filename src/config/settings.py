@@ -43,7 +43,7 @@ class AppConfig:
     Application configuration for ConvuyerBreadBagCounterSystem.
     """
     
-    APP_VERSION: str = "26-02-2026_v2.6.1"
+    APP_VERSION: str = "26-02-2026_v2.6.2"
 
     # Video source for testing
     video_path: str = os.getenv("VIDEO_PATH", "D:\\Recordings\\2026_02_05\\2026_02_26\\output_2026-02-26_02-59-58.h264")

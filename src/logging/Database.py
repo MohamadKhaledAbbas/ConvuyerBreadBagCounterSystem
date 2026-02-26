@@ -832,12 +832,12 @@ class DatabaseManager:
             'summary': summary,
             'details': details
         }
-    def purge_old_events(self, retention_days: int = 3) -> int:
+    def purge_old_events(self, retention_days: int = 7) -> int:
         """
         Delete events older than retention_days from the events table.
 
         Args:
-            retention_days: Number of days to retain (default: 3)
+            retention_days: Number of days to retain (default: 7)
 
         Returns:
             Number of events rows deleted
@@ -858,7 +858,7 @@ class DatabaseManager:
         Delete track events and details older than retention_days.
 
         Args:
-            retention_days: Number of days to retain (default: 7)
+            retention_days: Number of days to retain (default: 3)
 
         Returns:
             Number of track_events rows deleted
