@@ -552,6 +552,24 @@ class TrackingConfig:
     Default: 60 minutes.
     """
 
+    # ── Lost track snapshot settings ──────────────────────────────────────
+
+    lost_snapshots_dir: str = _parse_str_env("LOST_SNAPSHOTS_DIR", "data/spool/lost_snapshots")
+    """Directory for saving frame snapshots when tracks are lost."""
+
+    lost_snapshots_retention_hours: float = _parse_float_env("LOST_SNAPSHOTS_RETENTION_HOURS", 24.0)
+    """
+    Maximum age (hours) for lost track snapshot files before automatic deletion.
+    Default: 24 hours (1 day) to avoid filling SD card.
+    """
+
+    lost_snapshots_max_count: int = _parse_int_env("LOST_SNAPSHOTS_MAX_COUNT", 2000)
+    """
+    Maximum number of lost track snapshot files to retain.
+    When exceeded, oldest files are deleted first.
+    Default: 2000 files.
+    """
+
     @property
     def reject_label_set(self) -> set:
         """Get reject labels as a set."""

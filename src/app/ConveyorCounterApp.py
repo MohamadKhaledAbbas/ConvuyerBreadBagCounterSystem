@@ -412,6 +412,8 @@ class ConveyorCounterApp:
         self._pipeline_core.on_track_completed = self._on_classification_completed
         # Set callback for track events (for UI debugging)
         self._pipeline_core.on_track_event = self._on_track_event
+        # Set callback for current batch type (used to infer classification for lost tracks)
+        self._pipeline_core.get_current_batch_type = self._get_current_batch_type
 
         # Visualizer - always create for snapshot support (even in headless mode)
         # In headless mode, it's only used for on-demand snapshot annotation
@@ -551,6 +553,24 @@ class ConveyorCounterApp:
 
         return frame
     
+    def _get_current_batch_type(self) -> Optional[str]:
+        """
+        Get the current batch type from the smoother.
+
+        Used by PipelineCore to infer classification for lost tracks.
+        If a batch is confirmed (e.g. 'Blue_Yellow'), a lost bread bag
+        on the conveyor almost certainly belongs to the current batch.
+
+        Returns:
+            Current batch type string, or None if no batch confirmed yet.
+        """
+        if self._smoother is not None:
+            if isinstance(self._smoother, RunLengthStateMachine):
+                return self._smoother.confirmed_batch_class
+            # For BidirectionalSmoother, use the rolling-window batch type
+            return self._current_batch_type
+        return None
+
     def _on_track_event(self, event: str):
         """
         Callback for track-related events (for UI debugging).
@@ -561,7 +581,7 @@ class ConveyorCounterApp:
         self.state.add_event(event)
 
         # Count lost track events
-        if "lost before exit" in event:
+        if "lost before exit" in event or event.startswith("LOST T"):
             with self.state._lock:
                 self.state.lost_track_count += 1
 

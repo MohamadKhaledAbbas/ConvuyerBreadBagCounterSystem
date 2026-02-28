@@ -259,6 +259,7 @@
                     <th>الدقة</th>
                     <th>نوع الدخول</th>
                     <th>الصنف</th>
+                    <th>صورة</th>
                     <th>بداية التتبع</th>
                     <th>نهاية التتبع</th>
                 </tr>
@@ -323,6 +324,17 @@
                     <td>
                         {% if ev.classification %}
                             <span class="class-pill {{ 'rejected' if ev.classification == 'Rejected' else '' }}">{{ name_to_arabic.get(ev.classification, ev.classification) }}</span>
+                            {% if ev.event_type == 'track_lost' and ev.classification_confidence is none %}
+                                <span style="display:inline-block;padding:0.1rem 0.35rem;border-radius:3px;font-size:0.6rem;font-weight:600;background:rgba(251,191,36,0.15);color:#f59e0b;margin-right:3px;" title="تم استنتاج التصنيف من نوع الدفعة الحالية">مُستنتج</span>
+                            {% endif %}
+                        {% else %}—{% endif %}
+                    </td>
+                    <td>
+                        {% if ev.snapshot_path %}
+                            <img src="/track-events/snapshot/{{ ev.snapshot_path }}" alt="T{{ ev.track_id }}"
+                                 onclick="openSnapshot(this.src, 'T{{ ev.track_id }}')"
+                                 style="width:56px;height:auto;border-radius:4px;cursor:zoom-in;border:1px solid rgba(148,163,184,0.2);transition:transform .15s;"
+                                 onmouseover="this.style.transform='scale(1.1)'" onmouseout="this.style.transform='scale(1)'">
                         {% else %}—{% endif %}
                     </td>
                     <td style="font-size:0.75rem;color:var(--text-muted);">{{ ev.created_at[:19] if ev.created_at else '—' }}</td>
@@ -330,7 +342,7 @@
                 </tr>
                 {% if ev.details|length > 0 %}
                 <tr class="detail-row" id="detail-{{ ev.track_id }}">
-                    <td colspan="14" class="detail-cell">
+                    <td colspan="15" class="detail-cell">
                         <strong style="color:var(--accent-primary);"><i class="fa-solid fa-list"></i> خطوات دورة الحياة ({{ ev.details|length }})</strong>
                         <ul class="steps-list">
                         {% for step in ev.details %}
@@ -398,6 +410,49 @@ document.querySelector('.filter-bar').addEventListener('submit', function(e) {
             input.removeAttribute('name');
         }
     });
+});
+</script>
+
+<!-- Snapshot Lightbox Modal -->
+<div id="snapshotModal" onclick="closeSnapshot(event)" style="
+    display:none; position:fixed; inset:0; z-index:9999;
+    background:rgba(0,0,0,0.85); backdrop-filter:blur(6px);
+    justify-content:center; align-items:center; flex-direction:column; gap:1rem;
+    cursor:pointer; animation:fadeIn .2s ease-out;
+">
+    <div style="position:relative;max-width:90vw;max-height:85vh;" onclick="event.stopPropagation()">
+        <button onclick="closeSnapshot()" title="إغلاق" style="
+            position:absolute; top:-14px; left:-14px; z-index:10;
+            width:36px; height:36px; border-radius:50%; border:none;
+            background:rgba(248,113,113,0.9); color:#fff; font-size:1.1rem;
+            cursor:pointer; display:flex; align-items:center; justify-content:center;
+            box-shadow:0 2px 12px rgba(0,0,0,0.4); transition:transform .15s;
+        " onmouseover="this.style.transform='scale(1.1)'" onmouseout="this.style.transform='scale(1)'">
+            <i class="fa-solid fa-xmark"></i>
+        </button>
+        <img id="snapshotModalImg" src="" alt="" style="
+            max-width:90vw; max-height:85vh; border-radius:10px;
+            box-shadow:0 8px 40px rgba(0,0,0,0.5);
+        ">
+    </div>
+    <span id="snapshotModalLabel" style="color:#94a3b8;font-size:0.85rem;font-weight:600;"></span>
+</div>
+<script>
+function openSnapshot(src, label) {
+    const modal = document.getElementById('snapshotModal');
+    document.getElementById('snapshotModalImg').src = src;
+    document.getElementById('snapshotModalLabel').textContent = label;
+    modal.style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+}
+function closeSnapshot(e) {
+    if (e && e.target && e.target.id !== 'snapshotModal') return;
+    const modal = document.getElementById('snapshotModal');
+    modal.style.display = 'none';
+    document.body.style.overflow = '';
+}
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') { document.getElementById('snapshotModal').style.display = 'none'; document.body.style.overflow = ''; }
 });
 </script>
 </body>

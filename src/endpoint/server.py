@@ -12,6 +12,7 @@ Based on V1 logic with enhanced code quality and maintainability.
 """
 
 import os
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Dict, Any
@@ -27,13 +28,17 @@ from src.endpoint.routes import analytics
 from src.endpoint.routes import track_lifecycle
 from src.endpoint.routes import snapshot
 from src.endpoint.routes import counts
-from src.endpoint.shared import init_shared_resources, cleanup_shared_resources, get_templates
+from src.endpoint.shared import init_shared_resources, cleanup_shared_resources, get_templates, get_db
+from src.endpoint.pipeline_state import read_state
 from src.utils.AppLogging import logger
 
 from src.config.settings import AppConfig
 
 # Application version
 APP_VERSION = AppConfig.APP_VERSION
+
+# Server start time for uptime tracking
+_SERVER_START_TIME = time.time()
 
 
 @asynccontextmanager
@@ -103,15 +108,80 @@ async def root(request: Request):
 @app.get("/health")
 async def health() -> Dict[str, Any]:
     """
-    Health check endpoint for monitoring and load balancers.
+    Enhanced health check endpoint with system diagnostics.
 
-    Returns:
-        dict: Health status with UTC timestamp
+    Returns version, uptime, DB connectivity, and live pipeline metrics
+    so the UI and external monitors get a complete picture.
     """
+    now = time.time()
+    uptime_seconds = now - _SERVER_START_TIME
+
+    # Format uptime as HH:MM:SS clock format
+    hours, remainder = divmod(int(uptime_seconds), 3600)
+    minutes, seconds = divmod(remainder, 60)
+    uptime_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+    # Check DB connectivity
+    db_ok = False
+    try:
+        db = get_db()
+        if db is not None:
+            db_ok = True
+    except Exception:
+        pass
+
+    # Read pipeline state for live metrics
+    pipeline = read_state()
+    pipeline_active = bool(pipeline.get("confirmed_total", 0) > 0 or pipeline.get("pending_total", 0) > 0
+                           or pipeline.get("current_batch_type"))
+
+    # Resolve arabic names for batch types from bag_types table
+    current_batch = pipeline.get("current_batch_type")
+    last_classified = pipeline.get("last_classified_type")
+    current_batch_arabic = current_batch
+    last_classified_arabic = last_classified
+    try:
+        if db_ok and db is not None and (current_batch or last_classified):
+            bag_types = db.get_all_bag_types()
+            name_map = {bt['name']: bt.get('arabic_name') or bt['name'] for bt in bag_types}
+            if current_batch:
+                current_batch_arabic = name_map.get(current_batch, current_batch)
+            if last_classified:
+                last_classified_arabic = name_map.get(last_classified, last_classified)
+    except Exception:
+        pass
+
     return {
         "status": "healthy",
-        "timestamp": datetime.now(timezone.utc).isoformat()
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "version": APP_VERSION,
+        "uptime_seconds": round(uptime_seconds, 1),
+        "uptime": uptime_str,
+        "database": "connected" if db_ok else "disconnected",
+        "pipeline_active": pipeline_active,
+        "pipeline": {
+            "confirmed_total": pipeline.get("confirmed_total", 0),
+            "pending_total": pipeline.get("pending_total", 0),
+            "current_batch_type": current_batch,
+            "current_batch_type_arabic": current_batch_arabic,
+            "last_classified_type": last_classified,
+            "last_classified_type_arabic": last_classified_arabic,
+            "smoothing_rate": pipeline.get("smoothing_rate", 0),
+        }
     }
+
+
+@app.get("/health/view", response_class=HTMLResponse)
+async def health_page(request: Request):
+    """
+    Health status page with styled UI matching the system theme.
+    Auto-refreshes every 30 seconds via JavaScript.
+    """
+    templates = get_templates()
+    return templates.TemplateResponse('health.html', {
+        'request': request,
+        'version': APP_VERSION
+    })
 
 
 def setup_static_mounts() -> None:

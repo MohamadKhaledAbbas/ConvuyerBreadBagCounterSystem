@@ -195,6 +195,7 @@ class DatabaseManager:
             ("merge_events", "TEXT"),
             ("ghost_exit_promoted", "INTEGER DEFAULT 0"),
             ("concurrent_track_count", "INTEGER DEFAULT 0"),
+            ("snapshot_path", "TEXT"),
         ]
         try:
             conn = self._get_connection()

@@ -108,7 +108,10 @@ CREATE TABLE IF NOT EXISTS track_events (
     shadow_of INTEGER,                          -- track_id this was a shadow of (NULL if not)
     shadow_count INTEGER DEFAULT 0,             -- Number of shadow tracks when exited
     occlusion_events TEXT,                      -- JSON: [{lost_at_y, recovered_at_y, gap_seconds}]
-    merge_events TEXT                           -- JSON: [{merged_track_id, merge_y, unmerge_y}]
+    merge_events TEXT,                          -- JSON: [{merged_track_id, merge_y, unmerge_y}]
+
+    -- Lost track snapshot (filename only, served via endpoint)
+    snapshot_path TEXT                           -- JPEG filename for lost track snapshot (NULL if none)
 );
 
 -- Indexes for analytics queries

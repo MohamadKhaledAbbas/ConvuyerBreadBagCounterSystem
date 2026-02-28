@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>حالة المنظومة — فحص الاتصال</title>
+    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --bg-deep: #0f172a;
+            --glass-bg: rgba(30, 41, 59, 0.7);
+            --glass-border: rgba(255, 255, 255, 0.08);
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --accent-primary: #38bdf8;
+            --accent-success: #2dd4bf;
+            --accent-warning: #fbbf24;
+            --accent-danger: #f87171;
+            --accent-purple: #a78bfa;
+            --radius-lg: 16px;
+            --radius-md: 12px;
+            --radius-sm: 8px;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Tajawal', 'Inter', system-ui, sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.8;
+        }
+        .eng { font-family: 'Inter', sans-serif !important; font-feature-settings: "tnum" 1; direction: ltr; }
+
+        main {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 3rem 1.5rem;
+        }
+
+        .back-link {
+            display: inline-flex; align-items: center; gap: .5rem;
+            color: var(--accent-primary); text-decoration: none; font-size: .9rem;
+            margin-bottom: 2rem; opacity: .8; transition: opacity .2s;
+        }
+        .back-link:hover { opacity: 1; }
+
+        .page-header { text-align: center; margin-bottom: 2.5rem; }
+        .page-header h1 { font-size: 2.2rem; font-weight: 800; margin-bottom: .5rem; }
+        .page-header .subtitle { color: var(--text-secondary); font-size: 1rem; }
+
+        /* Big status hero */
+        .hero-status {
+            text-align: center;
+            padding: 3rem 2rem;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-lg);
+            margin-bottom: 2rem;
+            backdrop-filter: blur(10px);
+            transition: border-color .5s;
+        }
+        .hero-status.ok { border-color: rgba(45, 212, 191, 0.4); }
+        .hero-status.fail { border-color: rgba(248, 113, 113, 0.4); }
+        .hero-status.checking { border-color: rgba(251, 191, 36, 0.4); }
+
+        .hero-icon {
+            width: 90px; height: 90px;
+            border-radius: 50%;
+            display: inline-flex; align-items: center; justify-content: center;
+            font-size: 2.5rem;
+            margin-bottom: 1.2rem;
+            transition: all .5s;
+        }
+        .hero-status.ok .hero-icon {
+            background: rgba(45, 212, 191, 0.15); color: var(--accent-success);
+            box-shadow: 0 0 40px rgba(45, 212, 191, 0.2);
+        }
+        .hero-status.fail .hero-icon {
+            background: rgba(248, 113, 113, 0.15); color: var(--accent-danger);
+            box-shadow: 0 0 40px rgba(248, 113, 113, 0.2);
+        }
+        .hero-status.checking .hero-icon {
+            background: rgba(251, 191, 36, 0.15); color: var(--accent-warning);
+        }
+
+        .hero-title { font-size: 1.6rem; font-weight: 700; margin-bottom: .3rem; }
+        .hero-sub { color: var(--text-secondary); font-size: .95rem; }
+
+        /* Pulse ring animation */
+        .pulse-ring {
+            display: inline-block; position: relative;
+        }
+        .pulse-ring::before {
+            content: '';
+            position: absolute; inset: -8px;
+            border-radius: 50%;
+            border: 2px solid var(--accent-success);
+            animation: pulseRing 2s ease-out infinite;
+            opacity: 0;
+        }
+        .hero-status.fail .pulse-ring::before { border-color: var(--accent-danger); }
+        .hero-status.checking .pulse-ring::before { display: none; }
+        @keyframes pulseRing {
+            0% { transform: scale(.9); opacity: .7; }
+            100% { transform: scale(1.5); opacity: 0; }
+        }
+
+        /* Info grid */
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+        .info-card {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-md);
+            padding: 1.2rem 1.5rem;
+            backdrop-filter: blur(10px);
+        }
+        .info-card .label {
+            font-size: .8rem; font-weight: 600; color: var(--text-muted);
+            margin-bottom: .3rem; display: flex; align-items: center; gap: .4rem;
+        }
+        .info-card .value {
+            font-size: 1.3rem; font-weight: 700; color: var(--text-primary);
+        }
+        .info-card .value.success { color: var(--accent-success); }
+        .info-card .value.danger { color: var(--accent-danger); }
+        .info-card .value.warning { color: var(--accent-warning); }
+        .info-card .value.primary { color: var(--accent-primary); }
+        .info-card .value.muted { color: var(--text-muted); font-size: 1rem; }
+
+        /* Pipeline section */
+        .section-title {
+            font-size: 1rem; font-weight: 700; color: var(--text-secondary);
+            margin-bottom: 1rem; display: flex; align-items: center; gap: .5rem;
+        }
+
+        /* Last check */
+        .last-check {
+            text-align: center; color: var(--text-muted); font-size: .8rem;
+            margin-top: 1.5rem;
+        }
+
+        /* Footer nav */
+        .footer-nav {
+            text-align: center; margin-top: 2rem; font-size: .85rem; color: var(--text-muted);
+        }
+        .footer-nav a { color: var(--accent-primary); text-decoration: none; margin: 0 .5rem; }
+        .footer-nav a:hover { text-decoration: underline; }
+
+        @media (max-width: 600px) {
+            .info-grid { grid-template-columns: 1fr 1fr; }
+            .hero-title { font-size: 1.3rem; }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <a href="/" class="back-link"><i class="fa-solid fa-arrow-right"></i> الرئيسية</a>
+
+    <div class="page-header">
+        <h1><i class="fa-solid fa-heart-pulse"></i> حالة المنظومة</h1>
+        <p class="subtitle">فحص تلقائي كل ٣٠ ثانية — <span class="eng" style="font-size:.85rem">{{ version }}</span></p>
+    </div>
+
+    <!-- Hero status -->
+    <div class="hero-status checking" id="heroStatus">
+        <div class="pulse-ring">
+            <div class="hero-icon" id="heroIcon">
+                <i class="fa-solid fa-spinner fa-spin" id="heroIconEl"></i>
+            </div>
+        </div>
+        <div class="hero-title" id="heroTitle">جارٍ الفحص...</div>
+        <div class="hero-sub" id="heroSub">يتم الاتصال بالخادم</div>
+    </div>
+
+    <!-- Info grid -->
+    <div class="info-grid">
+        <div class="info-card">
+            <div class="label"><i class="fa-solid fa-clock"></i> وقت التشغيل</div>
+            <div class="value eng" id="uptime">—</div>
+        </div>
+        <div class="info-card">
+            <div class="label"><i class="fa-solid fa-database"></i> قاعدة البيانات</div>
+            <div class="value" id="dbStatus">—</div>
+        </div>
+        <div class="info-card">
+            <div class="label"><i class="fa-solid fa-code-branch"></i> الإصدار</div>
+            <div class="value eng" id="appVersion">—</div>
+        </div>
+    </div>
+
+    <!-- Pipeline details -->
+    <div class="section-title"><i class="fa-solid fa-industry"></i> تفاصيل خط الإنتاج</div>
+    <div class="info-grid">
+        <div class="info-card">
+            <div class="label"><i class="fa-solid fa-check-double"></i> الإجمالي المؤكد</div>
+            <div class="value eng primary" id="confirmedTotal">—</div>
+        </div>
+        <div class="info-card">
+            <div class="label"><i class="fa-solid fa-hourglass-half"></i> قيد المعالجة</div>
+            <div class="value eng" id="pendingTotal">—</div>
+        </div>
+        <div class="info-card">
+            <div class="label"><i class="fa-solid fa-bread-slice"></i> الدفعة الحالية</div>
+            <div class="value" id="batchType">—</div>
+        </div>
+        <div class="info-card">
+            <div class="label"><i class="fa-solid fa-percent"></i> نسبة التنعيم</div>
+            <div class="value eng" id="smoothingRate">—</div>
+        </div>
+    </div>
+
+    <div class="last-check">
+        <i class="fa-solid fa-rotate"></i>
+        آخر فحص: <span class="eng" id="lastCheck">—</span>
+        &nbsp;•&nbsp; الفحص القادم خلال <span class="eng" id="nextCheck">30</span> ثانية
+    </div>
+
+    <div class="footer-nav">
+        <a href="/">الرئيسية</a> • <a href="/counts">الإحصاء اللحظي</a> • <a href="/analytics">لوحة المؤشرات</a> • <a href="/track-events">المسارات</a>
+    </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+
+let countdown = 30;
+let countdownInterval;
+let uptimeSeconds = null;
+
+function formatUptime(secs) {
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    const s = Math.floor(secs % 60);
+    return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+}
+
+// Tick uptime every second
+setInterval(() => {
+    if (uptimeSeconds !== null) {
+        uptimeSeconds++;
+        $('uptime').textContent = formatUptime(uptimeSeconds);
+    }
+}, 1000);
+
+async function checkHealth() {
+    const heroEl = $('heroStatus');
+    const iconEl = $('heroIconEl');
+    const titleEl = $('heroTitle');
+    const subEl = $('heroSub');
+
+    try {
+        const t0 = performance.now();
+        const res = await fetch('/health');
+        const latency = Math.round(performance.now() - t0);
+        const data = await res.json();
+
+        if (data.status === 'healthy') {
+            heroEl.className = 'hero-status ok';
+            iconEl.className = 'fa-solid fa-circle-check';
+            titleEl.textContent = 'المنظومة تعمل بكفاءة';
+            subEl.textContent = 'جميع الخدمات متصلة — زمن الاستجابة ' + latency + 'ms';
+
+            // Uptime — sync from server, local ticker will keep it going
+            uptimeSeconds = Math.floor(data.uptime_seconds || 0);
+            $('uptime').textContent = formatUptime(uptimeSeconds);
+
+            // DB
+            const dbOk = data.database === 'connected';
+            $('dbStatus').textContent = dbOk ? 'متصلة' : 'منقطعة';
+            $('dbStatus').className = 'value ' + (dbOk ? 'success' : 'danger');
+
+            // Version
+            $('appVersion').textContent = data.version || '—';
+
+            // Pipeline details
+            const p = data.pipeline || {};
+            $('confirmedTotal').textContent = (p.confirmed_total || 0).toLocaleString('en');
+            $('pendingTotal').textContent = (p.pending_total || 0).toLocaleString('en');
+            $('batchType').textContent = p.current_batch_type_arabic || p.current_batch_type || '—';
+            $('smoothingRate').textContent = p.smoothing_rate != null ? (p.smoothing_rate * 100).toFixed(1) + '%' : '—';
+
+        } else {
+            heroEl.className = 'hero-status fail';
+            iconEl.className = 'fa-solid fa-triangle-exclamation';
+            titleEl.textContent = 'حالة غير معروفة';
+            subEl.textContent = 'الخادم استجاب لكن الحالة غير واضحة';
+        }
+    } catch (err) {
+        heroEl.className = 'hero-status fail';
+        iconEl.className = 'fa-solid fa-plug-circle-xmark';
+        titleEl.textContent = 'الاتصال منقطع';
+        subEl.textContent = 'تعذر الوصول إلى الخادم — تحقق من الشبكة';
+        $('dbStatus').textContent = '—';
+    }
+
+    // Update last check time
+    $('lastCheck').textContent = new Date().toLocaleTimeString('en', { hour12: false });
+
+    // Reset countdown
+    countdown = 30;
+    clearInterval(countdownInterval);
+    countdownInterval = setInterval(() => {
+        countdown--;
+        $('nextCheck').textContent = Math.max(0, countdown);
+        if (countdown <= 0) clearInterval(countdownInterval);
+    }, 1000);
+}
+
+// Initial check
+checkHealth();
+
+// Auto-refresh every 30 seconds
+setInterval(checkHealth, 30000);
+</script>
+</body>
+</html>
+
+
+
+
+
+
+
+

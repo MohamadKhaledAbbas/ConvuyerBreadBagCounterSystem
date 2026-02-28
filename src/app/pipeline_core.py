@@ -74,18 +74,31 @@ class PipelineCore:
         # Optional callback for track events (for UI debugging)
         self.on_track_event: Optional[Callable[[str], None]] = None
 
+        # Optional callback to get current batch type from smoother
+        # Used to infer classification for lost tracks
+        self.get_current_batch_type: Optional[Callable[[], Optional[str]]] = None
+
+        # Last processed frame (used for lost track snapshots)
+        self._last_frame: Optional[np.ndarray] = None
+
         # Ensure classified ROIs directory exists if saving is enabled
         if self._tracking_config.save_classified_rois:
             os.makedirs(self._tracking_config.classified_rois_dir, exist_ok=True)
             logger.info(f"[PipelineCore] Save classified ROIs enabled: {self._tracking_config.classified_rois_dir}")
 
-        # Background purge mechanism for classified ROIs
+        # Ensure lost snapshots directory exists
+        os.makedirs(self._tracking_config.lost_snapshots_dir, exist_ok=True)
+
+        # Background purge mechanism for classified ROIs and lost snapshots
         self._purge_thread: Optional[threading.Thread] = None
         self._purge_stop_event = threading.Event()
         self._last_purge_time: float = 0.0
 
         # Start purge thread if saving is enabled and retention is configured
         if self._tracking_config.save_classified_rois:
+            self._start_purge_thread()
+        elif self._tracking_config.lost_snapshots_retention_hours > 0:
+            # Even if classified ROIs are disabled, start purge thread for lost snapshots
             self._start_purge_thread()
 
         logger.info("[PipelineCore] Initialized")
@@ -110,6 +123,8 @@ class PipelineCore:
             Tuple of (detections, active_tracks, rois_collected)
         """
         # 1. Detection - use native NV12 path when available to avoid conversion overhead
+        # Store frame reference for lost track snapshot capture
+        self._last_frame = frame
         if (nv12_data is not None
                 and frame_size is not None
                 and hasattr(self.detector, 'detect_nv12')):
@@ -177,15 +192,35 @@ class PipelineCore:
             return
 
         # Skip classification for lost tracks (didn't reach exit zone)
+        # But infer classification from current batch type if available
         if event.event_type == 'track_lost':
-            logger.info(
-                f"[PIPELINE] T{track_id} LOST | "
-                f"exit={event.exit_direction} frames={event.total_frames} "
-                f"reason=track_lost_before_exit"
-            )
+            batch_type = None
+            if self.get_current_batch_type is not None:
+                batch_type = self.get_current_batch_type()
+
+            if batch_type:
+                logger.info(
+                    f"[PIPELINE] T{track_id} LOST | "
+                    f"exit={event.exit_direction} frames={event.total_frames} "
+                    f"reason=track_lost_before_exit | "
+                    f"inferred_class={batch_type} (from current batch)"
+                )
+            else:
+                logger.info(
+                    f"[PIPELINE] T{track_id} LOST | "
+                    f"exit={event.exit_direction} frames={event.total_frames} "
+                    f"reason=track_lost_before_exit"
+                )
             if self.on_track_event:
-                self.on_track_event(f"SKIP T{track_id} lost before exit")
-            self._log_track_event(event)
+                if batch_type:
+                    self.on_track_event(f"LOST T{track_id} (inferred: {batch_type})")
+                else:
+                    self.on_track_event(f"SKIP T{track_id} lost before exit")
+
+            # Capture snapshot of the frame when the track was lost
+            snapshot_filename = self._save_lost_snapshot(event)
+
+            self._log_track_event(event, inferred_classification=batch_type, snapshot_filename=snapshot_filename)
             self.roi_collector.remove_track(track_id)
             return
 
@@ -250,7 +285,7 @@ class PipelineCore:
         # Clean up
         self.roi_collector.remove_track(track_id)
 
-    def _log_track_event(self, event: TrackEvent):
+    def _log_track_event(self, event: TrackEvent, inferred_classification: Optional[str] = None, snapshot_filename: Optional[str] = None):
         """
         Log a track lifecycle event to the database for analytics.
 
@@ -259,6 +294,9 @@ class PipelineCore:
 
         Args:
             event: Track completion event from the tracker
+            inferred_classification: Optional classification inferred from current batch type
+                                     (used for lost tracks that didn't get classified directly)
+            snapshot_filename: Optional JPEG filename of the frame snapshot (for lost tracks)
         """
         if self._db is None:
             return
@@ -296,8 +334,9 @@ class PipelineCore:
                     position_history,
                     entry_type, suspected_duplicate, ghost_recovery_count,
                     shadow_of, shadow_count, occlusion_events, merge_events,
-                    ghost_exit_promoted, concurrent_track_count
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    ghost_exit_promoted, concurrent_track_count,
+                    snapshot_path
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     event.track_id, event.event_type,
                     datetime.fromtimestamp(event.ended_at).isoformat(),
@@ -306,7 +345,7 @@ class PipelineCore:
                     event.exit_direction, event.distance_traveled,
                     event.duration_seconds, event.total_frames,
                     event.avg_confidence, total_hits,
-                    None, None,
+                    inferred_classification, None,
                     position_json,
                     getattr(event, 'entry_type', 'bottom_entry'),
                     1 if getattr(event, 'suspected_duplicate', False) else 0,
@@ -317,6 +356,7 @@ class PipelineCore:
                     merge_events_json,
                     1 if getattr(event, 'ghost_exit_promoted', False) else 0,
                     getattr(event, 'concurrent_track_count', 0),
+                    snapshot_filename,
                 )
             )
         except Exception as e:
@@ -337,6 +377,10 @@ class PipelineCore:
                 'ghost_exit_promoted': getattr(event, 'ghost_exit_promoted', False),
                 'concurrent_track_count': getattr(event, 'concurrent_track_count', 0),
             }
+
+            if inferred_classification:
+                detail_data['inferred_classification'] = inferred_classification
+                detail_data['classification_source'] = 'batch_type'
 
             self._db.enqueue_track_event_detail(
                 track_id=event.track_id,
@@ -427,6 +471,43 @@ class PipelineCore:
         if self.on_track_completed is not None:
             self.on_track_completed(track_id, class_name, confidence, non_rejected_rois, best_roi)
 
+    def _save_lost_snapshot(self, event: TrackEvent) -> Optional[str]:
+        """
+        Save a snapshot of the current frame when a track is lost.
+
+        Captures the frame at the moment the track was lost for diagnostic review.
+        The image is downscaled to 50% and saved as JPEG (quality 70) to conserve
+        SD card space (~20-40 KB per snapshot).
+
+        Args:
+            event: Track lost event
+
+        Returns:
+            Filename of the saved snapshot (e.g., 'lost_T42_1709100000000.jpg'),
+            or None if saving failed.
+        """
+        if self._last_frame is None:
+            return None
+
+        try:
+            timestamp_ms = int(time.time() * 1000)
+            filename = f"lost_T{event.track_id}_{timestamp_ms}.jpg"
+            filepath = os.path.join(self._tracking_config.lost_snapshots_dir, filename)
+
+            # Downscale to 50% to save SD card space
+            h, w = self._last_frame.shape[:2]
+            small_frame = cv2.resize(self._last_frame, (w // 2, h // 2))
+
+            encode_params = [cv2.IMWRITE_JPEG_QUALITY, 70]
+            cv2.imwrite(filepath, small_frame, encode_params)
+
+            logger.debug(f"[PipelineCore] Saved lost track snapshot: {filename}")
+            return filename
+
+        except Exception as e:
+            logger.error(f"[PipelineCore] Failed to save lost snapshot for T{event.track_id}: {e}")
+            return None
+
     def _save_classified_rois(self, track_id: int, rois_with_quality: List[Tuple[np.ndarray, float]]):
         """
         Save ROIs that are used for classification (voting).
@@ -469,26 +550,26 @@ class PipelineCore:
             logger.error(f"[PipelineCore] Failed to save classified ROIs for T{track_id}: {e}")
 
     def _start_purge_thread(self):
-        """Start background thread for purging old classified ROIs."""
+        """Start background thread for purging old classified ROIs and lost snapshots."""
         if self._purge_thread is not None and self._purge_thread.is_alive():
             return
 
         self._purge_stop_event.clear()
         self._purge_thread = threading.Thread(
             target=self._purge_loop,
-            name="ClassifiedROIPurger",
+            name="FilePurger",
             daemon=True
         )
         self._purge_thread.start()
         logger.info(
-            f"[PipelineCore] Started classified ROI purge thread "
-            f"(retention={self._tracking_config.classified_rois_retention_hours}h, "
-            f"max_count={self._tracking_config.classified_rois_max_count}, "
+            f"[PipelineCore] Started file purge thread "
+            f"(roi_retention={self._tracking_config.classified_rois_retention_hours}h, "
+            f"snapshot_retention={self._tracking_config.lost_snapshots_retention_hours}h, "
             f"interval={self._tracking_config.classified_rois_purge_interval_minutes}min)"
         )
 
     def _purge_loop(self):
-        """Background loop for periodic purge of old classified ROIs."""
+        """Background loop for periodic purge of old classified ROIs and lost snapshots."""
         purge_interval_seconds = self._tracking_config.classified_rois_purge_interval_minutes * 60
 
         while not self._purge_stop_event.is_set():
@@ -497,13 +578,15 @@ class PipelineCore:
                 if self._purge_stop_event.wait(timeout=purge_interval_seconds):
                     break  # Stop event was set
 
-                # Perform purge
-                self._purge_classified_rois()
+                # Perform purge for both file types
+                if self._tracking_config.save_classified_rois:
+                    self._purge_classified_rois()
+                self._purge_lost_snapshots()
 
             except Exception as e:
                 logger.error(f"[PipelineCore] Error in purge loop: {e}", exc_info=True)
 
-        logger.info("[PipelineCore] Classified ROI purge thread stopped")
+        logger.info("[PipelineCore] File purge thread stopped")
 
     def _purge_classified_rois(self):
         """
@@ -593,6 +676,86 @@ class PipelineCore:
 
         except Exception as e:
             logger.error(f"[PipelineCore] Failed to purge classified ROIs: {e}", exc_info=True)
+
+    def _purge_lost_snapshots(self):
+        """
+        Purge old lost track snapshots based on retention policy.
+
+        Two-phase purge (same pattern as classified ROIs):
+        1. Time-based: Delete files older than lost_snapshots_retention_hours (default 24h)
+        2. Count-based: If still over lost_snapshots_max_count, delete oldest files first
+        """
+        try:
+            snap_dir = self._tracking_config.lost_snapshots_dir
+            if not os.path.exists(snap_dir):
+                return
+
+            pattern = os.path.join(snap_dir, "lost_T*.jpg")
+            files = glob.glob(pattern)
+
+            if not files:
+                return
+
+            file_info = []
+            for filepath in files:
+                try:
+                    mtime = os.path.getmtime(filepath)
+                    file_info.append((filepath, mtime))
+                except OSError:
+                    continue
+
+            if not file_info:
+                return
+
+            initial_count = len(file_info)
+            deleted_time_based = 0
+            deleted_count_based = 0
+
+            # Phase 1: Time-based deletion
+            retention_hours = self._tracking_config.lost_snapshots_retention_hours
+            if retention_hours > 0:
+                cutoff_time = time.time() - (retention_hours * 3600)
+                files_to_keep = []
+                for filepath, mtime in file_info:
+                    if mtime < cutoff_time:
+                        try:
+                            os.remove(filepath)
+                            deleted_time_based += 1
+                        except OSError as e:
+                            logger.warning(f"[PipelineCore] Failed to delete old snapshot {filepath}: {e}")
+                    else:
+                        files_to_keep.append((filepath, mtime))
+                file_info = files_to_keep
+
+            # Phase 2: Count-based deletion (delete oldest first)
+            max_count = self._tracking_config.lost_snapshots_max_count
+            if max_count > 0 and len(file_info) > max_count:
+                file_info.sort(key=lambda x: x[1])
+                files_to_delete = len(file_info) - max_count
+                for filepath, _ in file_info[:files_to_delete]:
+                    try:
+                        os.remove(filepath)
+                        deleted_count_based += 1
+                    except OSError as e:
+                        logger.warning(f"[PipelineCore] Failed to delete excess snapshot {filepath}: {e}")
+
+            total_deleted = deleted_time_based + deleted_count_based
+            remaining = initial_count - total_deleted
+
+            if total_deleted > 0:
+                logger.info(
+                    f"[PipelineCore] Purged lost snapshots: "
+                    f"time_based={deleted_time_based}, count_based={deleted_count_based}, "
+                    f"remaining={remaining}"
+                )
+            else:
+                logger.debug(
+                    f"[PipelineCore] Lost snapshot purge check: no files to purge "
+                    f"(total={initial_count})"
+                )
+
+        except Exception as e:
+            logger.error(f"[PipelineCore] Failed to purge lost snapshots: {e}", exc_info=True)
 
     def _stop_purge_thread(self, timeout: float = 5.0):
         """Stop the background purge thread."""

@@ -7,11 +7,12 @@ Enhanced with:
 - Track animation data endpoint
 """
 
+import os
 import re
 from typing import Optional
 
 from fastapi import APIRouter, Request, HTTPException, Query
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from src.endpoint.repositories.track_lifecycle_repository import TrackLifecycleRepository
 from src.endpoint.services.track_lifecycle_service import TrackLifecycleService
@@ -540,4 +541,48 @@ async def track_visualization_page(request: Request, track_id: int):
     except Exception as e:
         logger.error(f'[TrackEvents] Visualization error: {e}', exc_info=True)
         raise HTTPException(500, str(e))
+
+
+@router.get("/track-events/snapshot/{filename}")
+async def get_lost_track_snapshot(filename: str) -> Response:
+    """
+    Serve a lost track snapshot image.
+
+    Returns the JPEG snapshot captured when a track was lost.
+    Only serves files from the lost_snapshots directory (path traversal safe).
+
+    Args:
+        filename: Snapshot filename (e.g., 'lost_T42_1709100000000.jpg')
+
+    Returns:
+        JPEG image response or 404 if not found
+    """
+    from src.config.tracking_config import TrackingConfig
+    config = TrackingConfig()
+
+    # Security: use only the basename to prevent path traversal
+    safe_filename = os.path.basename(filename)
+    if not safe_filename.startswith("lost_T") or not safe_filename.endswith(".jpg"):
+        raise HTTPException(400, "Invalid snapshot filename")
+
+    filepath = os.path.join(config.lost_snapshots_dir, safe_filename)
+
+    if not os.path.exists(filepath):
+        raise HTTPException(404, f"Snapshot not found: {safe_filename}")
+
+    try:
+        with open(filepath, "rb") as f:
+            image_data = f.read()
+
+        return Response(
+            content=image_data,
+            media_type="image/jpeg",
+            headers={
+                "Cache-Control": "public, max-age=86400",  # Cache for 1 day (matches retention)
+            }
+        )
+    except Exception as e:
+        logger.error(f"[TrackEvents] Failed to read snapshot {safe_filename}: {e}")
+        raise HTTPException(500, "Failed to read snapshot")
+
 
