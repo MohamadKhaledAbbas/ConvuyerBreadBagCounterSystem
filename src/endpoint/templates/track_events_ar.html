@@ -276,7 +276,7 @@
                     </td>
                     <td>
                         <strong>
-                            <a href="/track-events/{{ ev.track_id }}/visualize" style="color: var(--accent-primary); text-decoration: none;">
+                            <a href="/track-events/visualize/{{ ev.id }}" style="color: var(--accent-primary); text-decoration: none;">
                                 T{{ ev.track_id }} <i class="fa-solid fa-play-circle" style="font-size: 0.7rem;"></i>
                             </a>
                         </strong>
@@ -330,11 +330,16 @@
                         {% else %}—{% endif %}
                     </td>
                     <td>
-                        {% if ev.snapshot_path %}
-                            <img src="/track-events/snapshot/{{ ev.snapshot_path }}" alt="T{{ ev.track_id }}"
-                                 onclick="openSnapshot(this.src, 'T{{ ev.track_id }}')"
-                                 style="width:56px;height:auto;border-radius:4px;cursor:zoom-in;border:1px solid rgba(148,163,184,0.2);transition:transform .15s;"
-                                 onmouseover="this.style.transform='scale(1.1)'" onmouseout="this.style.transform='scale(1)'">
+                        {% if ev._snapshot_paths %}
+                            <div style="position:relative;display:inline-block;">
+                                <img src="/track-events/snapshot/{{ ev._snapshot_paths[0] }}" alt="T{{ ev.track_id }}"
+                                     onclick="openSnapshot(this.src, 'T{{ ev.track_id }}')"
+                                     style="width:56px;height:auto;border-radius:4px;cursor:zoom-in;border:1px solid rgba(148,163,184,0.2);transition:transform .15s;"
+                                     onmouseover="this.style.transform='scale(1.1)'" onmouseout="this.style.transform='scale(1)'">
+                                {% if ev._snapshot_paths|length > 1 %}
+                                <span style="position:absolute;top:-4px;right:-4px;background:var(--accent-primary);color:#fff;font-size:0.6rem;font-weight:700;width:16px;height:16px;border-radius:50%;display:flex;align-items:center;justify-content:center;">{{ ev._snapshot_paths|length }}</span>
+                                {% endif %}
+                            </div>
                         {% else %}—{% endif %}
                     </td>
                     <td style="font-size:0.75rem;color:var(--text-muted);">{{ ev.created_at[:19] if ev.created_at else '—' }}</td>

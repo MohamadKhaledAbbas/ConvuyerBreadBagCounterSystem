@@ -10,6 +10,7 @@ import json
 import os
 import threading
 import time
+from collections import deque
 from datetime import datetime
 from typing import List, Optional, Callable, Tuple
 
@@ -78,8 +79,18 @@ class PipelineCore:
         # Used to infer classification for lost tracks
         self.get_current_batch_type: Optional[Callable[[], Optional[str]]] = None
 
-        # Last processed frame (used for lost track snapshots)
-        self._last_frame: Optional[np.ndarray] = None
+        # ── Evidence ring buffer for lost/invalid track snapshots ────────
+        # Stores the last N annotated frames (with UI overlay), sampled
+        # every ~0.5 s.  When a track ends as lost/invalid, ALL frames in
+        # the buffer are saved as a filmstrip for post-mortem review.
+        #
+        # Default: 8 frames × 0.5 s = 4.0 s coverage (matches ghost timeout).
+        # Memory cost: 8 × (640×360×3 bytes) ≈ 5.3 MB  (frames are stored
+        # at half-resolution to keep it light).
+        # ─────────────────────────────────────────────────────────────────
+        self._evidence_buffer: deque = deque(maxlen=self._tracking_config.evidence_buffer_size)
+        self._evidence_last_sample_time: float = 0.0
+        self._EVIDENCE_SAMPLE_INTERVAL: float = self._tracking_config.evidence_sample_interval
 
         # Ensure classified ROIs directory exists if saving is enabled
         if self._tracking_config.save_classified_rois:
@@ -123,8 +134,6 @@ class PipelineCore:
             Tuple of (detections, active_tracks, rois_collected)
         """
         # 1. Detection - use native NV12 path when available to avoid conversion overhead
-        # Store frame reference for lost track snapshot capture
-        self._last_frame = frame
         if (nv12_data is not None
                 and frame_size is not None
                 and hasattr(self.detector, 'detect_nv12')):
@@ -187,7 +196,11 @@ class PipelineCore:
             )
             if self.on_track_event:
                 self.on_track_event(f"SKIP T{track_id} invalid travel path")
-            self._log_track_event(event)
+
+            # Capture evidence snapshot for invalid tracks too
+            snapshot_filename = self._save_lost_snapshot(event)
+
+            self._log_track_event(event, snapshot_filename=snapshot_filename)
             self.roi_collector.remove_track(track_id)
             return
 
@@ -471,41 +484,75 @@ class PipelineCore:
         if self.on_track_completed is not None:
             self.on_track_completed(track_id, class_name, confidence, non_rejected_rois, best_roi)
 
-    def _save_lost_snapshot(self, event: TrackEvent) -> Optional[str]:
+    def push_evidence_frame(self, annotated_frame: np.ndarray) -> None:
         """
-        Save a snapshot of the current frame when a track is lost.
+        Store an annotated frame in the evidence ring buffer.
 
-        Captures the frame at the moment the track was lost for diagnostic review.
-        The image is downscaled to 50% and saved as JPEG (quality 70) to conserve
-        SD card space (~20-40 KB per snapshot).
+        Called by the app layer after each frame is processed and annotated.
+        Frames are sampled at configurable intervals (default 0.5 s) to keep
+        memory usage minimal (~5.3 MB for 8 half-resolution frames).
+
+        The stored frame is immediately downscaled to 50% to reduce memory
+        footprint. When a track is lost/invalid, ALL frames in the buffer
+        are saved to disk as a filmstrip for post-mortem review.
 
         Args:
-            event: Track lost event
+            annotated_frame: BGR frame with all UI overlays drawn
+        """
+        now = time.time()
+        if now - self._evidence_last_sample_time < self._EVIDENCE_SAMPLE_INTERVAL:
+            return  # Skip — too soon since last sample
+
+        self._evidence_last_sample_time = now
+
+        # Downscale immediately to save memory (~640×360 instead of 1280×720)
+        h, w = annotated_frame.shape[:2]
+        small = cv2.resize(annotated_frame, (w // 2, h // 2))
+        self._evidence_buffer.append(small)
+
+    def _save_lost_snapshot(self, event: TrackEvent) -> Optional[str]:
+        """
+        Save ALL annotated evidence frames when a track is lost or invalid.
+
+        The evidence ring buffer stores the last N annotated frames (with
+        UI overlays) sampled every ~0.5 s (default: 8 frames = 4.0 s).
+        We save **all** of them so the user can review a filmstrip of
+        keyframes covering the full ghost timeout window leading up to the
+        loss event.  Frames are ordered oldest → newest.
+
+        Each frame is already at 50 % resolution (downscaled on ingestion)
+        and is saved as JPEG quality 60 (~15-25 KB per image, ~160 KB total
+        for 8 frames).
+
+        Args:
+            event: Track lost/invalid event
 
         Returns:
-            Filename of the saved snapshot (e.g., 'lost_T42_1709100000000.jpg'),
-            or None if saving failed.
+            JSON-encoded list of filenames, e.g.
+            '["lost_T42_170910000_0.jpg", ..., "lost_T42_170910000_7.jpg"]'
+            or None if the buffer was empty.
         """
-        if self._last_frame is None:
+        if not self._evidence_buffer:
             return None
 
         try:
             timestamp_ms = int(time.time() * 1000)
-            filename = f"lost_T{event.track_id}_{timestamp_ms}.jpg"
-            filepath = os.path.join(self._tracking_config.lost_snapshots_dir, filename)
+            encode_params = [cv2.IMWRITE_JPEG_QUALITY, 60]
+            saved_filenames: list[str] = []
 
-            # Downscale to 50% to save SD card space
-            h, w = self._last_frame.shape[:2]
-            small_frame = cv2.resize(self._last_frame, (w // 2, h // 2))
+            for idx, frame in enumerate(self._evidence_buffer):
+                filename = f"lost_T{event.track_id}_{timestamp_ms}_{idx}.jpg"
+                filepath = os.path.join(self._tracking_config.lost_snapshots_dir, filename)
+                cv2.imwrite(filepath, frame, encode_params)
+                saved_filenames.append(filename)
 
-            encode_params = [cv2.IMWRITE_JPEG_QUALITY, 70]
-            cv2.imwrite(filepath, small_frame, encode_params)
-
-            logger.debug(f"[PipelineCore] Saved lost track snapshot: {filename}")
-            return filename
+            logger.debug(
+                f"[PipelineCore] Saved {len(saved_filenames)} evidence frames for T{event.track_id}"
+            )
+            return json.dumps(saved_filenames)
 
         except Exception as e:
-            logger.error(f"[PipelineCore] Failed to save lost snapshot for T{event.track_id}: {e}")
+            logger.error(f"[PipelineCore] Failed to save evidence for T{event.track_id}: {e}")
             return None
 
     def _save_classified_rois(self, track_id: int, rois_with_quality: List[Tuple[np.ndarray, float]]):

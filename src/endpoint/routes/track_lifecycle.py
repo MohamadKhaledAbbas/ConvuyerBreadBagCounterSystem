@@ -242,6 +242,7 @@ async def track_events_page(
             has_ghost_recovery=ghost_recovery_bool,
             track_ids=p_track_ids,
             track_id_range=p_track_id_range,
+            exempt_lost_invalid_from_noise=noise_filtering_active,
             page=page,
             page_size=page_size
         )
@@ -478,16 +479,8 @@ async def track_animation_data(track_id: int):
     """
     Get animation data for visualizing a track's lifecycle journey.
 
-    Returns:
-    - Position history (keyframes for animation)
-    - ROI collection events with bounding boxes
-    - Classification events
-    - Lifecycle milestone events
-    - Occlusion and merge events
-    - Animation properties (suggested duration, frame count)
-
-    Use this endpoint to render an SVG/Canvas animation of the track's
-    journey from creation to completion/loss.
+    WARNING: track_id is NOT unique across sessions.
+    Prefer /track-events/visualize/{event_id} for unambiguous lookups.
     """
     service = _get_service()
     try:
@@ -502,17 +495,49 @@ async def track_animation_data(track_id: int):
         raise HTTPException(500, str(e))
 
 
+@router.get("/track-events/visualize/{event_id}", response_class=HTMLResponse)
+async def track_visualization_by_event_id(request: Request, event_id: int):
+    """
+    Render track visualization using the unique event_id (track_events.id).
+
+    This is the recommended endpoint — avoids ambiguity when track_id
+    resets across sessions (e.g., T1 exists in multiple days).
+    """
+    templates = get_templates()
+    service = _get_service()
+
+    try:
+        animation_data = service.get_track_animation_by_event_id(event_id)
+        if animation_data is None:
+            raise HTTPException(404, f"Event {event_id} not found")
+
+        db = get_db()
+        bag_types = db.get_all_bag_types()
+        name_to_arabic = {bt['name']: bt.get('arabic_name', bt['name']) for bt in bag_types}
+
+        context = {
+            'request': request,
+            'track_id': animation_data['track_id'],
+            'data': animation_data,
+            'name_to_arabic': name_to_arabic
+        }
+
+        return templates.TemplateResponse('track_visualization_ar.html', context)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f'[TrackEvents] Visualization error (event_id={event_id}): {e}', exc_info=True)
+        raise HTTPException(500, str(e))
+
+
 @router.get("/track-events/{track_id}/visualize", response_class=HTMLResponse)
 async def track_visualization_page(request: Request, track_id: int):
     """
     Render a standalone page with animated track lifecycle visualization.
 
-    Shows an SVG animation of the track's journey with:
-    - Trajectory path
-    - ROI collection points
-    - Classification events
-    - Entry/exit markers
-    - Timeline of events
+    WARNING: track_id is NOT unique across sessions. This endpoint is kept
+    for backward compatibility. Prefer /track-events/visualize/{event_id}.
     """
     templates = get_templates()
     service = _get_service()
@@ -564,6 +589,9 @@ async def get_lost_track_snapshot(filename: str) -> Response:
     safe_filename = os.path.basename(filename)
     if not safe_filename.startswith("lost_T") or not safe_filename.endswith(".jpg"):
         raise HTTPException(400, "Invalid snapshot filename")
+    # Reject anything that still looks like a traversal attempt
+    if ".." in safe_filename or "/" in safe_filename or "\\" in safe_filename:
+        raise HTTPException(400, "Invalid snapshot filename")
 
     filepath = os.path.join(config.lost_snapshots_dir, safe_filename)
 
@@ -584,5 +612,3 @@ async def get_lost_track_snapshot(filename: str) -> Response:
     except Exception as e:
         logger.error(f"[TrackEvents] Failed to read snapshot {safe_filename}: {e}")
         raise HTTPException(500, "Failed to read snapshot")
-
-

@@ -563,11 +563,29 @@ class TrackingConfig:
     Default: 24 hours (1 day) to avoid filling SD card.
     """
 
-    lost_snapshots_max_count: int = _parse_int_env("LOST_SNAPSHOTS_MAX_COUNT", 2000)
+    lost_snapshots_max_count: int = _parse_int_env("LOST_SNAPSHOTS_MAX_COUNT", 5000)
     """
     Maximum number of lost track snapshot files to retain.
     When exceeded, oldest files are deleted first.
-    Default: 2000 files.
+    Default: 5000 files (~625 events × 8 frames each).
+    """
+
+    # ── Evidence ring buffer settings ──────────────────────────────────────
+
+    evidence_buffer_size: int = _parse_int_env("EVIDENCE_BUFFER_SIZE", 8)
+    """
+    Number of annotated frames to keep in the evidence ring buffer.
+    When a track is lost/invalid, ALL buffered frames are saved as a
+    filmstrip for post-mortem review.
+    Default: 8 frames (4 seconds at 0.5 s sample interval).
+    Memory cost: 8 × (640×360×3) ≈ 5.3 MB.
+    """
+
+    evidence_sample_interval: float = _parse_float_env("EVIDENCE_SAMPLE_INTERVAL", 0.5)
+    """
+    Time in seconds between evidence frame samples.
+    Lower values give denser coverage but more memory/disk usage.
+    Default: 0.5 s → 8 frames covers 4.0 s (matches ghost timeout).
     """
 
     @property

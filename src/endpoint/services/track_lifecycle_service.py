@@ -74,6 +74,7 @@ class TrackLifecycleService:
         has_ghost_recovery: Optional[bool] = None,
         track_ids: Optional[list] = None,
         track_id_range: Optional[tuple] = None,
+        exempt_lost_invalid_from_noise: bool = False,
         page: int = 1,
         page_size: int = 100
     ) -> Dict[str, Any]:
@@ -126,6 +127,7 @@ class TrackLifecycleService:
             has_ghost_recovery=has_ghost_recovery,
             track_ids=track_ids,
             track_id_range=track_id_range,
+            exempt_lost_invalid_from_noise=exempt_lost_invalid_from_noise,
         )
 
         # Get paginated events with filters
@@ -147,6 +149,7 @@ class TrackLifecycleService:
             has_ghost_recovery=has_ghost_recovery,
             track_ids=track_ids,
             track_id_range=track_id_range,
+            exempt_lost_invalid_from_noise=exempt_lost_invalid_from_noise,
             limit=page_size,
             offset=offset
         )
@@ -193,6 +196,20 @@ class TrackLifecycleService:
                     event['_merge_events'] = []
             else:
                 event['_merge_events'] = []
+
+            # Parse snapshot_path into a list (backward-compatible)
+            raw_snap = event.get('snapshot_path')
+            if raw_snap:
+                try:
+                    parsed = json.loads(raw_snap)
+                    if isinstance(parsed, list):
+                        event['_snapshot_paths'] = parsed
+                    else:
+                        event['_snapshot_paths'] = [raw_snap]
+                except (json.JSONDecodeError, TypeError):
+                    event['_snapshot_paths'] = [raw_snap]
+            else:
+                event['_snapshot_paths'] = []
 
         # Get distinct classifications for filter dropdown
         distinct_classifications = self.repo.get_distinct_classifications(db_start, db_end)
@@ -246,11 +263,24 @@ class TrackLifecycleService:
         """
         Get animation data for a track's lifecycle visualization.
 
-        Returns:
-            Dictionary with all data needed for SVG animation
+        WARNING: track_id is NOT unique across sessions.
+        Use get_track_animation_by_event_id() for unambiguous lookups.
         """
         animation_data = self.repo.get_track_animation_data(track_id)
+        return self._enrich_animation_data(animation_data)
 
+    def get_track_animation_by_event_id(self, event_id: int) -> Dict[str, Any]:
+        """
+        Get animation data by unique event_id (track_events.id).
+
+        This is the recommended method — avoids ambiguity when track_id
+        resets across sessions.
+        """
+        animation_data = self.repo.get_track_animation_data_by_event_id(event_id)
+        return self._enrich_animation_data(animation_data)
+
+    def _enrich_animation_data(self, animation_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Add computed animation properties (keyframes, duration) to raw animation data."""
         if not animation_data:
             return None
 

@@ -176,6 +176,66 @@
         </div>
     </div>
 
+    {% if data.snapshot_paths and data.snapshot_paths|length > 0 %}
+    <!-- Evidence Keyframes Filmstrip -->
+    <div style="margin-top: 1.5rem; background: var(--glass-bg); border: 1px solid var(--glass-border); border-radius: var(--radius-lg); padding: 1.25rem;">
+        <h3 style="font-size: 0.95rem; color: var(--accent-danger); margin-bottom: 1rem; font-weight: 600;">
+            <i class="fa-solid fa-camera-retro"></i>
+            لقطات الأدلة
+            <span style="font-size: 0.75rem; color: var(--text-secondary); font-weight: 400; margin-right: 0.5rem;">
+                ({{ data.snapshot_paths|length }} إطار — كل ~0.5 ثانية — تغطية {{ "%.1f"|format(data.snapshot_paths|length * 0.5) }} ثانية)
+            </span>
+        </h3>
+        <div style="display: flex; gap: 0.75rem; overflow-x: auto; padding-bottom: 0.75rem; scroll-snap-type: x mandatory;">
+            {% for snap in data.snapshot_paths %}
+            {% set total = data.snapshot_paths|length %}
+            {% set time_offset = "%.1f"|format((loop.index - total) * 0.5) %}
+            <div style="flex: 0 0 auto; text-align: center; scroll-snap-align: start;">
+                <div style="position: relative; border: 2px solid {% if loop.first %}var(--accent-warning){% elif loop.last %}var(--accent-danger){% else %}rgba(148,163,184,0.2){% endif %}; border-radius: var(--radius-md); overflow: hidden; cursor: zoom-in; transition: border-color 0.15s;"
+                     onclick="openEvidenceSnapshot('/track-events/snapshot/{{ snap }}', {{ loop.index }}, {{ total }})"
+                     onmouseover="this.style.borderColor='var(--accent-primary)'" onmouseout="this.style.borderColor='{% if loop.first %}var(--accent-warning){% elif loop.last %}var(--accent-danger){% else %}rgba(148,163,184,0.2){% endif %}'">
+                    <img src="/track-events/snapshot/{{ snap }}" alt="إطار {{ loop.index }}"
+                         style="width: 240px; height: auto; display: block;"
+                         loading="lazy">
+                    <!-- Frame number badge (top-right) -->
+                    <div style="position: absolute; top: 6px; right: 6px; background: rgba(0,0,0,0.75); color: #fff; font-size: 0.65rem; font-weight: 700; padding: 2px 7px; border-radius: 4px; font-family: 'Inter', monospace;">
+                        {{ loop.index }}/{{ total }}
+                    </div>
+                    <!-- Time offset badge (top-left) -->
+                    <div style="position: absolute; top: 6px; left: 6px; background: {% if loop.last %}rgba(248,113,113,0.85){% else %}rgba(0,0,0,0.75){% endif %}; color: #fff; font-size: 0.65rem; font-weight: 700; padding: 2px 7px; border-radius: 4px; font-family: 'Inter', monospace;">
+                        {{ time_offset }}s
+                    </div>
+                    <!-- Label badge (bottom) -->
+                    {% if loop.first or loop.last %}
+                    <div style="position: absolute; bottom: 0; left: 0; right: 0; background: linear-gradient(transparent, rgba(0,0,0,0.8)); padding: 12px 8px 6px; text-align: center;">
+                        <span style="color: {% if loop.first %}#fbbf24{% else %}#f87171{% endif %}; font-size: 0.7rem; font-weight: 700;">
+                            {% if loop.first %}🟡 الأقدم — الكيس مرئي{% elif loop.last %}🔴 لحظة الفقدان{% endif %}
+                        </span>
+                    </div>
+                    {% endif %}
+                </div>
+                <span style="display: block; margin-top: 0.35rem; font-size: 0.65rem; color: var(--text-muted); font-family: 'Inter', monospace;">
+                    {{ time_offset }}s
+                </span>
+            </div>
+            {% endfor %}
+        </div>
+        <div style="display: flex; align-items: center; gap: 1rem; margin-top: 0.5rem;">
+            <div style="flex: 1; height: 3px; background: linear-gradient(90deg, #fbbf24, var(--text-muted) 15%, var(--text-muted) 85%, #f87171); border-radius: 2px; opacity: 0.4;"></div>
+        </div>
+        <div style="display: flex; justify-content: space-between; font-size: 0.65rem; color: var(--text-muted); margin-top: 0.25rem;">
+            <span>🟡 الأقدم ({{ "%.1f"|format((1 - data.snapshot_paths|length) * 0.5) }}s)</span>
+            <span style="color: var(--text-secondary); font-style: italic;">← اسحب للتمرير →</span>
+            <span>🔴 لحظة الفقدان (0.0s)</span>
+        </div>
+        <p style="font-size: 0.7rem; color: var(--text-muted); margin-top: 0.75rem; line-height: 1.5;">
+            <i class="fa-solid fa-info-circle"></i>
+            هذه اللقطات تُظهر واجهة التطبيق كما كانت أثناء حدوث المشكلة — مرتبة من الأقدم (يسار) إلى الأحدث (يمين).
+            الأوقات نسبية إلى لحظة تأكيد الفقدان. انقر على أي لقطة لتكبيرها، واستخدم الأسهم ← → للتنقل.
+        </p>
+    </div>
+    {% endif %}
+
     <div class="page-footer">
         <a href="/track-events">سجل المسارات</a> • <a href="/">الرئيسية</a>
     </div>
@@ -514,6 +574,86 @@ draw();
 setTimeout(() => {
     if (positions.length > 1) togglePlay();
 }, 800);
+</script>
+
+<!-- Evidence Snapshot Lightbox -->
+<div id="evidenceModal" style="
+    display:none; position:fixed; inset:0; z-index:9999;
+    background:rgba(0,0,0,0.9); backdrop-filter:blur(8px);
+    justify-content:center; align-items:center; flex-direction:column; gap:1rem;
+    cursor:pointer;
+" onclick="if(event.target===this)closeEvidence()">
+    <div style="position:relative;max-width:95vw;max-height:90vh;" onclick="event.stopPropagation()">
+        <button onclick="closeEvidence()" title="إغلاق" style="
+            position:absolute; top:-14px; left:-14px; z-index:10;
+            width:36px; height:36px; border-radius:50%; border:none;
+            background:rgba(248,113,113,0.9); color:#fff; font-size:1.1rem;
+            cursor:pointer; display:flex; align-items:center; justify-content:center;
+            box-shadow:0 2px 12px rgba(0,0,0,0.4);
+        "><i class="fa-solid fa-xmark"></i></button>
+
+        <button id="evidencePrev" onclick="navigateEvidence(-1)" style="
+            position:absolute; left:-50px; top:50%; transform:translateY(-50%);
+            width:40px; height:40px; border-radius:50%; border:none;
+            background:rgba(255,255,255,0.15); color:#fff; font-size:1.2rem;
+            cursor:pointer; display:flex; align-items:center; justify-content:center;
+        "><i class="fa-solid fa-chevron-left"></i></button>
+
+        <button id="evidenceNext" onclick="navigateEvidence(1)" style="
+            position:absolute; right:-50px; top:50%; transform:translateY(-50%);
+            width:40px; height:40px; border-radius:50%; border:none;
+            background:rgba(255,255,255,0.15); color:#fff; font-size:1.2rem;
+            cursor:pointer; display:flex; align-items:center; justify-content:center;
+        "><i class="fa-solid fa-chevron-right"></i></button>
+
+        <img id="evidenceImg" src="" alt="" style="
+            max-width:95vw; max-height:85vh; border-radius:10px;
+            box-shadow:0 8px 40px rgba(0,0,0,0.5);
+        ">
+    </div>
+    <span id="evidenceLabel" style="color:#94a3b8;font-size:0.85rem;font-weight:600;"></span>
+</div>
+
+<script>
+// Evidence snapshot lightbox with navigation
+const snapshotPaths = {{ data.snapshot_paths | tojson }};
+let currentEvidenceIdx = 0;
+
+function openEvidenceSnapshot(src, idx, total) {
+    currentEvidenceIdx = idx - 1;  // Convert 1-based to 0-based
+    showEvidenceFrame();
+    document.getElementById('evidenceModal').style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+}
+
+function showEvidenceFrame() {
+    const filename = snapshotPaths[currentEvidenceIdx];
+    document.getElementById('evidenceImg').src = '/track-events/snapshot/' + filename;
+    const timeOffset = ((currentEvidenceIdx - snapshotPaths.length + 1) * 0.5).toFixed(1);
+    const posLabel = currentEvidenceIdx === 0 ? ' — 🟡 الأقدم' : (currentEvidenceIdx === snapshotPaths.length - 1 ? ' — 🔴 لحظة الفقدان' : '');
+    document.getElementById('evidenceLabel').textContent =
+        'إطار ' + (currentEvidenceIdx + 1) + ' / ' + snapshotPaths.length + '  (' + timeOffset + 's)' + posLabel;
+    document.getElementById('evidencePrev').style.display = currentEvidenceIdx > 0 ? 'flex' : 'none';
+    document.getElementById('evidenceNext').style.display = currentEvidenceIdx < snapshotPaths.length - 1 ? 'flex' : 'none';
+}
+
+function navigateEvidence(dir) {
+    currentEvidenceIdx = Math.max(0, Math.min(snapshotPaths.length - 1, currentEvidenceIdx + dir));
+    showEvidenceFrame();
+}
+
+function closeEvidence() {
+    document.getElementById('evidenceModal').style.display = 'none';
+    document.body.style.overflow = '';
+}
+
+document.addEventListener('keydown', function(e) {
+    const modal = document.getElementById('evidenceModal');
+    if (modal.style.display !== 'flex') return;
+    if (e.key === 'Escape') closeEvidence();
+    else if (e.key === 'ArrowLeft') navigateEvidence(-1);
+    else if (e.key === 'ArrowRight') navigateEvidence(1);
+});
 </script>
 </body>
 </html>

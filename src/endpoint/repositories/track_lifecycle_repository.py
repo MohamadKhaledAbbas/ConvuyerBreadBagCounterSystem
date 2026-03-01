@@ -11,6 +11,7 @@ Enhanced with:
 - Animation data extraction
 """
 
+import json
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 
@@ -44,13 +45,34 @@ class TrackLifecycleRepository:
         has_ghost_recovery: Optional[bool] = None,
         track_ids: Optional[List[int]] = None,
         track_id_range: Optional[Tuple[int, int]] = None,
+        exempt_lost_invalid_from_noise: bool = False,
     ) -> Tuple[str, list]:
         """
         Build a reusable WHERE clause and params list from all filter options.
 
+        When ``exempt_lost_invalid_from_noise`` is True the noise-threshold
+        filters (min_hits, min_distance, min_duration) are wrapped so that
+        ``track_lost`` and ``track_invalid`` events always pass through.
+        This prevents the default noise filter from hiding operationally
+        important lost/invalid tracks that typically have 0 distance or
+        very few hits.
+
         Returns:
             Tuple of (where_clause_string, params_list)
         """
+        # Helper: when exemption is active, wrap a threshold condition so
+        # that lost/invalid tracks are never excluded by it.
+        _EXEMPT_TYPES = ("track_lost", "track_invalid")
+
+        def _noise_condition(sql_fragment: str, value, exempt: bool):
+            """Return (condition_string, param_list) for a noise-threshold filter."""
+            if exempt:
+                return (
+                    f"({sql_fragment} OR event_type IN (?, ?))",
+                    [value, *_EXEMPT_TYPES],
+                )
+            return (sql_fragment, [value])
+
         conditions = ["timestamp >= ?", "timestamp <= ?"]
         params: list = [start_time.isoformat(), end_time.isoformat()]
 
@@ -64,8 +86,9 @@ class TrackLifecycleRepository:
             conditions.append("avg_confidence >= ?")
             params.append(min_confidence)
         if min_duration is not None:
-            conditions.append("duration_seconds >= ?")
-            params.append(min_duration)
+            cond, p = _noise_condition("duration_seconds >= ?", min_duration, exempt_lost_invalid_from_noise)
+            conditions.append(cond)
+            params.extend(p)
         if max_duration is not None:
             conditions.append("duration_seconds <= ?")
             params.append(max_duration)
@@ -81,14 +104,16 @@ class TrackLifecycleRepository:
             else:
                 conditions.append("classification IS NULL")
         if min_distance is not None:
-            conditions.append("distance_pixels >= ?")
-            params.append(min_distance)
+            cond, p = _noise_condition("distance_pixels >= ?", min_distance, exempt_lost_invalid_from_noise)
+            conditions.append(cond)
+            params.extend(p)
         if max_distance is not None:
             conditions.append("distance_pixels <= ?")
             params.append(max_distance)
         if min_hits is not None:
-            conditions.append("total_hits >= ?")
-            params.append(min_hits)
+            cond, p = _noise_condition("total_hits >= ?", min_hits, exempt_lost_invalid_from_noise)
+            conditions.append(cond)
+            params.extend(p)
         if max_hits is not None:
             conditions.append("total_hits <= ?")
             params.append(max_hits)
@@ -130,6 +155,7 @@ class TrackLifecycleRepository:
         has_ghost_recovery: Optional[bool] = None,
         track_ids: Optional[List[int]] = None,
         track_id_range: Optional[Tuple[int, int]] = None,
+        exempt_lost_invalid_from_noise: bool = False,
         limit: int = 500,
         offset: int = 0
     ) -> Tuple[List[Dict[str, Any]], int]:
@@ -154,6 +180,7 @@ class TrackLifecycleRepository:
             has_ghost_recovery=has_ghost_recovery,
             track_ids=track_ids,
             track_id_range=track_id_range,
+            exempt_lost_invalid_from_noise=exempt_lost_invalid_from_noise,
         )
 
         # Get total count for pagination
@@ -207,6 +234,7 @@ class TrackLifecycleRepository:
         has_ghost_recovery: Optional[bool] = None,
         track_ids: Optional[List[int]] = None,
         track_id_range: Optional[Tuple[int, int]] = None,
+        exempt_lost_invalid_from_noise: bool = False,
     ) -> Dict[str, Any]:
         """
         Get enhanced statistics respecting all active filters.
@@ -236,6 +264,7 @@ class TrackLifecycleRepository:
             has_ghost_recovery=has_ghost_recovery,
             track_ids=track_ids,
             track_id_range=track_id_range,
+            exempt_lost_invalid_from_noise=exempt_lost_invalid_from_noise,
         )
 
         # For by-type breakdown: exclude event_type filter so all 3 types are visible
@@ -257,6 +286,7 @@ class TrackLifecycleRepository:
             has_ghost_recovery=has_ghost_recovery,
             track_ids=track_ids,
             track_id_range=track_id_range,
+            exempt_lost_invalid_from_noise=exempt_lost_invalid_from_noise,
         )
 
         with self.db._cursor() as cursor:
@@ -428,10 +458,30 @@ class TrackLifecycleRepository:
         """
         Get animation data for a track's lifecycle visualization.
 
+        WARNING: track_id is NOT unique across sessions.
+        Use get_track_animation_data_by_event_id() for unambiguous lookups.
+
         Returns:
             Dictionary with position history, ROI collections, and classification events
         """
         lifecycle = self.db.get_track_lifecycle(track_id)
+        return self._build_animation_data(lifecycle, track_id)
+
+    def get_track_animation_data_by_event_id(self, event_id: int) -> Dict[str, Any]:
+        """
+        Get animation data by unique event_id (track_events.id primary key).
+
+        This is the recommended method — avoids ambiguity when track_id
+        resets across sessions.
+        """
+        lifecycle = self.db.get_track_lifecycle_by_event_id(event_id)
+        if not lifecycle['summary']:
+            return None
+        track_id = lifecycle['summary']['track_id']
+        return self._build_animation_data(lifecycle, track_id)
+
+    def _build_animation_data(self, lifecycle: Dict[str, Any], track_id: int) -> Dict[str, Any]:
+        """Build animation data dict from lifecycle data."""
 
         if not lifecycle['summary']:
             return None
@@ -442,7 +492,6 @@ class TrackLifecycleRepository:
         # Parse position history
         position_history = []
         if summary.get('position_history'):
-            import json
             try:
                 position_history = json.loads(summary['position_history'])
             except (json.JSONDecodeError, TypeError):
@@ -491,14 +540,12 @@ class TrackLifecycleRepository:
         merge_events = []
 
         if summary.get('occlusion_events'):
-            import json
             try:
                 occlusion_events = json.loads(summary['occlusion_events'])
             except (json.JSONDecodeError, TypeError):
                 pass
 
         if summary.get('merge_events'):
-            import json
             try:
                 merge_events = json.loads(summary['merge_events'])
             except (json.JSONDecodeError, TypeError):
@@ -520,6 +567,20 @@ class TrackLifecycleRepository:
                     x = entry_x + (exit_x - entry_x) * t
                     y = entry_y + (exit_y - entry_y) * t
                     position_history.append([int(x), int(y)])
+
+        # Parse snapshot_paths from snapshot_path column (backward-compatible)
+        snapshot_paths = []
+        raw_snapshot = summary.get('snapshot_path')
+        if raw_snapshot:
+            try:
+                parsed = json.loads(raw_snapshot)
+                if isinstance(parsed, list):
+                    snapshot_paths = parsed
+                else:
+                    snapshot_paths = [raw_snapshot]
+            except (json.JSONDecodeError, TypeError):
+                # Old single-filename format
+                snapshot_paths = [raw_snapshot]
 
         return {
             'track_id': track_id,
@@ -544,7 +605,8 @@ class TrackLifecycleRepository:
             'classification_events': classification_events,
             'lifecycle_events': lifecycle_events,
             'occlusion_events': occlusion_events,
-            'merge_events': merge_events
+            'merge_events': merge_events,
+            'snapshot_paths': snapshot_paths
         }
 
     def get_distinct_classifications(
