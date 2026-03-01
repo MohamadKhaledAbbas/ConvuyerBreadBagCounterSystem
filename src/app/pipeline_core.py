@@ -84,8 +84,10 @@ class PipelineCore:
         # every ~0.5 s.  When a track ends as lost/invalid, ALL frames in
         # the buffer are saved as a filmstrip for post-mortem review.
         #
-        # Default: 8 frames × 0.5 s = 4.0 s coverage (matches ghost timeout).
-        # Memory cost: 8 × (640×360×3 bytes) ≈ 5.3 MB  (frames are stored
+        # Default: 10 frames × 0.5 s = 5.0 s coverage.  This gives ~1 s
+        # of context BEFORE the ghost phase starts (ghost timeout = 4 s),
+        # so the bag is visible while still actively tracked.
+        # Memory cost: 10 × (640×360×3 bytes) ≈ 6.6 MB  (frames are stored
         # at half-resolution to keep it light).
         # ─────────────────────────────────────────────────────────────────
         self._evidence_buffer: deque = deque(maxlen=self._tracking_config.evidence_buffer_size)
@@ -140,6 +142,19 @@ class PipelineCore:
             detections = self.detector.detect_nv12(nv12_data, frame_size)
         else:
             detections = self.detector.detect(frame)
+
+        # 1b. Conveyor ROI filtering — drop detections outside the conveyor zone
+        if self._tracking_config.conveyor_roi_enabled and detections:
+            roi = self._tracking_config
+            before = len(detections)
+            detections = [
+                d for d in detections
+                if roi.conveyor_roi_x_min <= d.center[0] <= roi.conveyor_roi_x_max
+                and roi.conveyor_roi_y_min <= d.center[1] <= roi.conveyor_roi_y_max
+            ]
+            dropped = before - len(detections)
+            if dropped > 0:
+                logger.debug(f"[ROI_FILTER] Dropped {dropped}/{before} detections outside conveyor zone")
 
         # 2. Tracking - cast frame shape to proper type
         frame_h, frame_w = frame.shape[:2]
@@ -490,7 +505,7 @@ class PipelineCore:
 
         Called by the app layer after each frame is processed and annotated.
         Frames are sampled at configurable intervals (default 0.5 s) to keep
-        memory usage minimal (~5.3 MB for 8 half-resolution frames).
+        memory usage minimal (~6.6 MB for 10 half-resolution frames).
 
         The stored frame is immediately downscaled to 50% to reduce memory
         footprint. When a track is lost/invalid, ALL frames in the buffer
@@ -515,14 +530,14 @@ class PipelineCore:
         Save ALL annotated evidence frames when a track is lost or invalid.
 
         The evidence ring buffer stores the last N annotated frames (with
-        UI overlays) sampled every ~0.5 s (default: 8 frames = 4.0 s).
+        UI overlays) sampled every ~0.5 s (default: 10 frames = 5.0 s).
         We save **all** of them so the user can review a filmstrip of
-        keyframes covering the full ghost timeout window leading up to the
-        loss event.  Frames are ordered oldest → newest.
+        keyframes covering the full ghost timeout window plus ~1 s of
+        pre-ghost context.  Frames are ordered oldest → newest.
 
         Each frame is already at 50 % resolution (downscaled on ingestion)
-        and is saved as JPEG quality 60 (~15-25 KB per image, ~160 KB total
-        for 8 frames).
+        and is saved as JPEG quality 60 (~15-25 KB per image, ~200 KB total
+        for 10 frames).
 
         Args:
             event: Track lost/invalid event

@@ -253,6 +253,11 @@ class PipelineVisualizer:
         """
         annotated = frame.copy()
 
+        # Draw conveyor ROI zone overlay (if enabled)
+        if (self.tracking_config.conveyor_roi_enabled
+                and self.tracking_config.conveyor_roi_show_overlay):
+            self._draw_conveyor_roi(annotated)
+
         # Draw detections (blue boxes)
         self._draw_detections(annotated, detections)
 
@@ -290,6 +295,68 @@ class PipelineVisualizer:
             self._draw_event_log(annotated, debug_info['recent_events'])
 
         return annotated
+
+    def _draw_conveyor_roi(self, frame: np.ndarray):
+        """
+        Draw conveyor ROI zone overlay.
+
+        Shades the excluded areas with a dark tint and draws the active
+        zone boundary as a dashed cyan rectangle.
+        Uses a single overlay + addWeighted for correct alpha blending.
+        """
+        h, w = frame.shape[:2]
+        cfg = self.tracking_config
+        x1 = max(0, cfg.conveyor_roi_x_min)
+        x2 = min(w, cfg.conveyor_roi_x_max)
+        y1 = max(0, cfg.conveyor_roi_y_min)
+        y2 = min(h, cfg.conveyor_roi_y_max)
+
+        # Create overlay — copy frame, fill excluded regions with dark color
+        overlay = frame.copy()
+        shade = (15, 15, 25)
+        # Left
+        if x1 > 0:
+            cv2.rectangle(overlay, (0, 0), (x1, h), shade, -1)
+        # Right
+        if x2 < w:
+            cv2.rectangle(overlay, (x2, 0), (w, h), shade, -1)
+        # Top (between left/right)
+        if y1 > 0:
+            cv2.rectangle(overlay, (x1, 0), (x2, y1), shade, -1)
+        # Bottom (between left/right)
+        if y2 < h:
+            cv2.rectangle(overlay, (x1, y2), (x2, h), shade, -1)
+
+        # Blend once
+        cv2.addWeighted(overlay, 0.45, frame, 0.55, 0, frame)
+
+        # Draw dashed zone boundary (cyan)
+        boundary_color = (200, 200, 50)  # Cyan-ish
+        dash_len = 12
+        gap_len = 8
+
+        for edge in [
+            ((x1, y1), (x2, y1)),  # Top
+            ((x1, y2), (x2, y2)),  # Bottom
+            ((x1, y1), (x1, y2)),  # Left
+            ((x2, y1), (x2, y2)),  # Right
+        ]:
+            pt1, pt2 = edge
+            dx = pt2[0] - pt1[0]
+            dy = pt2[1] - pt1[1]
+            length = max(abs(dx), abs(dy))
+            if length == 0:
+                continue
+            for i in range(0, length, dash_len + gap_len):
+                s = i / length
+                e = min((i + dash_len) / length, 1.0)
+                sp = (int(pt1[0] + dx * s), int(pt1[1] + dy * s))
+                ep = (int(pt1[0] + dx * e), int(pt1[1] + dy * e))
+                cv2.line(frame, sp, ep, boundary_color, 1, cv2.LINE_AA)
+
+        # Small label at top of zone
+        cv2.putText(frame, "CONVEYOR ZONE", (x1 + 6, y1 + 14),
+                    self.FONT, 0.4, boundary_color, 1, cv2.LINE_AA)
 
     def _draw_detections(self, frame: np.ndarray, detections: List[Detection]):
         """Draw detection bounding boxes with clean styling."""

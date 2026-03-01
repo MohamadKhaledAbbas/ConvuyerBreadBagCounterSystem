@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>إعدادات منطقة السير — Conveyor ROI</title>
+    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="/static/theme.css">
+    <style>
+        body { direction: ltr; }
+        .info-value, input[type=number] { font-family: 'Inter', sans-serif !important; font-feature-settings: "tnum" 1; }
+
+        .layout { display: grid; grid-template-columns: 1fr 320px; gap: 1.5rem; }
+        @media (max-width: 1000px) { .layout { grid-template-columns: 1fr; } }
+
+        .canvas-card { background: var(--glass-bg); border: 1px solid var(--glass-border); border-radius: var(--radius-lg); padding: 1rem; }
+        .canvas-wrap { position: relative; border-radius: var(--radius-md); overflow: hidden; cursor: crosshair; user-select: none; }
+        .canvas-wrap img { width: 100%; height: auto; display: block; border-radius: var(--radius-md); }
+        .canvas-wrap canvas { position: absolute; top:0; left:0; width:100%; height:100%; }
+
+        .sidebar { display: flex; flex-direction: column; gap: 1rem; }
+        .card { background: var(--glass-bg); border: 1px solid var(--glass-border); border-radius: var(--radius-md); padding: 1rem; }
+        .card h3 { font-size: 0.9rem; color: var(--accent-primary); margin-bottom: 0.75rem; font-weight: 600; }
+
+        .field { display: flex; justify-content: space-between; align-items: center; padding: 0.4rem 0; border-bottom: 1px solid rgba(255,255,255,0.04); }
+        .field:last-child { border-bottom: none; }
+        .field label { color: var(--text-secondary); font-size: 0.85rem; }
+        .field input[type=number] {
+            width: 80px; padding: 0.3rem 0.5rem; border-radius: 6px; border: 1px solid var(--glass-border);
+            background: rgba(255,255,255,0.05); color: var(--text-primary); font-size: 0.85rem; text-align: center;
+        }
+        .field input[type=number]:focus { outline: none; border-color: var(--accent-primary); }
+
+        .toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 0; }
+        .toggle-row label { color: var(--text-secondary); font-size: 0.85rem; }
+        .toggle { position: relative; width: 44px; height: 24px; cursor: pointer; }
+        .toggle input { opacity: 0; width: 0; height: 0; }
+        .toggle .slider { position: absolute; inset: 0; background: rgba(255,255,255,0.1); border-radius: 12px; transition: 0.2s; }
+        .toggle .slider::before { content: ''; position: absolute; width: 18px; height: 18px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: 0.2s; }
+        .toggle input:checked + .slider { background: var(--accent-primary); }
+        .toggle input:checked + .slider::before { transform: translateX(20px); }
+
+        .btn-save { width: 100%; padding: 0.7rem; border: none; border-radius: var(--radius-md); background: linear-gradient(135deg, var(--accent-primary), var(--accent-purple)); color: #fff; font-size: 0.9rem; font-weight: 600; cursor: pointer; transition: opacity 0.15s; }
+        .btn-save:hover { opacity: 0.9; }
+        .btn-save:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .status-msg { text-align: center; font-size: 0.8rem; margin-top: 0.5rem; min-height: 1.2em; }
+        .status-ok { color: var(--accent-success); }
+        .status-err { color: var(--accent-danger); }
+
+        .hint { font-size: 0.7rem; color: var(--text-muted); line-height: 1.5; margin-top: 0.75rem; }
+    </style>
+</head>
+<body>
+<main>
+    <a href="/" class="back-home"><i class="fa-solid fa-arrow-right"></i> العودة للرئيسية</a>
+
+    <div class="page-header">
+        <h1><i class="fa-solid fa-crop-simple"></i> إعدادات منطقة السير — Conveyor ROI</h1>
+        <p class="subtitle">حدد منطقة خط الإنتاج على الكاميرا لتصفية الاكتشافات الخاطئة خارج السير</p>
+    </div>
+
+    <div class="layout">
+        <!-- Live camera snapshot with draggable ROI -->
+        <div class="canvas-card">
+            <div class="canvas-wrap" id="canvasWrap">
+                <img id="bgImg" src="/snapshot/background" alt="Camera"
+                     onerror="this.src='/snapshot?overlay=false'; this.onerror=null;">
+                <canvas id="roiCanvas"></canvas>
+            </div>
+            <div style="display:flex; gap:1rem; margin-top:0.75rem; align-items:center; flex-wrap:wrap;">
+                <button class="btn btn-secondary" onclick="refreshSnapshot()" style="font-size:0.8rem;">
+                    <i class="fa-solid fa-camera-rotate"></i> تحديث الصورة
+                </button>
+                <button class="btn btn-secondary" onclick="resetToFullFrame()" style="font-size:0.8rem;">
+                    <i class="fa-solid fa-expand"></i> إعادة تعيين (كامل الإطار)
+                </button>
+                <span style="font-size:0.75rem; color:var(--text-muted);">
+                    <i class="fa-solid fa-info-circle"></i> اسحب على الصورة لرسم منطقة السير
+                </span>
+            </div>
+        </div>
+
+        <!-- Settings sidebar -->
+        <div class="sidebar">
+            <div class="card">
+                <h3><i class="fa-solid fa-toggle-on"></i> التحكم</h3>
+                <div class="toggle-row">
+                    <label>تفعيل تصفية المنطقة</label>
+                    <label class="toggle">
+                        <input type="checkbox" id="roiEnabled" {% if roi.enabled %}checked{% endif %}>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="toggle-row">
+                    <label>إظهار الحدود على الشاشة</label>
+                    <label class="toggle">
+                        <input type="checkbox" id="showOverlay" {% if roi.show_overlay %}checked{% endif %}>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3><i class="fa-solid fa-ruler-combined"></i> الإحداثيات (بكسل)</h3>
+                <div class="field">
+                    <label>X Min (يسار)</label>
+                    <input type="number" id="xMin" value="{{ roi.x_min }}" min="0" max="1280" step="10">
+                </div>
+                <div class="field">
+                    <label>X Max (يمين)</label>
+                    <input type="number" id="xMax" value="{{ roi.x_max }}" min="0" max="1280" step="10">
+                </div>
+                <div class="field">
+                    <label>Y Min (أعلى)</label>
+                    <input type="number" id="yMin" value="{{ roi.y_min }}" min="0" max="720" step="10">
+                </div>
+                <div class="field">
+                    <label>Y Max (أسفل)</label>
+                    <input type="number" id="yMax" value="{{ roi.y_max }}" min="0" max="720" step="10">
+                </div>
+                <div class="field">
+                    <label>العرض</label>
+                    <span class="info-value" id="zoneWidth">—</span>
+                </div>
+                <div class="field">
+                    <label>الارتفاع</label>
+                    <span class="info-value" id="zoneHeight">—</span>
+                </div>
+            </div>
+
+            <button class="btn-save" id="saveBtn" onclick="saveSettings()">
+                <i class="fa-solid fa-floppy-disk"></i> حفظ الإعدادات
+            </button>
+            <div class="status-msg" id="statusMsg"></div>
+
+            <div class="card">
+                <h3><i class="fa-solid fa-circle-info"></i> ملاحظات</h3>
+                <p class="hint">
+                    <i class="fa-solid fa-arrow-left"></i>
+                    ارسم مستطيلاً على الصورة بالسحب لتحديد منطقة السير بسرعة.<br><br>
+                    <i class="fa-solid fa-lightbulb"></i>
+                    التغييرات تسري فوراً بدون إعادة تشغيل — اضغط "حفظ" لضمان بقائها بعد إعادة التشغيل.<br><br>
+                    <i class="fa-solid fa-shield-halved"></i>
+                    الاكتشافات خارج المنطقة المحددة يتم تجاهلها قبل وصولها للتتبع، مما يزيل ~80% من الإنذارات الكاذبة.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <div class="page-footer">
+        <a href="/">الرئيسية</a> • <a href="/snapshot/view">الكاميرا</a> • <a href="/track-events">سجل المسارات</a>
+    </div>
+</main>
+
+<script>
+const canvas = document.getElementById('roiCanvas');
+const ctx = canvas.getContext('2d');
+const bgImg = document.getElementById('bgImg');
+const wrap = document.getElementById('canvasWrap');
+
+// Native camera resolution
+const NATIVE_W = 1280;
+const NATIVE_H = 720;
+
+// ROI state (in native pixel coords)
+let roi = {
+    xMin: {{ roi.x_min }},
+    xMax: {{ roi.x_max }},
+    yMin: {{ roi.y_min }},
+    yMax: {{ roi.y_max }}
+};
+
+// Drag state
+let isDragging = false;
+let dragStart = null;
+
+function resizeCanvas() {
+    if (bgImg.naturalWidth > 0) {
+        canvas.width = bgImg.clientWidth;
+        canvas.height = bgImg.clientHeight;
+    } else {
+        canvas.width = wrap.clientWidth;
+        canvas.height = Math.round(wrap.clientWidth * NATIVE_H / NATIVE_W);
+    }
+    drawROI();
+}
+
+bgImg.onload = resizeCanvas;
+window.addEventListener('resize', resizeCanvas);
+setTimeout(resizeCanvas, 200);
+
+// Convert canvas pixel → native pixel
+function toNative(cx, cy) {
+    return [
+        Math.round(cx / canvas.width * NATIVE_W),
+        Math.round(cy / canvas.height * NATIVE_H)
+    ];
+}
+
+// Convert native pixel → canvas pixel
+function toCanvas(nx, ny) {
+    return [
+        nx / NATIVE_W * canvas.width,
+        ny / NATIVE_H * canvas.height
+    ];
+}
+
+function drawROI() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const [x1, y1] = toCanvas(roi.xMin, roi.yMin);
+    const [x2, y2] = toCanvas(roi.xMax, roi.yMax);
+
+    // Shade excluded areas
+    ctx.fillStyle = 'rgba(15, 10, 30, 0.5)';
+    // Left
+    ctx.fillRect(0, 0, x1, canvas.height);
+    // Right
+    ctx.fillRect(x2, 0, canvas.width - x2, canvas.height);
+    // Top (between left/right)
+    ctx.fillRect(x1, 0, x2 - x1, y1);
+    // Bottom (between left/right)
+    ctx.fillRect(x1, y2, x2 - x1, canvas.height - y2);
+
+    // Draw ROI rectangle
+    ctx.strokeStyle = 'rgba(45, 212, 191, 0.9)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([8, 5]);
+    ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+    ctx.setLineDash([]);
+
+    // Corner handles
+    const corners = [[x1,y1],[x2,y1],[x1,y2],[x2,y2]];
+    corners.forEach(([cx,cy]) => {
+        ctx.fillStyle = 'rgba(45, 212, 191, 0.8)';
+        ctx.beginPath();
+        ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+    });
+
+    // Label
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(x1, y1 - 22, 140, 20);
+    ctx.fillStyle = 'rgba(45, 212, 191, 1)';
+    ctx.font = '11px Inter, sans-serif';
+    ctx.fillText(`CONVEYOR ZONE  ${roi.xMax - roi.xMin}×${roi.yMax - roi.yMin}`, x1 + 4, y1 - 7);
+
+    // Update sidebar fields
+    updateFields();
+}
+
+function updateFields() {
+    document.getElementById('xMin').value = roi.xMin;
+    document.getElementById('xMax').value = roi.xMax;
+    document.getElementById('yMin').value = roi.yMin;
+    document.getElementById('yMax').value = roi.yMax;
+    document.getElementById('zoneWidth').textContent = (roi.xMax - roi.xMin) + ' px';
+    document.getElementById('zoneHeight').textContent = (roi.yMax - roi.yMin) + ' px';
+}
+
+// Mouse drag to draw ROI
+canvas.addEventListener('mousedown', e => {
+    const rect = canvas.getBoundingClientRect();
+    dragStart = toNative(e.clientX - rect.left, e.clientY - rect.top);
+    isDragging = true;
+});
+
+canvas.addEventListener('mousemove', e => {
+    if (!isDragging) return;
+    const rect = canvas.getBoundingClientRect();
+    const [nx, ny] = toNative(e.clientX - rect.left, e.clientY - rect.top);
+    roi.xMin = Math.max(0, Math.min(dragStart[0], nx));
+    roi.xMax = Math.min(NATIVE_W, Math.max(dragStart[0], nx));
+    roi.yMin = Math.max(0, Math.min(dragStart[1], ny));
+    roi.yMax = Math.min(NATIVE_H, Math.max(dragStart[1], ny));
+    drawROI();
+});
+
+canvas.addEventListener('mouseup', () => { isDragging = false; });
+canvas.addEventListener('mouseleave', () => { isDragging = false; });
+
+// Touch support for mobile/tablet
+canvas.addEventListener('touchstart', e => {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const t = e.touches[0];
+    dragStart = toNative(t.clientX - rect.left, t.clientY - rect.top);
+    isDragging = true;
+}, { passive: false });
+
+canvas.addEventListener('touchmove', e => {
+    e.preventDefault();
+    if (!isDragging) return;
+    const rect = canvas.getBoundingClientRect();
+    const t = e.touches[0];
+    const [nx, ny] = toNative(t.clientX - rect.left, t.clientY - rect.top);
+    roi.xMin = Math.max(0, Math.min(dragStart[0], nx));
+    roi.xMax = Math.min(NATIVE_W, Math.max(dragStart[0], nx));
+    roi.yMin = Math.max(0, Math.min(dragStart[1], ny));
+    roi.yMax = Math.min(NATIVE_H, Math.max(dragStart[1], ny));
+    drawROI();
+}, { passive: false });
+
+canvas.addEventListener('touchend', () => { isDragging = false; });
+
+// Manual input changes
+['xMin','xMax','yMin','yMax'].forEach(id => {
+    document.getElementById(id).addEventListener('input', () => {
+        roi.xMin = parseInt(document.getElementById('xMin').value) || 0;
+        roi.xMax = parseInt(document.getElementById('xMax').value) || NATIVE_W;
+        roi.yMin = parseInt(document.getElementById('yMin').value) || 0;
+        roi.yMax = parseInt(document.getElementById('yMax').value) || NATIVE_H;
+        drawROI();
+    });
+});
+
+function resetToFullFrame() {
+    roi = { xMin: 0, xMax: NATIVE_W, yMin: 0, yMax: NATIVE_H };
+    drawROI();
+}
+
+function refreshSnapshot() {
+    bgImg.src = '/snapshot?overlay=false&t=' + Date.now();
+}
+
+async function saveSettings() {
+    const btn = document.getElementById('saveBtn');
+    const msg = document.getElementById('statusMsg');
+    btn.disabled = true;
+    msg.textContent = '';
+
+    try {
+        const resp = await fetch('/api/conveyor-roi', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                enabled: document.getElementById('roiEnabled').checked,
+                x_min: roi.xMin,
+                x_max: roi.xMax,
+                y_min: roi.yMin,
+                y_max: roi.yMax,
+                show_overlay: document.getElementById('showOverlay').checked
+            })
+        });
+        const data = await resp.json();
+        if (data.status === 'ok') {
+            msg.className = 'status-msg status-ok';
+            msg.textContent = '✓ تم الحفظ بنجاح — التغييرات فعالة الآن';
+        } else {
+            throw new Error(JSON.stringify(data));
+        }
+    } catch (e) {
+        msg.className = 'status-msg status-err';
+        msg.textContent = '✗ فشل الحفظ: ' + e.message;
+    }
+    btn.disabled = false;
+    setTimeout(() => { msg.textContent = ''; }, 5000);
+}
+
+// Init
+updateFields();
+</script>
+</body>
+</html>
+

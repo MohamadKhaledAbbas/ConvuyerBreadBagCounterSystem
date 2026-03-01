@@ -54,6 +54,9 @@ async def lifespan(_app: FastAPI):
     # Startup
     logger.info("[Endpoint] Starting up...")
     init_shared_resources()
+    # Restore persisted conveyor ROI settings
+    from src.endpoint.routes.conveyor_roi import load_persisted_roi_settings
+    load_persisted_roi_settings()
     yield
     # Shutdown
     logger.info("[Endpoint] Shutting down...")
@@ -88,6 +91,10 @@ app.include_router(snapshot.router)
 
 # Include counts router for real-time pipeline counts
 app.include_router(counts.router)
+
+# Include conveyor ROI settings router
+from src.endpoint.routes import conveyor_roi
+app.include_router(conveyor_roi.router)
 
 
 @app.get("/", response_class=HTMLResponse)
