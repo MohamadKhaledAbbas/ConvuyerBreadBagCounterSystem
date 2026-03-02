@@ -378,6 +378,161 @@
             .time-range { flex-direction: column; gap: 1rem; text-align: center; }
             .cards-grid { grid-template-columns: 1fr; }
         }
+
+        /* ─── Expandable Card Details ─── */
+        .class-card { cursor: pointer; position: relative; }
+        .card-expand-hint {
+            margin-top: 0.5rem;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-align: center;
+            transition: all 0.3s;
+        }
+        .card-expand-hint i {
+            transition: transform 0.3s;
+            margin-left: 0.3rem;
+        }
+        .class-card.expanded .card-expand-hint i {
+            transform: rotate(180deg);
+        }
+        .card-details {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.4s ease, opacity 0.3s ease;
+            opacity: 0;
+        }
+        .class-card.expanded .card-details {
+            max-height: 500px;
+            opacity: 1;
+        }
+        .detail-section {
+            margin-top: 0.75rem;
+            padding: 0.75rem;
+            background: rgba(15, 23, 42, 0.5);
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--glass-border);
+        }
+        .detail-title {
+            font-size: 0.75rem;
+            font-weight: 700;
+            color: var(--text-secondary);
+            margin-bottom: 0.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+        .detail-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.35rem 0;
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+            font-size: 0.82rem;
+        }
+        .detail-row:last-child { border-bottom: none; }
+        .detail-class {
+            color: var(--text-primary);
+            font-weight: 500;
+            flex: 1;
+        }
+        .detail-arrow {
+            color: var(--text-muted);
+            margin: 0 0.5rem;
+            font-size: 0.7rem;
+        }
+        .detail-count {
+            color: var(--accent-warning);
+            font-weight: 700;
+            font-family: 'Inter', sans-serif;
+            min-width: 2rem;
+            text-align: left;
+        }
+        .detail-time {
+            color: var(--text-muted);
+            font-family: 'Inter', monospace;
+            font-size: 0.75rem;
+            margin-right: 0.5rem;
+        }
+
+        /* Smoothed confidence item */
+        .conf-item.smoothed .conf-label { color: var(--accent-orange); }
+        .conf-item.smoothed .conf-value { color: var(--accent-orange); }
+
+        /* ─── Batch Discipline Section ─── */
+        .discipline-section {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-lg);
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            backdrop-filter: blur(10px);
+        }
+        .discipline-section.severity-high {
+            border-color: rgba(248, 113, 113, 0.4);
+            background: linear-gradient(135deg, rgba(248, 113, 113, 0.06), var(--glass-bg));
+        }
+        .discipline-section.severity-medium {
+            border-color: rgba(251, 191, 36, 0.3);
+            background: linear-gradient(135deg, rgba(251, 191, 36, 0.06), var(--glass-bg));
+        }
+        .discipline-section.severity-low {
+            border-color: rgba(45, 212, 191, 0.3);
+            background: linear-gradient(135deg, rgba(45, 212, 191, 0.06), var(--glass-bg));
+        }
+        .discipline-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+        .discipline-stat {
+            text-align: center;
+            padding: 0.75rem;
+            background: rgba(15, 23, 42, 0.4);
+            border-radius: var(--radius-sm);
+        }
+        .discipline-value {
+            font-size: 2rem;
+            font-weight: 800;
+            font-family: 'Inter', sans-serif;
+            color: var(--text-primary);
+            line-height: 1;
+            margin-bottom: 0.25rem;
+        }
+        .discipline-value.warn { color: var(--accent-warning); }
+        .discipline-value.danger { color: var(--accent-danger); }
+        .discipline-label {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+        .discipline-alert {
+            padding: 0.75rem 1rem;
+            border-radius: var(--radius-sm);
+            font-size: 0.85rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-weight: 600;
+        }
+        .discipline-alert.danger {
+            background: rgba(248, 113, 113, 0.12);
+            color: var(--accent-danger);
+            border: 1px solid rgba(248, 113, 113, 0.3);
+        }
+        .discipline-alert.warning {
+            background: rgba(251, 191, 36, 0.12);
+            color: var(--accent-warning);
+            border: 1px solid rgba(251, 191, 36, 0.3);
+        }
+        .discipline-alert.ok {
+            background: rgba(45, 212, 191, 0.12);
+            color: var(--accent-success);
+            border: 1px solid rgba(45, 212, 191, 0.3);
+        }
+        .short-batches-list {
+            padding: 0.5rem 0.75rem;
+        }
     </style>
 </head>
 <body>
@@ -416,13 +571,22 @@
             <div class="hero-label">الوزن الإجمالي</div>
             <div class="hero-value">{{ total.weight or 0 }}<span class="hero-unit">كجم</span></div>
         </div>
+        <div class="hero-card">
+            <div class="hero-label">التصحيحات التلقائية</div>
+            <div class="hero-value" style="color: var(--accent-orange);">{{ batch_anomalies.total_smoothed or 0 }}</div>
+            <div class="hero-breakdown">
+                <span class="tier-badge" style="background:rgba(251,146,60,0.15);color:var(--accent-orange);">
+                    نسبة التصحيح: {{ batch_anomalies.smoothing_rate or 0 }}%
+                </span>
+            </div>
+        </div>
     </div>
 
     <!-- Classifications -->
     <div class="section-title"><i class="fa-solid fa-layer-group"></i> توزيع الأصناف</div>
     <div class="cards-grid">
         {% for c in classifications %}
-        <div class="class-card">
+        <div class="class-card" onclick="this.classList.toggle('expanded')">
             <div class="card-thumb">
                 <img src="/{{ c.thumb }}" alt="{{ c.name }}" loading="lazy"
                      onerror="this.src='https://placehold.co/120x120/1e293b/FFF?text={{ c.name[:1] if c.name else '?' }}'">
@@ -438,14 +602,112 @@
                     <span class="conf-label">دقة منخفضة</span>
                     <span class="conf-value">{{ c.low_count or 0 }}</span>
                 </div>
+                {% if c.smoothed_count %}
+                <div class="conf-item smoothed">
+                    <span class="conf-label">تم تصحيحه</span>
+                    <span class="conf-value">{{ c.smoothed_count }}</span>
+                </div>
+                {% endif %}
             </div>
             <div class="card-weight">
                 <span class="label">الوزن الكلي</span>
                 <span class="value">{{ "%.1f"|format((c.weight * c.count) or 0) }} كجم</span>
             </div>
+
+            {# ─── Expandable detail panel (hidden by default) ─── #}
+            {% if c.confusion_pairs or c.low_conf_details %}
+            <div class="card-expand-hint">
+                <i class="fa-solid fa-chevron-down"></i> تفاصيل الدقة
+            </div>
+            <div class="card-details">
+                {% if c.confusion_pairs %}
+                <div class="detail-section">
+                    <div class="detail-title"><i class="fa-solid fa-shuffle"></i> تصحيحات (كان مصنّف كـ)</div>
+                    {% for pair in c.confusion_pairs %}
+                    <div class="detail-row">
+                        <span class="detail-class">{{ pair.arabic_name or pair.class_name }}</span>
+                        <span class="detail-arrow">←</span>
+                        <span class="detail-count num">{{ pair.count }}</span>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+                {% if c.low_conf_details %}
+                <div class="detail-section">
+                    <div class="detail-title"><i class="fa-solid fa-circle-question"></i> تشابه مع (دقة منخفضة)</div>
+                    {% for ld in c.low_conf_details %}
+                    <div class="detail-row">
+                        <span class="detail-class">{{ ld.arabic_name or ld.class_name }}</span>
+                        <span class="detail-arrow">↔</span>
+                        <span class="detail-count num">{{ ld.count }}</span>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+            {% endif %}
         </div>
         {% endfor %}
     </div>
+
+    {# ─── Batch Discipline Section ─── #}
+    {% if batch_anomalies and batch_anomalies.batch_count is defined and batch_anomalies.batch_count > 0 %}
+    <div class="section-title"><i class="fa-solid fa-clipboard-check"></i> انتظام الدفعات</div>
+    <div class="discipline-section severity-{{ batch_anomalies.severity or 'low' }}">
+        <div class="discipline-grid">
+            <div class="discipline-stat">
+                <div class="discipline-value num">{{ batch_anomalies.batch_count }}</div>
+                <div class="discipline-label">عدد الدفعات</div>
+            </div>
+            <div class="discipline-stat">
+                <div class="discipline-value num">{{ batch_anomalies.transition_count }}</div>
+                <div class="discipline-label">تغييرات النوع</div>
+            </div>
+            <div class="discipline-stat">
+                <div class="discipline-value num {% if batch_anomalies.short_batch_count > 0 %}warn{% endif %}">
+                    {{ batch_anomalies.short_batch_count }}
+                </div>
+                <div class="discipline-label">دفعات قصيرة</div>
+            </div>
+            <div class="discipline-stat">
+                <div class="discipline-value num {% if batch_anomalies.rapid_switches > 0 %}danger{% endif %}">
+                    {{ batch_anomalies.rapid_switches }}
+                </div>
+                <div class="discipline-label">تبديل سريع</div>
+            </div>
+        </div>
+
+        {% if batch_anomalies.severity == 'high' %}
+        <div class="discipline-alert danger">
+            <i class="fa-solid fa-triangle-exclamation"></i>
+            تم رصد عدم انتظام في معالجة الدفعات — تبديل متكرر بين الأنواع أو دفعات قصيرة جداً
+        </div>
+        {% elif batch_anomalies.severity == 'medium' %}
+        <div class="discipline-alert warning">
+            <i class="fa-solid fa-circle-info"></i>
+            يوجد بعض التغييرات غير المتوقعة في الدفعات — يُنصح بمراجعة التسلسل الزمني
+        </div>
+        {% else %}
+        <div class="discipline-alert ok">
+            <i class="fa-solid fa-circle-check"></i>
+            انتظام جيد في معالجة الدفعات
+        </div>
+        {% endif %}
+
+        {% if batch_anomalies.short_batches %}
+        <div class="short-batches-list">
+            <div class="detail-title" style="margin-top:1rem;"><i class="fa-solid fa-list"></i> الدفعات القصيرة</div>
+            {% for sb in batch_anomalies.short_batches %}
+            <div class="detail-row">
+                <span class="detail-class">{{ sb.class_name }}</span>
+                <span class="detail-count num">{{ sb.count }} ربطة</span>
+                <span class="detail-time">{{ sb.time[11:16] if sb.time|length >= 16 else '' }}</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
 
     <!-- Timeline -->
     {% if timeline and timeline.runs %}

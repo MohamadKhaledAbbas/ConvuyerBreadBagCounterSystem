@@ -1270,6 +1270,17 @@ class ConveyorTracker(ITracker):
             if event_type == 'track_completed' and exit_dir == 'top':
                 self._complete_ghost_companions(track)
 
+                # ACTIVE COMPANION COMPLETION:
+                # Also check active tracks that are currently missing but haven't
+                # accumulated enough missed frames to be moved to the ghost buffer yet.
+                # This handles the case where a companion track loses detection
+                # near the top but hasn't been missing for > max_frames_without_detection.
+                completing_ids = {tid for tid, _ in tracks_to_complete}
+                active_companion_ids = self._complete_active_companions(
+                    track, skip_ids=completing_ids
+                )
+                tracks_to_remove.extend(active_companion_ids)
+
             # Learn conveyor velocity from this completed track
             if event_type == 'track_completed' and exit_dir == 'top':
                 self._learn_conveyor_velocity(track, event.duration_seconds)
@@ -2261,6 +2272,162 @@ class ConveyorTracker(ITracker):
                 f"entry_y={ghost_track.entry_center_y}, "
                 f"total_companions={self._ghost_exits_promoted}"
             )
+
+    def _complete_active_companions(
+        self,
+        exiting_track: TrackedObject,
+        skip_ids: set = None,
+    ) -> list:
+        """
+        Complete active-but-missing tracks concurrent with a track exiting the top.
+
+        This complements _complete_ghost_companions() by handling the case where a
+        concurrent companion has lost detection but hasn't yet accumulated enough
+        missed frames (> max_frames_without_detection) to be moved to the ghost
+        buffer.  Without this, companions that are still in self.tracks (just
+        missing for a few frames) are never promoted when the survivor exits top.
+
+        Same gate criteria as ghost companion completion:
+        1. Must be in exiting_track.concurrent_track_ids
+        2. Must be currently missing (time_since_update > 0)
+        3. Must have entered from bottom
+        4. Must have enough detection hits
+        5. Last real detection must be near the top of the frame
+        6. Must have been moving upward
+        7. Must not be a shadow
+
+        Args:
+            exiting_track: The track that just exited the top of the frame.
+            skip_ids: Set of track IDs already being processed as completions
+                      (to avoid double-completing a track that is itself exiting).
+
+        Returns:
+            List of track IDs that were completed (caller should add to tracks_to_remove).
+        """
+        if not exiting_track.concurrent_track_ids:
+            return []
+
+        if self.frame_height is None or self.frame_height <= 0:
+            return []
+
+        skip_ids = skip_ids or set()
+        near_top_threshold = int(self.frame_height * self._ghost_exit_near_top_ratio)
+        min_hits = max(3, self._ghost_exit_min_hits)
+
+        companions_to_complete = []
+
+        for track_id, track in self.tracks.items():
+            # Skip tracks that are being processed as completions already
+            if track_id in skip_ids:
+                continue
+
+            # Gate 1: Must have been concurrent with the exiting track
+            if track_id not in exiting_track.concurrent_track_ids:
+                continue
+
+            # Gate 2: Must be currently missing (unmatched for at least 1 frame)
+            if track.time_since_update <= 0:
+                continue
+
+            # Gate 3: Must have entered from bottom
+            if track.entry_type != "bottom_entry":
+                logger.debug(
+                    f"[ACTIVE_COMPANION] T{track_id} SKIP: entry_type="
+                    f"{track.entry_type} (not bottom_entry)"
+                )
+                continue
+
+            # Gate 4: Must have enough detections
+            if track.hits < min_hits:
+                logger.debug(
+                    f"[ACTIVE_COMPANION] T{track_id} SKIP: hits="
+                    f"{track.hits} < {min_hits}"
+                )
+                continue
+
+            # Gate 5: Last real detected position must be near the top
+            last_real_pos = track.last_detected_position
+            if last_real_pos is None:
+                continue
+            last_y = last_real_pos[1]
+
+            if last_y > near_top_threshold:
+                logger.debug(
+                    f"[ACTIVE_COMPANION] T{track_id} SKIP: last_y={last_y} > "
+                    f"threshold={near_top_threshold}"
+                )
+                continue
+
+            # Gate 6: Must have been moving upward (not falling off)
+            track_vel = track.velocity
+            if track_vel is not None and track_vel[1] > 5:  # moving down
+                logger.debug(
+                    f"[ACTIVE_COMPANION] T{track_id} SKIP: moving downward "
+                    f"vy={track_vel[1]:.1f}"
+                )
+                continue
+
+            # Gate 7: Must not be a shadow (already handled by shadow system)
+            if track.shadow_of is not None:
+                continue
+
+            companions_to_complete.append(track_id)
+
+        # Complete each active companion
+        completed_ids = []
+        now = time.time()
+        for companion_id in companions_to_complete:
+            companion = self.tracks[companion_id]
+            last_real_pos = companion.last_detected_position or companion.center
+
+            # Build position history
+            final_position_history = list(companion.checkpoint_positions)
+            if not final_position_history or final_position_history[-1] != last_real_pos:
+                final_position_history.append(last_real_pos)
+
+            # Append the exiting track's exit position as the companion's inferred exit
+            exit_position = exiting_track.center
+            if final_position_history[-1] != exit_position:
+                final_position_history.append(exit_position)
+
+            event = TrackEvent(
+                track_id=companion_id,
+                event_type='track_completed',
+                bbox_history=list(companion.bbox_history),
+                position_history=final_position_history,
+                total_frames=companion.age + companion.hits,
+                created_at=companion.created_at,
+                ended_at=now,
+                avg_confidence=companion.confidence,
+                exit_direction='top',
+                entry_type=companion.entry_type,
+                suspected_duplicate=False,
+                ghost_recovery_count=companion.ghost_recovery_count,
+                occlusion_events=list(companion.occlusion_events),
+                shadow_of=None,
+                shadow_count=0,
+                merge_events=list(companion.merge_events),
+                ghost_exit_promoted=True,
+                concurrent_track_count=len(companion.concurrent_track_ids),
+            )
+            self.completed_tracks.append(event)
+            self._ghost_exits_promoted += 1
+            completed_ids.append(companion_id)
+
+            # Also complete any shadows attached to this companion
+            if companion.shadow_tracks:
+                self._complete_with_shadows(companion, 'top')
+
+            logger.info(
+                f"[TRACK_LIFECYCLE] T{companion_id} ACTIVE_COMPANION_COMPLETED | "
+                f"concurrent active track completed by T{exiting_track.track_id} exit | "
+                f"last_real_pos={last_real_pos}, hits={companion.hits}, "
+                f"missed_frames={companion.time_since_update}, "
+                f"entry_y={companion.entry_center_y}, "
+                f"total_companions={self._ghost_exits_promoted}"
+            )
+
+        return completed_ids
 
     def _lose_shadows_with_survivor(self, survivor: TrackedObject, ended_at: float):
         """

@@ -173,6 +173,9 @@ class DatabaseManager:
         # Migrate existing tables to add new columns (safe for existing DBs)
         self._migrate_track_events_schema()
 
+        # Migrate arabic_name for bag types where it still equals English name
+        self._migrate_arabic_names()
+
         # Initialize default config values
         self._initialize_default_config()
 
@@ -212,6 +215,39 @@ class DatabaseManager:
             conn.commit()
         except Exception as e:
             logger.error(f"[DatabaseManager] Migration error: {e}")
+
+    def _migrate_arabic_names(self):
+        """Fix bag_types where arabic_name still equals the English name (untranslated).
+
+        This happens when bag types were created via get_or_create_bag_type()
+        before Arabic names were established — the method defaults arabic_name to name.
+        Safe to run on every startup (only updates rows that still need it).
+        """
+        canonical = {
+            'Rejected':      'غير واضحة',
+            'Unknown':       'غير معروف',
+            'Brown_Orange':  'عربي',
+            'Red_Yellow':    '11 رغيف',
+            'Blue_Yellow':   '12 رغيف',
+            'Green_Yellow':  '14 رغيف',
+            'Bran':          'نخالة',
+            'Black_Orange':  'عشرات',
+            'Purple_Yellow': 'شاورما',
+            'Wheatberry':    'قمحة',
+        }
+        try:
+            with self._get_connection() as conn:
+                for eng_name, ar_name in canonical.items():
+                    conn.execute(
+                        "UPDATE bag_types SET arabic_name = ? "
+                        "WHERE name = ? AND (arabic_name = name OR arabic_name IS NULL OR arabic_name = '')",
+                        (ar_name, eng_name)
+                    )
+                conn.commit()
+            logger.info("[DatabaseManager] Arabic name migration complete")
+        except Exception as e:
+            logger.error(f"[DatabaseManager] Arabic name migration error: {e}")
+
     def _create_fallback_schema(self):
         with self._get_connection() as conn:
             conn.execute("PRAGMA foreign_keys = ON")

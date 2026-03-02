@@ -305,6 +305,100 @@ def test_ghost_validation_disabled():
     print("PASS test_ghost_validation_disabled")
 
 
+# ── Active Companion Completion Tests ────────────────────────────────────────
+
+
+def test_active_companion_completed_before_ghost_buffer():
+    """
+    Scenario from T5397/T5398: two tracks travel together, one exits top
+    while the companion has only been missing for a few frames — NOT yet
+    moved to the ghost buffer (time_since_update <= max_frames_without_detection).
+
+    The new _complete_active_companions logic should promote the active-but-missing
+    companion to track_completed when the survivor exits top.
+
+    We use max_frames_without_detection=20 so that B (which stops at frame 14)
+    has only missed ~4 frames when A exits top at frame 18 — well below the
+    threshold for ghost buffer entry.
+
+    B uses small Y-steps near the top so its velocity is low and drift doesn't
+    push it into the exit zone (y < exit_margin_pixels=30).
+    """
+    tracker = make_tracker(max_frames_without_detection=20)
+    frame_shape = (720, 1280)
+
+    # Track A: will exit top normally.
+    # Track B: travels alongside A but with smaller steps near the top,
+    #          stops at y~200 (within near_top_threshold=252) with low velocity
+    #          so drift doesn't push it to the exit zone.
+    positions_a = [600, 570, 540, 510, 480, 450, 400, 350, 300, 250, 200, 160, 120, 80, 50, 30, 20, 10]
+    positions_b = [610, 580, 550, 520, 490, 460, 410, 360, 310, 260, 240, 230, 220, 210]  # 14 frames, last y=210
+
+    # Move both together for first N frames
+    for i in range(len(positions_b)):
+        tracker.update([
+            make_detection(*_box(350, positions_a[i])),
+            make_detection(*_box(500, positions_b[i])),
+        ], frame_shape=frame_shape)
+
+    # Now only track A continues. B is unmatched but NOT yet ghosted
+    # because max_frames_without_detection=20. B has only missed 4 frames.
+    for i in range(len(positions_b), len(positions_a)):
+        tracker.update([
+            make_detection(*_box(350, positions_a[i])),
+        ], frame_shape=frame_shape)
+
+    # Collect events — A should have exited top, and B should be active-companion-completed
+    events = tracker.get_completed_events()
+
+    completed = [e for e in events if e.event_type == 'track_completed']
+    assert len(completed) >= 2, (
+        f"Expected >=2 completed (A exits + B active companion), got {len(completed)}: "
+        f"{[(e.track_id, e.event_type, e.ghost_exit_promoted) for e in events]}"
+    )
+
+    # One should be the normal exit, one should be ghost_exit_promoted (active companion)
+    promoted = [e for e in completed if e.ghost_exit_promoted]
+    normal = [e for e in completed if not e.ghost_exit_promoted]
+    assert len(normal) >= 1, "Expected at least 1 normal completion"
+    assert len(promoted) >= 1, (
+        f"Expected at least 1 active companion promoted, got {len(promoted)}: "
+        f"{[(e.track_id, e.ghost_exit_promoted) for e in completed]}"
+    )
+    print("PASS test_active_companion_completed_before_ghost_buffer")
+
+
+def test_active_companion_not_completed_if_far_from_top():
+    """
+    Active companion should NOT be completed if its last detected position
+    is too far from the top (below near_top_threshold = 35% of 720 = 252).
+    """
+    tracker = make_tracker(max_frames_without_detection=20)
+    frame_shape = (720, 1280)
+
+    # Track A exits top. Track B only made it to y=430 (mid-frame, far from top).
+    positions_a = [600, 570, 540, 510, 480, 450, 400, 350, 300, 250, 200, 160, 120, 80, 50, 30, 20, 10]
+    positions_b = [600, 570, 540, 510, 480, 460, 440]  # stops at y=440, far from top
+
+    for i in range(len(positions_b)):
+        tracker.update([
+            make_detection(*_box(350, positions_a[i])),
+            make_detection(*_box(500, positions_b[i])),
+        ], frame_shape=frame_shape)
+
+    for i in range(len(positions_b), len(positions_a)):
+        tracker.update([
+            make_detection(*_box(350, positions_a[i])),
+        ], frame_shape=frame_shape)
+
+    events = tracker.get_completed_events()
+    promoted = [e for e in events if e.event_type == 'track_completed' and e.ghost_exit_promoted]
+    assert len(promoted) == 0, (
+        f"Expected 0 active companion promotions (B too far from top), got {len(promoted)}"
+    )
+    print("PASS test_active_companion_not_completed_if_far_from_top")
+
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
@@ -316,6 +410,8 @@ if __name__ == '__main__':
     test_ghost_no_concurrent_not_flagged()
     test_no_double_count_on_bag_replacement()
     test_ghost_validation_disabled()
+    test_active_companion_completed_before_ghost_buffer()
+    test_active_companion_not_completed_if_far_from_top()
     print("\nAll ghost companion + diagnostic tests passed!")
 
 

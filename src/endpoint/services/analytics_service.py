@@ -1,4 +1,6 @@
 ﻿"""Analytics Service - Refactored with Repository Pattern."""
+import json
+from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 
@@ -124,6 +126,43 @@ class AnalyticsService:
         # Pre-group runs by bag_type_id for efficient template rendering
         runs_by_type = self._group_runs_by_type(runs)
         
+        # Build per-class confidence insights (smoothed counts, confusion pairs)
+        # Build a name→arabic_name lookup so confusion detail shows Arabic labels.
+        # If arabic_name in DB still equals the English name (was never translated),
+        # fall back to the canonical Arabic translations from the seed data.
+        _CANONICAL_ARABIC = {
+            'Rejected':      'غير واضحة',
+            'Unknown':       'غير معروف',
+            'Brown_Orange':  'عربي',
+            'Red_Yellow':    '11 رغيف',
+            'Blue_Yellow':   '12 رغيف',
+            'Green_Yellow':  '14 رغيف',
+            'Bran':          'نخالة',
+            'Black_Orange':  'عشرات',
+            'Purple_Yellow': 'شاورما',
+            'Wheatberry':    'قمحة',
+        }
+        name_to_arabic = {}
+        for bt in all_bag_types:
+            eng = bt['name']
+            arabic = bt.get('arabic_name') or ''
+            # Use DB value only if it's a real translation (differs from English name)
+            if arabic and arabic != eng:
+                name_to_arabic[eng] = arabic
+            else:
+                # Fall back to canonical map, then English name as last resort
+                name_to_arabic[eng] = _CANONICAL_ARABIC.get(eng, eng)
+        confidence_insights = self._build_confidence_insights(ordered_events, name_to_arabic)
+        for cls in classifications:
+            cid = cls['id']
+            insight = confidence_insights.get(cid, {})
+            cls['smoothed_count'] = insight.get('smoothed_count', 0)
+            cls['confusion_pairs'] = insight.get('confusion_pairs', [])
+            cls['low_conf_details'] = insight.get('low_conf_details', [])
+
+        # Build batch anomaly analysis
+        batch_anomalies = self._build_batch_anomalies(runs, ordered_events)
+
         data = {
             "meta": {
                 "start": start_time, 
@@ -132,8 +171,9 @@ class AnalyticsService:
             }, 
             "data": {
                 'total': stats['total'], 
-                'classifications': classifications
-            }, 
+                'classifications': classifications,
+                'batch_anomalies': batch_anomalies
+            },
             "timeline": {
                 "ordered_events": ordered_events, 
                 "per_class_windows": per_class_windows, 
@@ -191,6 +231,182 @@ class AnalyticsService:
         if noise_count > 0:
             merged.append({"bag_type_id": "NOISE", "class_name": "Noise", "arabic_name": "تصنيفات مفلترة غير دقيقة", "thumb": "", "weight": 0, "start": noise_start, "end": noise_end, "count": noise_count})
         return merged
+    def _build_confidence_insights(
+        self,
+        ordered_events: List[Dict],
+        name_to_arabic: Dict[str, str] = None,
+    ) -> Dict[int, Dict]:
+        """
+        Parse event metadata to build per-class confidence insights.
+
+        For each bag type, extracts:
+        - smoothed_count: How many items were corrected by the smoother
+        - confusion_pairs: List of dicts showing what the model originally
+          predicted before smoothing overrode it (with arabic_name resolved)
+        - low_conf_details: List of dicts for low-confidence items (conf < 0.8)
+          that were NOT smoothed — shows natural confusion (with arabic_name)
+
+        Args:
+            ordered_events: Time-sorted list of event dicts with 'metadata' JSON
+            name_to_arabic: Optional mapping of English class name → Arabic name
+
+        Returns:
+            Dict keyed by bag_type_id with insight dicts
+        """
+        if name_to_arabic is None:
+            name_to_arabic = {}
+
+        insights: Dict[int, Dict] = {}
+
+        for ev in ordered_events:
+            bid = ev['bag_type_id']
+            if bid not in insights:
+                insights[bid] = {
+                    'smoothed_count': 0,
+                    '_confusion_map': defaultdict(int),
+                    '_low_conf_map': defaultdict(int),
+                }
+
+            meta_raw = ev.get('metadata')
+            if not meta_raw:
+                continue
+
+            try:
+                meta = json.loads(meta_raw) if isinstance(meta_raw, str) else meta_raw
+            except (json.JSONDecodeError, TypeError):
+                continue
+
+            is_smoothed = meta.get('smoothed', False)
+            original_class = meta.get('original_class')
+            confidence = ev.get('confidence', 1.0)
+
+            if is_smoothed and original_class:
+                insights[bid]['smoothed_count'] += 1
+                insights[bid]['_confusion_map'][original_class] += 1
+            elif confidence < 0.8 and original_class and original_class != ev.get('bag_type', ''):
+                # Low confidence but not smoothed — model was uncertain
+                insights[bid]['_low_conf_map'][original_class] += 1
+
+        # Convert internal maps to sorted lists for template rendering
+        for bid, data in insights.items():
+            confusion_sorted = sorted(
+                data['_confusion_map'].items(), key=lambda x: x[1], reverse=True
+            )
+            data['confusion_pairs'] = [
+                {
+                    'class_name': cls,
+                    'arabic_name': name_to_arabic.get(cls, cls),
+                    'count': cnt,
+                }
+                for cls, cnt in confusion_sorted
+            ]
+
+            low_conf_sorted = sorted(
+                data['_low_conf_map'].items(), key=lambda x: x[1], reverse=True
+            )
+            data['low_conf_details'] = [
+                {
+                    'class_name': cls,
+                    'arabic_name': name_to_arabic.get(cls, cls),
+                    'count': cnt,
+                }
+                for cls, cnt in low_conf_sorted
+            ]
+
+            del data['_confusion_map']
+            del data['_low_conf_map']
+
+        return insights
+
+    def _build_batch_anomalies(
+        self,
+        runs: List[Dict],
+        ordered_events: List[Dict]
+    ) -> Dict[str, Any]:
+        """
+        Analyze batch discipline from production runs.
+
+        Detects anomalies that indicate workers are not following batch
+        processing guidelines:
+        - short_batches: Runs with very few items (< noise_threshold)
+        - transition_count: Total number of batch changes
+        - rapid_switches: Adjacent runs shorter than expected
+        - total_smoothed: Total items corrected across all classes
+        - smoothing_rate: Percentage of all items that were corrected
+
+        Args:
+            runs: Consecutive runs from build_consecutive_runs (noise already filtered)
+            ordered_events: All events for smoothing stats
+
+        Returns:
+            Dict with anomaly summary
+        """
+        # Filter out the NOISE pseudo-run
+        real_runs = [r for r in runs if r.get('bag_type_id') != 'NOISE']
+
+        # Count transitions (number of batch changes)
+        transition_count = max(0, len(real_runs) - 1)
+
+        # Detect short batches (batches with count < 2× noise_threshold)
+        short_threshold = self.config.noise_threshold * 2
+        short_batches = []
+        for i, run in enumerate(real_runs):
+            if run['count'] < short_threshold:
+                short_batches.append({
+                    'class_name': run.get('arabic_name') or run.get('class_name', '?'),
+                    'count': run['count'],
+                    'time': run.get('start', '')[:16] if run.get('start') else '',
+                    'position': i + 1,
+                })
+
+        # Detect rapid switches: consecutive short runs (both < short_threshold)
+        rapid_switches = 0
+        for i in range(len(real_runs) - 1):
+            if (real_runs[i]['count'] < short_threshold and
+                    real_runs[i + 1]['count'] < short_threshold):
+                rapid_switches += 1
+
+        # Total smoothed items from metadata
+        total_smoothed = 0
+        total_events = len(ordered_events)
+        for ev in ordered_events:
+            meta_raw = ev.get('metadata')
+            if not meta_raw:
+                continue
+            try:
+                meta = json.loads(meta_raw) if isinstance(meta_raw, str) else meta_raw
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if meta.get('smoothed', False):
+                total_smoothed += 1
+
+        smoothing_rate = (
+            round(total_smoothed / total_events * 100, 1)
+            if total_events > 0 else 0.0
+        )
+
+        # Severity assessment
+        # Green: 0-2 transitions & no rapid switches
+        # Yellow: 3-5 transitions or some short batches
+        # Red: >5 transitions or rapid switches or smoothing_rate > 15%
+        if rapid_switches > 0 or transition_count > 5 or smoothing_rate > 15:
+            severity = 'high'
+        elif transition_count > 2 or len(short_batches) > 2:
+            severity = 'medium'
+        else:
+            severity = 'low'
+
+        return {
+            'transition_count': transition_count,
+            'batch_count': len(real_runs),
+            'short_batches': short_batches,
+            'short_batch_count': len(short_batches),
+            'rapid_switches': rapid_switches,
+            'total_smoothed': total_smoothed,
+            'smoothing_rate': smoothing_rate,
+            'severity': severity,
+        }
+
     def normalize_image_paths(self, data: Dict[str, Any]) -> None:
         """
         Normalize image paths for web serving.
