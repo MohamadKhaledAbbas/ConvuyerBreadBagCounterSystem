@@ -96,6 +96,10 @@ app.include_router(counts.router)
 from src.endpoint.routes import conveyor_roi
 app.include_router(conveyor_roi.router)
 
+# Include guidelines router
+from src.endpoint.routes import guidelines
+app.include_router(guidelines.router)
+
 
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
