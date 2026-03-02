@@ -178,3 +178,79 @@ class AnalyticsRepository:
             })
 
         return sorted(summaries, key=lambda x: x['count'], reverse=True)
+
+    def get_shift_report_data(
+        self,
+        start_time: datetime,
+        end_time: datetime
+    ) -> Dict[str, Any]:
+        """
+        Query track_events for shift performance metrics in a time range.
+
+        Returns counts for: completed, rejected, lost (by cause), invalid paths.
+        """
+        s = start_time.isoformat()
+        e = end_time.isoformat()
+        time_filter = "timestamp >= ? AND timestamp <= ?"
+
+        results: Dict[str, Any] = {}
+        try:
+            with self.db._cursor() as cursor:
+                # Total completed tracks
+                cursor.execute(
+                    f"SELECT COUNT(*) FROM track_events WHERE {time_filter} AND event_type='track_completed'",
+                    (s, e)
+                )
+                results['completed'] = cursor.fetchone()[0] or 0
+
+                # Rejected bags (completed but classified as Rejected)
+                cursor.execute(
+                    f"SELECT COUNT(*) FROM track_events WHERE {time_filter} AND event_type='track_completed' AND classification='Rejected'",
+                    (s, e)
+                )
+                results['rejected'] = cursor.fetchone()[0] or 0
+
+                # Lost tracks (total + breakdown by exit_direction)
+                cursor.execute(
+                    f"SELECT COUNT(*) FROM track_events WHERE {time_filter} AND event_type='track_lost'",
+                    (s, e)
+                )
+                results['lost_total'] = cursor.fetchone()[0] or 0
+
+                cursor.execute(
+                    f"SELECT exit_direction, COUNT(*) as cnt FROM track_events WHERE {time_filter} AND event_type='track_lost' GROUP BY exit_direction",
+                    (s, e)
+                )
+                results['lost_by_cause'] = {row[0]: row[1] for row in cursor.fetchall()}
+
+                # Lost tracks with occlusion events (camera was blocked)
+                cursor.execute(
+                    f"SELECT COUNT(*) FROM track_events WHERE {time_filter} AND event_type='track_lost' AND occlusion_events IS NOT NULL AND occlusion_events != '[]'",
+                    (s, e)
+                )
+                results['lost_with_occlusion'] = cursor.fetchone()[0] or 0
+
+                # Invalid path tracks
+                cursor.execute(
+                    f"SELECT COUNT(*) FROM track_events WHERE {time_filter} AND event_type='track_invalid'",
+                    (s, e)
+                )
+                results['invalid'] = cursor.fetchone()[0] or 0
+
+                # Total all tracks (for denominator)
+                cursor.execute(
+                    f"SELECT COUNT(*) FROM track_events WHERE {time_filter}",
+                    (s, e)
+                )
+                results['total_tracks'] = cursor.fetchone()[0] or 0
+
+        except Exception as exc:
+            logger.error(f"[Repository] shift report query error: {exc}")
+            results = {
+                'completed': 0, 'rejected': 0, 'lost_total': 0,
+                'lost_by_cause': {}, 'lost_with_occlusion': 0,
+                'invalid': 0, 'total_tracks': 0,
+            }
+
+        return results
+

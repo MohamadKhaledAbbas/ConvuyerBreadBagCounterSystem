@@ -530,8 +530,131 @@
             color: var(--accent-success);
             border: 1px solid rgba(45, 212, 191, 0.3);
         }
-        .short-batches-list {
-            padding: 0.5rem 0.75rem;
+        /* ─── Shift Report Card ─── */
+        .report-card {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-lg);
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            backdrop-filter: blur(10px);
+        }
+        .report-top {
+            display: flex;
+            align-items: center;
+            gap: 2rem;
+            margin-bottom: 1.5rem;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        .grade-badge {
+            width: 110px;
+            height: 110px;
+            border-radius: 50%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            border: 4px solid;
+        }
+        .grade-letter {
+            font-family: 'Inter', sans-serif;
+            font-size: 3rem;
+            font-weight: 800;
+            line-height: 1;
+        }
+        .grade-sublabel {
+            font-size: 0.8rem;
+            font-weight: 700;
+            margin-top: 0.15rem;
+        }
+        .report-summary {
+            flex: 1;
+            min-width: 200px;
+        }
+        .report-score-bar {
+            height: 8px;
+            border-radius: 4px;
+            background: rgba(255,255,255,0.08);
+            margin-top: 0.5rem;
+            overflow: hidden;
+        }
+        .report-score-fill {
+            height: 100%;
+            border-radius: 4px;
+            transition: width 0.6s ease;
+        }
+        .report-score-text {
+            font-family: 'Inter', sans-serif;
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: var(--text-secondary);
+            margin-bottom: 0.25rem;
+        }
+        .report-metrics {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+        .report-metric {
+            padding: 1rem;
+            background: rgba(15, 23, 42, 0.4);
+            border-radius: var(--radius-sm);
+            border-right: 3px solid var(--glass-border);
+            text-align: center;
+        }
+        .report-metric.sev-low { border-right-color: var(--accent-success); }
+        .report-metric.sev-medium { border-right-color: var(--accent-warning); }
+        .report-metric.sev-high { border-right-color: var(--accent-danger); }
+        .metric-icon {
+            font-size: 1.3rem;
+            margin-bottom: 0.4rem;
+        }
+        .metric-main-value {
+            font-family: 'Inter', sans-serif;
+            font-size: 1.8rem;
+            font-weight: 800;
+            line-height: 1;
+            color: var(--text-primary);
+        }
+        .metric-pct {
+            font-family: 'Inter', sans-serif;
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-top: 0.15rem;
+        }
+        .metric-label {
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+            font-weight: 600;
+            margin-top: 0.3rem;
+        }
+        .report-tip {
+            padding: 0.75rem 1rem;
+            border-radius: var(--radius-sm);
+            font-size: 0.85rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-weight: 600;
+        }
+        .lost-causes {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+            justify-content: center;
+            margin-top: 0.4rem;
+        }
+        .cause-tag {
+            font-size: 0.65rem;
+            padding: 0.15rem 0.5rem;
+            border-radius: 10px;
+            background: rgba(255,255,255,0.06);
+            color: var(--text-muted);
+            font-weight: 500;
         }
     </style>
 </head>
@@ -650,10 +773,10 @@
         {% endfor %}
     </div>
 
-    {# ─── Batch Discipline Section ─── #}
+    {# ─── Batch Sequence Section ─── #}
     {% if batch_anomalies and batch_anomalies.batch_count is defined and batch_anomalies.batch_count > 0 %}
-    <div class="section-title"><i class="fa-solid fa-clipboard-check"></i> انتظام الدفعات</div>
-    <div class="discipline-section severity-{{ batch_anomalies.severity or 'low' }}">
+    <div class="section-title"><i class="fa-solid fa-clipboard-check"></i> تسلسل الدفعات</div>
+    <div class="discipline-section">
         <div class="discipline-grid">
             <div class="discipline-stat">
                 <div class="discipline-value num">{{ batch_anomalies.batch_count }}</div>
@@ -664,44 +787,101 @@
                 <div class="discipline-label">تغييرات النوع</div>
             </div>
             <div class="discipline-stat">
-                <div class="discipline-value num {% if batch_anomalies.short_batch_count > 0 %}warn{% endif %}">
-                    {{ batch_anomalies.short_batch_count }}
-                </div>
-                <div class="discipline-label">دفعات قصيرة</div>
+                <div class="discipline-value num">{{ batch_anomalies.unique_types }}</div>
+                <div class="discipline-label">أنواع مختلفة</div>
             </div>
             <div class="discipline-stat">
-                <div class="discipline-value num {% if batch_anomalies.rapid_switches > 0 %}danger{% endif %}">
-                    {{ batch_anomalies.rapid_switches }}
+                <div class="discipline-value num {% if batch_anomalies.repeated_count > 0 %}warn{% endif %}">
+                    {{ batch_anomalies.repeated_count }}
                 </div>
-                <div class="discipline-label">تبديل سريع</div>
+                <div class="discipline-label">تكرار تبديل</div>
             </div>
         </div>
 
-        {% if batch_anomalies.severity == 'high' %}
-        <div class="discipline-alert danger">
-            <i class="fa-solid fa-triangle-exclamation"></i>
-            تم رصد عدم انتظام في معالجة الدفعات — تبديل متكرر بين الأنواع أو دفعات قصيرة جداً
-        </div>
-        {% elif batch_anomalies.severity == 'medium' %}
-        <div class="discipline-alert warning">
-            <i class="fa-solid fa-circle-info"></i>
-            يوجد بعض التغييرات غير المتوقعة في الدفعات — يُنصح بمراجعة التسلسل الزمني
-        </div>
-        {% else %}
-        <div class="discipline-alert ok">
-            <i class="fa-solid fa-circle-check"></i>
-            انتظام جيد في معالجة الدفعات
+        {% if batch_anomalies.repeated_transitions %}
+        <div class="detail-section" style="margin-top:0.75rem;">
+            <div class="detail-title"><i class="fa-solid fa-arrow-right-arrow-left"></i> تبديل متكرر بين نفس الأنواع</div>
+            {% for rt in batch_anomalies.repeated_transitions %}
+            <div class="detail-row">
+                <span class="detail-class">{{ rt.type_a }} ↔ {{ rt.type_b }}</span>
+                <span class="detail-count num">{{ rt.count }} مرات</span>
+            </div>
+            {% endfor %}
         </div>
         {% endif %}
+    </div>
+    {% endif %}
 
-        {% if batch_anomalies.short_batches %}
-        <div class="short-batches-list">
-            <div class="detail-title" style="margin-top:1rem;"><i class="fa-solid fa-list"></i> الدفعات القصيرة</div>
-            {% for sb in batch_anomalies.short_batches %}
-            <div class="detail-row">
-                <span class="detail-class">{{ sb.class_name }}</span>
-                <span class="detail-count num">{{ sb.count }} ربطة</span>
-                <span class="detail-time">{{ sb.time[11:16] if sb.time|length >= 16 else '' }}</span>
+    {# ─── Shift Performance Report ─── #}
+    {% if shift_report and shift_report.total is defined and shift_report.total > 0 %}
+    <div class="section-title"><i class="fa-solid fa-clipboard-user"></i> تقرير أداء الوردية</div>
+    <div class="report-card">
+        <div class="report-top">
+            <div class="grade-badge" style="border-color: {{ shift_report.grade_color }};">
+                <div class="grade-letter" style="color: {{ shift_report.grade_color }};">{{ shift_report.grade }}</div>
+                <div class="grade-sublabel" style="color: {{ shift_report.grade_color }};">{{ shift_report.grade_label }}</div>
+            </div>
+            <div class="report-summary">
+                <div class="report-score-text">
+                    التقييم: <span class="num" style="color: {{ shift_report.grade_color }};">{{ shift_report.score }}</span> / 100
+                </div>
+                <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:0.3rem;">
+                    إجمالي المسارات: <span class="num">{{ shift_report.total }}</span> ·
+                    مكتملة: <span class="num">{{ shift_report.completed }}</span>
+                    (<span class="num">{{ shift_report.success_rate }}%</span>)
+                </div>
+                <div class="report-score-bar">
+                    <div class="report-score-fill" style="width: {{ shift_report.score }}%; background: {{ shift_report.grade_color }};"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="report-metrics">
+            {# Rejected #}
+            <div class="report-metric sev-{{ shift_report.rejected_sev }}">
+                <div class="metric-icon"><i class="fa-solid fa-rotate" style="color:var(--accent-danger);"></i></div>
+                <div class="metric-main-value">{{ shift_report.rejected }}</div>
+                <div class="metric-pct">{{ shift_report.rejected_pct }}%</div>
+                <div class="metric-label">أكياس مرفوضة</div>
+            </div>
+
+            {# Lost #}
+            <div class="report-metric sev-{{ shift_report.lost_sev }}">
+                <div class="metric-icon"><i class="fa-solid fa-route" style="color:var(--accent-warning);"></i></div>
+                <div class="metric-main-value">{{ shift_report.lost }}</div>
+                <div class="metric-pct">{{ shift_report.lost_pct }}%</div>
+                <div class="metric-label">مسارات مفقودة</div>
+                {% if shift_report.lost_causes %}
+                <div class="lost-causes">
+                    {% for lc in shift_report.lost_causes %}
+                    <span class="cause-tag">{{ lc.cause }}: <span class="num">{{ lc.count }}</span></span>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+
+            {# Invalid #}
+            <div class="report-metric sev-{{ shift_report.invalid_sev }}">
+                <div class="metric-icon"><i class="fa-solid fa-ban" style="color:var(--accent-orange);"></i></div>
+                <div class="metric-main-value">{{ shift_report.invalid }}</div>
+                <div class="metric-pct">{{ shift_report.invalid_pct }}%</div>
+                <div class="metric-label">مسارات غير صالحة</div>
+            </div>
+        </div>
+
+        {# Professional advisory notes #}
+        {% if shift_report.advisories %}
+        <div style="display:flex;flex-direction:column;gap:0.5rem;">
+            {% for adv in shift_report.advisories %}
+            <div class="discipline-alert {% if adv.severity == 'high' %}danger{% elif adv.severity == 'medium' %}warning{% else %}ok{% endif %}">
+                {% if adv.severity == 'high' %}
+                <i class="fa-solid fa-triangle-exclamation"></i>
+                {% elif adv.severity == 'medium' %}
+                <i class="fa-solid fa-circle-info"></i>
+                {% else %}
+                <i class="fa-solid fa-circle-check"></i>
+                {% endif %}
+                {{ adv.text }}
             </div>
             {% endfor %}
         </div>

@@ -59,6 +59,7 @@ async def analytics(
             'total': data['data']['total'],
             'classifications': data['data']['classifications'],
             'batch_anomalies': data['data'].get('batch_anomalies', {}),
+            'shift_report': data['data'].get('shift_report', {}),
             'timeline': data['timeline']
         }
         

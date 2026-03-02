@@ -163,6 +163,9 @@ class AnalyticsService:
         # Build batch anomaly analysis
         batch_anomalies = self._build_batch_anomalies(runs, ordered_events)
 
+        # Build worker shift report card
+        shift_report = self._build_shift_report(start_time, end_time)
+
         data = {
             "meta": {
                 "start": start_time, 
@@ -172,7 +175,8 @@ class AnalyticsService:
             "data": {
                 'total': stats['total'], 
                 'classifications': classifications,
-                'batch_anomalies': batch_anomalies
+                'batch_anomalies': batch_anomalies,
+                'shift_report': shift_report
             },
             "timeline": {
                 "ordered_events": ordered_events, 
@@ -324,47 +328,56 @@ class AnalyticsService:
         ordered_events: List[Dict]
     ) -> Dict[str, Any]:
         """
-        Analyze batch discipline from production runs.
+        Analyze batch sequence discipline from production runs.
 
-        Detects anomalies that indicate workers are not following batch
-        processing guidelines:
-        - short_batches: Runs with very few items (< noise_threshold)
-        - transition_count: Total number of batch changes
-        - rapid_switches: Adjacent runs shorter than expected
-        - total_smoothed: Total items corrected across all classes
-        - smoothing_rate: Percentage of all items that were corrected
+        Computes:
+        - batch_count / transition_count: How many batches and type changes
+        - unique_types: Number of distinct product types in the shift
+        - repeated_transitions: Pairs of types that switched back-and-forth
+          (e.g. A→B→A means the A↔B pair repeated — indicates poor batch planning)
+        - total_smoothed / smoothing_rate: How many items the system auto-corrected
+        - severity: Overall assessment
 
         Args:
             runs: Consecutive runs from build_consecutive_runs (noise already filtered)
             ordered_events: All events for smoothing stats
 
         Returns:
-            Dict with anomaly summary
+            Dict with batch sequence summary
         """
         # Filter out the NOISE pseudo-run
         real_runs = [r for r in runs if r.get('bag_type_id') != 'NOISE']
 
-        # Count transitions (number of batch changes)
+        # Count transitions (number of batch type changes)
         transition_count = max(0, len(real_runs) - 1)
 
-        # Detect short batches (batches with count < 2× noise_threshold)
-        short_threshold = self.config.noise_threshold * 2
-        short_batches = []
-        for i, run in enumerate(real_runs):
-            if run['count'] < short_threshold:
-                short_batches.append({
-                    'class_name': run.get('arabic_name') or run.get('class_name', '?'),
-                    'count': run['count'],
-                    'time': run.get('start', '')[:16] if run.get('start') else '',
-                    'position': i + 1,
-                })
+        # Unique product types processed
+        unique_types = len({r['bag_type_id'] for r in real_runs})
 
-        # Detect rapid switches: consecutive short runs (both < short_threshold)
-        rapid_switches = 0
+        # Detect repeated transitions (same pair switching back-and-forth)
+        # e.g.  A → B → A  means pair (A, B) appeared twice as a transition
+        pair_counts: Dict[tuple, int] = defaultdict(int)
         for i in range(len(real_runs) - 1):
-            if (real_runs[i]['count'] < short_threshold and
-                    real_runs[i + 1]['count'] < short_threshold):
-                rapid_switches += 1
+            a = real_runs[i]['bag_type_id']
+            b = real_runs[i + 1]['bag_type_id']
+            pair_key = tuple(sorted([a, b]))
+            pair_counts[pair_key] += 1
+
+        repeated_transitions = []
+        for (a_id, b_id), count in sorted(pair_counts.items(), key=lambda x: x[1], reverse=True):
+            if count >= 2:
+                # Find arabic names for the pair
+                a_name = b_name = ''
+                for r in real_runs:
+                    if r['bag_type_id'] == a_id:
+                        a_name = r.get('arabic_name') or r.get('class_name', '?')
+                    if r['bag_type_id'] == b_id:
+                        b_name = r.get('arabic_name') or r.get('class_name', '?')
+                repeated_transitions.append({
+                    'type_a': a_name,
+                    'type_b': b_name,
+                    'count': count,
+                })
 
         # Total smoothed items from metadata
         total_smoothed = 0
@@ -385,26 +398,165 @@ class AnalyticsService:
             if total_events > 0 else 0.0
         )
 
-        # Severity assessment
-        # Green: 0-2 transitions & no rapid switches
-        # Yellow: 3-5 transitions or some short batches
-        # Red: >5 transitions or rapid switches or smoothing_rate > 15%
-        if rapid_switches > 0 or transition_count > 5 or smoothing_rate > 15:
-            severity = 'high'
-        elif transition_count > 2 or len(short_batches) > 2:
-            severity = 'medium'
-        else:
-            severity = 'low'
-
         return {
             'transition_count': transition_count,
             'batch_count': len(real_runs),
-            'short_batches': short_batches,
-            'short_batch_count': len(short_batches),
-            'rapid_switches': rapid_switches,
+            'unique_types': unique_types,
+            'repeated_transitions': repeated_transitions,
+            'repeated_count': len(repeated_transitions),
             'total_smoothed': total_smoothed,
             'smoothing_rate': smoothing_rate,
-            'severity': severity,
+        }
+
+    def _build_shift_report(
+        self,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> Dict[str, Any]:
+        """
+        Build a shift performance summary for the production supervisor.
+
+        Queries track_events for the time range and computes:
+        - Rejected bags count and percentage (bags placed upside-down or unclear)
+        - Lost tracks count, percentage, and breakdown by cause
+        - Invalid path tracks count and percentage (bags not placed from bottom)
+        - Composite grade (A/B/C/D) with score 0-100
+        - Professional advisory notes for the supervisor
+
+        Returns:
+            Dict with all metrics, grade, and advisory notes in Arabic
+        """
+        raw = self.repo.get_shift_report_data(start_time, end_time)
+
+        completed = raw['completed']
+        total = raw['total_tracks']
+
+        if total == 0:
+            return {'total': 0}
+
+        rejected = raw['rejected']
+        lost = raw['lost_total']
+        invalid = raw['invalid']
+
+        # Percentages (against total tracks as denominator)
+        def pct(n):
+            return round(n / total * 100, 1) if total > 0 else 0.0
+
+        rejected_pct = pct(rejected)
+        lost_pct = pct(lost)
+        invalid_pct = pct(invalid)
+
+        # Per-metric severity thresholds (green / yellow / red)
+        def _severity(val, low_max, mid_max):
+            if val <= low_max:
+                return 'low'
+            elif val <= mid_max:
+                return 'medium'
+            return 'high'
+
+        rejected_sev = _severity(rejected_pct, 3, 8)
+        lost_sev = _severity(lost_pct, 5, 15)
+        invalid_sev = _severity(invalid_pct, 2, 5)
+
+        # Composite score 0-100
+        # Weights: lost 40%, rejected 35%, invalid 25%
+        deductions = 0.0
+        deductions += min(rejected_pct / 8 * 35, 35)    # caps at 8%  → 35pts
+        deductions += min(lost_pct / 15 * 40, 40)       # caps at 15% → 40pts
+        deductions += min(invalid_pct / 5 * 25, 25)     # caps at 5%  → 25pts
+        score = max(0, round(100 - deductions))
+
+        if score >= 85:
+            grade, grade_label, grade_color = 'A', 'ممتاز', 'var(--accent-success)'
+        elif score >= 70:
+            grade, grade_label, grade_color = 'B', 'جيد', 'var(--accent-primary)'
+        elif score >= 50:
+            grade, grade_label, grade_color = 'C', 'يحتاج تحسين', 'var(--accent-warning)'
+        else:
+            grade, grade_label, grade_color = 'D', 'يحتاج متابعة', 'var(--accent-danger)'
+
+        # Lost breakdown (translate exit_direction to Arabic cause)
+        lost_causes = []
+        cause_map = {
+            'timeout': 'انتهاء وقت',
+            'bottom': 'سقوط للأسفل',
+            'left': 'خروج جانبي',
+            'right': 'خروج جانبي',
+            'unknown': 'غير محدد',
+        }
+        for direction, cnt in sorted(
+            raw['lost_by_cause'].items(), key=lambda x: x[1], reverse=True
+        ):
+            lost_causes.append({
+                'cause': cause_map.get(direction, direction),
+                'count': cnt,
+            })
+        if raw['lost_with_occlusion'] > 0:
+            lost_causes.append({
+                'cause': 'حجب الكاميرا',
+                'count': raw['lost_with_occlusion'],
+            })
+
+        # Build professional advisory notes for the supervisor
+        advisories = []
+        if rejected_sev == 'high':
+            advisories.append({
+                'severity': 'high',
+                'text': 'نسبة الأكياس الغير واضحة مرتفعة — يُنصح بتوجيه العمال لضبط وضع الأكياس على خط السير',
+            })
+        elif rejected_sev == 'medium':
+            advisories.append({
+                'severity': 'medium',
+                'text': 'نسبة الأكياس الغير واضحة تحتاج مراقبة — التأكد من توجيه الأكياس بشكل صحيح',
+            })
+
+        if lost_sev == 'high':
+            advisories.append({
+                'severity': 'high',
+                'text': 'نسبة المسارات المفقودة مرتفعة — يُرجى التأكد من عدم حجب الكاميرا وإعادة الأكياس التي وقعت لبداية خط السير',
+            })
+        elif lost_sev == 'medium':
+            advisories.append({
+                'severity': 'medium',
+                'text': 'يوجد فقدان ملحوظ في المسارات — مراجعة أسباب سقوط الأكياس أو حجب الكاميرا',
+            })
+
+        if invalid_sev == 'high':
+            advisories.append({
+                'severity': 'high',
+                'text': 'عدد المسارات غير الصالحة مرتفع — يجب التأكيد على وضع الأكياس من بداية خط السير فقط',
+            })
+        elif invalid_sev == 'medium':
+            advisories.append({
+                'severity': 'medium',
+                'text': 'يوجد بعض المسارات غير الصالحة — التذكير بوضع الأكياس من أسفل خط السير',
+            })
+
+        if not advisories:
+            advisories.append({
+                'severity': 'low',
+                'text': 'أداء الوردية ضمن المعايير المطلوبة — لا توجد ملاحظات',
+            })
+
+        return {
+            'total': total,
+            'completed': completed,
+            'rejected': rejected,
+            'rejected_pct': rejected_pct,
+            'rejected_sev': rejected_sev,
+            'lost': lost,
+            'lost_pct': lost_pct,
+            'lost_sev': lost_sev,
+            'lost_causes': lost_causes,
+            'invalid': invalid,
+            'invalid_pct': invalid_pct,
+            'invalid_sev': invalid_sev,
+            'score': score,
+            'grade': grade,
+            'grade_label': grade_label,
+            'grade_color': grade_color,
+            'advisories': advisories,
+            'success_rate': pct(completed),
         }
 
     def normalize_image_paths(self, data: Dict[str, Any]) -> None:
