@@ -39,6 +39,11 @@ if is_rdk_platform():
     from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy # type: ignore
 
     try:
+        from builtin_interfaces.msg import Time as RosTime  # type: ignore
+    except ImportError:
+        RosTime = None
+
+    try:
         from img_msgs.msg import H26XFrame # type: ignore
         HAS_H26X_MSG = True
     except ImportError:
@@ -47,6 +52,7 @@ if is_rdk_platform():
 else:
     Node = object
     HAS_H26X_MSG = False
+    RosTime = None
 
 
 class PlaybackMode(Enum):
@@ -129,7 +135,7 @@ class SpoolProcessorNode(Node if is_rdk_platform() else object):
             if self.state is None:
                 self.state = ProcessorState(session_start_time=time.time())
 
-            self._last_state_save = time.time()
+            self._last_state_save = time.monotonic()
 
             # Retention management
             self.retention: Optional[RetentionPolicy] = None
@@ -150,6 +156,19 @@ class SpoolProcessorNode(Node if is_rdk_platform() else object):
             self._frames_published = 0
             self._segments_processed = 0
             self._start_time = time.time()
+
+            # Probe H26XFrame message capabilities once at init instead of
+            # calling hasattr() on every frame in the hot publish path.
+            if HAS_H26X_MSG:
+                _probe = H26XFrame()
+                self._msg_has_dts = hasattr(_probe, 'dts')
+                self._msg_has_pts = hasattr(_probe, 'pts')
+                self._msg_has_encoding = hasattr(_probe, 'encoding')
+                del _probe
+            else:
+                self._msg_has_dts = False
+                self._msg_has_pts = False
+                self._msg_has_encoding = False
 
             logger.info(
                 f"[SpoolProcessor] Initialized: {self.config.spool_dir} → "
@@ -180,28 +199,31 @@ class SpoolProcessorNode(Node if is_rdk_platform() else object):
             return False
 
         try:
-            from builtin_interfaces.msg import Time # ignore import error
-
             msg = H26XFrame()
             msg.width = record.width
             msg.height = record.height
-            msg.data = list(record.data)
 
-            # Set timestamps - must be ROS2 Time objects, not integers
-            if hasattr(msg, 'dts'):
-                dts_time = Time()
+            # Pass bytes directly — ROS2 sequence<uint8> accepts bytes.
+            # PERF: list(record.data) converted every byte to a Python int
+            # object, allocating ~28 bytes each.  For a 100 KB H.264 frame
+            # that is a 2.7 MB temporary list created 30× per second.
+            msg.data = record.data
+
+            # Set timestamps using cached capability flags (probed once at init)
+            if self._msg_has_dts and RosTime is not None:
+                dts_time = RosTime()
                 dts_time.sec = record.dts_sec
                 dts_time.nanosec = record.dts_nsec
                 msg.dts = dts_time
 
-            if hasattr(msg, 'pts'):
-                pts_time = Time()
+            if self._msg_has_pts and RosTime is not None:
+                pts_time = RosTime()
                 pts_time.sec = record.pts_sec
                 pts_time.nanosec = record.pts_nsec
                 msg.pts = pts_time
 
             # Set encoding
-            if hasattr(msg, 'encoding'):
+            if self._msg_has_encoding:
                 enc_bytes = record.encoding.encode('utf-8')[:12].ljust(12, b'\x00')
                 msg.encoding = list(enc_bytes)
 
@@ -239,6 +261,8 @@ class SpoolProcessorNode(Node if is_rdk_platform() else object):
 
         # For FAST mode, track last frame time for minimum interval throttling
         last_frame_time = None
+        # Cache the minimum interval to avoid per-frame division
+        fast_min_interval_s = self.config.min_frame_interval_ms / 1000.0
 
         while not self._stop_event.is_set():
             try:
@@ -294,9 +318,8 @@ class SpoolProcessorNode(Node if is_rdk_platform() else object):
                         elif self.config.playback_mode == PlaybackMode.FAST:
                             # FAST mode: enforce minimum interval to prevent CPU overload
                             if last_frame_time is not None:
-                                min_interval_s = self.config.min_frame_interval_ms / 1000.0
                                 elapsed = time.monotonic() - last_frame_time
-                                remaining = min_interval_s - elapsed
+                                remaining = fast_min_interval_s - elapsed
 
                                 if remaining > 0:
                                     time.sleep(remaining)
@@ -314,10 +337,11 @@ class SpoolProcessorNode(Node if is_rdk_platform() else object):
                             self.state.update(segment_num, record.index)
                             frame_count += 1
 
-                        # Periodic state save
-                        if (time.time() - self._last_state_save) >= self.config.state_save_interval:
+                        # Periodic state save (monotonic clock avoids NTP jumps)
+                        now_mono = time.monotonic()
+                        if (now_mono - self._last_state_save) >= self.config.state_save_interval:
                             save_processor_state(self.state, self.config.state_file)
-                            self._last_state_save = time.time()
+                            self._last_state_save = now_mono
 
                     # Segment complete
                     self.state.complete_segment(segment_num)
@@ -341,7 +365,7 @@ class SpoolProcessorNode(Node if is_rdk_platform() else object):
 
                     # Save state after each segment
                     save_processor_state(self.state, self.config.state_file)
-                    self._last_state_save = time.time()
+                    self._last_state_save = time.monotonic()
 
                 # Brief wait before checking for new segments
                 self._stop_event.wait(0.5)

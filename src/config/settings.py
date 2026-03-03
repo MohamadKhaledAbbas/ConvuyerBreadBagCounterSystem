@@ -28,11 +28,17 @@ class ModelInfo:
     checksum: Optional[str] = None
     
     def compute_checksum(self):
-        """Compute MD5 checksum of model file."""
+        """Compute MD5 checksum of model file (chunked to avoid loading entire file into RAM)."""
         if os.path.exists(self.path):
             try:
+                h = hashlib.md5()
                 with open(self.path, 'rb') as f:
-                    self.checksum = hashlib.md5(f.read()).hexdigest()[:8]
+                    while True:
+                        chunk = f.read(8192)
+                        if not chunk:
+                            break
+                        h.update(chunk)
+                self.checksum = h.hexdigest()[:8]
             except Exception:
                 self.checksum = None
 
@@ -43,10 +49,10 @@ class AppConfig:
     Application configuration for ConvuyerBreadBagCounterSystem.
     """
     
-    APP_VERSION: str = "03-03-2026_v2.10.3"
+    APP_VERSION: str = "03-03-2026_v2.10.4"
 
     # Video source for testing
-    video_path: str = os.getenv("VIDEO_PATH", "D:\\Recordings\\2026_02_05\\2026_03_02\\output2.mp4")
+    video_path: str = os.getenv("VIDEO_PATH", "D:\\Recordings\\2026_02_05\\2026_03_03\\output_2026-03-02_22-45-22.h264")
     
     # Platform-specific model paths
     detection_model: str = os.getenv(

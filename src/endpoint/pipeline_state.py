@@ -21,6 +21,10 @@ from src.utils.AppLogging import logger
 # Default state file location (same data directory as database)
 _DEFAULT_STATE_PATH = "data/pipeline_state.json"
 
+# Cache: once the directory is known to exist, skip os.makedirs() on
+# subsequent writes.  Keyed by the parent directory string.
+_dirs_ensured: set = set()
+
 
 def _get_state_path() -> str:
     """Get the state file path, checking env var at call time."""
@@ -40,7 +44,13 @@ def write_state(state: Dict[str, Any], state_file: Optional[str] = None) -> bool
     """
     filepath = state_file or _get_state_path()
     try:
-        os.makedirs(os.path.dirname(filepath) or ".", exist_ok=True)
+        # Ensure parent directory exists (cached after first success to
+        # avoid a stat() syscall on every write).
+        parent = os.path.dirname(filepath) or "."
+        if parent not in _dirs_ensured:
+            os.makedirs(parent, exist_ok=True)
+            _dirs_ensured.add(parent)
+
         state["_updated_at"] = time.time()
 
         # Write atomically via temp file to prevent partial reads

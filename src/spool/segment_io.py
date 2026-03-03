@@ -263,9 +263,16 @@ class SegmentWriter:
         if self._current_file is None:
             return
 
-        # Flush and close file
+        # Flush Python buffer to OS kernel buffer and close.
+        # os.fsync() intentionally omitted: on slow embedded storage
+        # (eMMC / SD card / Horizon RDK) it can block for 4+ seconds
+        # during GC or wear-levelling.  Because this runs in the
+        # SpoolRecorderNode's ROS2 callback thread, that stall would
+        # freeze RTSP frame ingestion and starve the downstream
+        # codec → FrameServer pipeline.  The atomic .tmp → .bin rename
+        # that follows already guarantees readers never see partial
+        # files; kernel writeback flushes the data within seconds.
         self._current_file.flush()
-        os.fsync(self._current_file.fileno())
         self._current_file.close()
         self._current_file = None
 
@@ -274,21 +281,27 @@ class SegmentWriter:
         final_path = self._get_segment_path(self._current_segment, tmp=False)
         tmp_path.rename(final_path)
 
-        # Write metadata
+        # Write metadata (atomically via tmp + rename)
         if self.write_metadata and self._current_metadata:
             self._current_metadata.end_time = time.time()
             meta_path = self._get_metadata_path(self._current_segment)
-            with open(meta_path, 'w') as f:
-                json.dump({
-                    'segment_num': self._current_metadata.segment_num,
-                    'start_time': self._current_metadata.start_time,
-                    'end_time': self._current_metadata.end_time,
-                    'frame_count': self._current_metadata.frame_count,
-                    'bytes_written': self._current_metadata.bytes_written,
-                    'first_frame_index': self._current_metadata.first_frame_index,
-                    'last_frame_index': self._current_metadata.last_frame_index,
-                    'has_idr': self._current_metadata.has_idr
-                }, f, indent=2)
+            tmp_meta = meta_path.with_suffix('.json.tmp')
+            try:
+                with open(tmp_meta, 'w') as f:
+                    json.dump({
+                        'segment_num': self._current_metadata.segment_num,
+                        'start_time': self._current_metadata.start_time,
+                        'end_time': self._current_metadata.end_time,
+                        'frame_count': self._current_metadata.frame_count,
+                        'bytes_written': self._current_metadata.bytes_written,
+                        'first_frame_index': self._current_metadata.first_frame_index,
+                        'last_frame_index': self._current_metadata.last_frame_index,
+                        'has_idr': self._current_metadata.has_idr
+                    }, f, indent=2)
+                tmp_meta.rename(meta_path)
+            except Exception as e:
+                logger.warning(f"[SegmentWriter] Failed to write metadata for segment {self._current_segment}: {e}")
+                # Non-fatal — the segment itself is already finalized
 
         self.segments_completed += 1
         logger.info(
@@ -370,11 +383,15 @@ class SegmentWriter:
                 self._cached_pps = pps
 
     def flush(self):
-        """Flush the current file to disk."""
+        """Flush the current file's Python buffer to the OS kernel buffer.
+
+        os.fsync() intentionally omitted — see _close_current_segment() for
+        the full rationale.  On slow embedded storage it can block for
+        seconds and freeze the frame-publishing pipeline.
+        """
         with self._lock:
             if self._current_file:
                 self._current_file.flush()
-                os.fsync(self._current_file.fileno())
 
     def close(self):
         """Close the writer and finalize any open segment."""

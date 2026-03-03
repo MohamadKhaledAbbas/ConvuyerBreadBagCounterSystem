@@ -941,7 +941,7 @@ class ConveyorCounterApp:
         Check if snapshot is requested and capture if so.
 
         On-demand snapshot capture:
-        1. Check snapshot_requested flag in database
+        1. Check snapshot_requested flag in database (throttled to every 5 frames)
         2. If "1", capture frame and write to disk
         3. Set flag back to "0" immediately
 
@@ -954,8 +954,14 @@ class ConveyorCounterApp:
             annotated_frame: Frame with detection overlays (may be same as frame in headless mode)
         """
         try:
-            # Check if snapshot is requested
+            # Check if snapshot is requested — throttle DB reads to every 5th
+            # frame (~5 Hz at 25 fps).  A snapshot request is a rare, user-
+            # initiated event; sub-200ms latency is fine.  This avoids a
+            # synchronous SQLite SELECT on every single frame.
             if self._db is None:
+                return
+
+            if self._frame_count % 5 != 0:
                 return
 
             requested = self._db.get_config(snapshot_requested_key, "0")
