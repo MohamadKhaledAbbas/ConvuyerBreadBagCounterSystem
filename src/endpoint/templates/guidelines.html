@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>تعليمات التشغيل</title>
+    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --bg-deep: #0f172a;
+            --glass-bg: rgba(30, 41, 59, 0.7);
+            --glass-border: rgba(255, 255, 255, 0.08);
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --accent-primary: #38bdf8;
+            --accent-success: #2dd4bf;
+            --accent-warning: #fbbf24;
+            --accent-danger: #f87171;
+            --accent-purple: #a78bfa;
+            --accent-orange: #fb923c;
+            --radius-lg: 16px;
+            --radius-md: 12px;
+            --radius-sm: 8px;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Tajawal', 'Inter', system-ui, sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.8;
+        }
+        main {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 2rem 1.5rem;
+        }
+        .back-home {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--accent-primary);
+            text-decoration: none;
+            font-size: 0.9rem;
+            margin-bottom: 1.5rem;
+            transition: color 0.2s;
+        }
+        .back-home:hover { color: var(--accent-success); }
+
+        .page-title {
+            font-size: 1.8rem;
+            font-weight: 800;
+            margin-bottom: 0.5rem;
+        }
+        .page-subtitle {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+            margin-bottom: 2rem;
+        }
+
+        .guide-section {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-lg);
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            backdrop-filter: blur(10px);
+        }
+        .section-header {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 1rem;
+        }
+        .section-icon {
+            width: 42px;
+            height: 42px;
+            border-radius: var(--radius-sm);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+            flex-shrink: 0;
+        }
+        .section-header h2 {
+            font-size: 1.15rem;
+            font-weight: 700;
+        }
+
+        .rule-list {
+            list-style: none;
+            padding: 0;
+        }
+        .rule-list li {
+            padding: 0.6rem 0;
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+            display: flex;
+            align-items: flex-start;
+            gap: 0.6rem;
+            font-size: 0.95rem;
+            color: var(--text-secondary);
+            line-height: 1.7;
+        }
+        .rule-list li:last-child { border-bottom: none; }
+        .rule-list li i {
+            margin-top: 0.35rem;
+            flex-shrink: 0;
+            font-size: 0.75rem;
+        }
+
+        .highlight-box {
+            background: rgba(56, 189, 248, 0.08);
+            border: 1px solid rgba(56, 189, 248, 0.2);
+            border-radius: var(--radius-sm);
+            padding: 1rem 1.25rem;
+            margin-top: 1rem;
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: flex-start;
+            gap: 0.6rem;
+        }
+        .highlight-box.warn {
+            background: rgba(251, 191, 36, 0.08);
+            border-color: rgba(251, 191, 36, 0.2);
+        }
+        .highlight-box i { margin-top: 0.2rem; flex-shrink: 0; }
+
+        .page-footer {
+            text-align: center;
+            padding: 2rem 0 1rem;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+        .page-footer a {
+            color: var(--accent-primary);
+            text-decoration: none;
+        }
+        .page-footer a:hover { color: var(--accent-success); }
+    </style>
+</head>
+<body>
+<main>
+    <a href="/" class="back-home"><i class="fa-solid fa-arrow-right"></i> الرئيسية</a>
+    <div class="page-title"><i class="fa-solid fa-book-open"></i> تعليمات التشغيل</div>
+    <div class="page-subtitle">القواعد والإرشادات التي يجب اتباعها لضمان دقة النظام في عد وتصنيف الربطات</div>
+
+    <!-- Section 0: Quick Summary -->
+    <div class="guide-section" style="border-color:rgba(56,189,248,0.2);">
+        <div class="section-header">
+            <div class="section-icon" style="background:rgba(56,189,248,0.12);color:var(--accent-primary);">
+                <i class="fa-solid fa-list-check"></i>
+            </div>
+            <h2>ملخص سريع</h2>
+        </div>
+        <ul class="rule-list">
+            <li>
+                <i class="fa-solid fa-1" style="color:var(--accent-primary);font-size:0.7rem;"></i>
+                ضع الأكياس من أسفل خط السير مفرودة وواضحة
+            </li>
+            <li>
+                <i class="fa-solid fa-2" style="color:var(--accent-primary);font-size:0.7rem;"></i>
+                لا تحجب الكاميرا أثناء الوضع
+            </li>
+            <li>
+                <i class="fa-solid fa-3" style="color:var(--accent-primary);font-size:0.7rem;"></i>
+                أكمل كل دفعة قبل الانتقال للنوع التالي
+            </li>
+            <li>
+                <i class="fa-solid fa-4" style="color:var(--accent-primary);font-size:0.7rem;"></i>
+                أعد الأكياس التي وقعت إلى بداية خط السير فقط
+            </li>
+        </ul>
+    </div>
+
+    <!-- Section 1: Bag Placement -->
+    <div class="guide-section">
+        <div class="section-header">
+            <div class="section-icon" style="background:rgba(45,212,191,0.12);color:var(--accent-success);">
+                <i class="fa-solid fa-arrow-down-long"></i>
+            </div>
+            <h2>وضع الأكياس على السير</h2>
+        </div>
+        <ul class="rule-list">
+            <li>
+                <i class="fa-solid fa-circle-check" style="color:var(--accent-success);"></i>
+                يجب وضع الأكياس من <strong>بداية السير (الجزء السفلي)</strong> حتى تأخذ المسار الكامل من الأسفل إلى الأعلى
+            </li>
+            <li>
+                <i class="fa-solid fa-circle-check" style="color:var(--accent-success);"></i>
+                الكيس يجب أن يكون <strong>مفرود وواضح الشعار</strong> — الأكياس المقلوبة أو المطوية تُصنّف كمرفوضة
+            </li>
+            <li>
+                <i class="fa-solid fa-circle-xmark" style="color:var(--accent-danger);"></i>
+                <strong>لا تضع أكياس متراكبة</strong> فوق بعضها — كل كيس يجب أن يكون منفصلاً عن الآخر
+            </li>
+        </ul>
+        <div class="highlight-box">
+            <i class="fa-solid fa-lightbulb" style="color:var(--accent-primary);"></i>
+            الكيس الذي لا يصل إلى آخر خط السير لا يتم احتسابه — إذا سقط كيس يجب إعادته إلى بداية خط السير
+        </div>
+    </div>
+
+    <!-- Section 2: Camera & Visibility -->
+    <div class="guide-section">
+        <div class="section-header">
+            <div class="section-icon" style="background:rgba(56,189,248,0.12);color:var(--accent-primary);">
+                <i class="fa-solid fa-video"></i>
+            </div>
+            <h2>الكاميرا ومجال الرؤية</h2>
+        </div>
+        <ul class="rule-list">
+            <li>
+                <i class="fa-solid fa-circle-check" style="color:var(--accent-success);"></i>
+                <strong>لا تحجب الكاميرا</strong> بيدك أو جسمك أثناء وضع الأكياس — الحجب يُفقد النظام تتبع الكيس
+            </li>
+        </ul>
+    </div>
+
+    <!-- Section 4: Fallen / Returned Bags -->
+    <div class="guide-section">
+        <div class="section-header">
+            <div class="section-icon" style="background:rgba(248,113,113,0.12);color:var(--accent-danger);">
+                <i class="fa-solid fa-rotate-left"></i>
+            </div>
+            <h2>الأكياس الساقطة أو المُعادة</h2>
+        </div>
+        <ul class="rule-list">
+            <li>
+                <i class="fa-solid fa-circle-check" style="color:var(--accent-success);"></i>
+                إذا سقط كيس عن خط السير، أعده إلى <strong>بداية خط السير</strong> حتى يبدأ مساره من جديد
+            </li>
+            <li>
+                <i class="fa-solid fa-circle-check" style="color:var(--accent-success);"></i>
+                تأكد أن الكيس المُعاد <strong>غير مقلوب ولا مطوي</strong> قبل وضعه على خط السير
+            </li>
+        </ul>
+    </div>
+
+    <!-- Section 5: Supervisor Notes -->
+    <div class="guide-section">
+        <div class="section-header">
+            <div class="section-icon" style="background:rgba(167,139,250,0.12);color:var(--accent-purple);">
+                <i class="fa-solid fa-user-tie"></i>
+            </div>
+            <h2>ملاحظات للمشرف</h2>
+        </div>
+        <ul class="rule-list">
+            <li>
+                <i class="fa-solid fa-chart-line" style="color:var(--accent-purple);"></i>
+                راجع <strong>تقرير أداء الوردية</strong> في صفحة التحليلات لمتابعة نسب الأكياس المرفوضة والمسارات المفقودة
+            </li>
+            <li>
+                <i class="fa-solid fa-arrow-right-arrow-left" style="color:var(--accent-purple);"></i>
+                تابع قسم <strong>تسلسل الدفعات</strong> — إذا ظهر تكرار تبديل بين نفس النوعين فهذا يعني خلل في ترتيب الإنتاج
+            </li>
+            <li>
+                <i class="fa-solid fa-camera" style="color:var(--accent-purple);"></i>
+                تحقق من <strong>البث المباشر</strong> دورياً للتأكد من أن الكاميرا تعمل بشكل سليم والإضاءة مناسبة
+            </li>
+            <li>
+                <i class="fa-solid fa-rotate" style="color:var(--accent-purple);"></i>
+                إذا ارتفعت نسبة الأكياس المرفوضة، وجّه العمال لضبط وضع الأكياس بحيث يكون الشعار واللون واضحاً
+            </li>
+        </ul>
+    </div>
+
+    <div class="page-footer">
+        <a href="/">الرئيسية</a> &bull; <a href="/analytics">التحليلات</a> &bull; <a href="/counts">الإحصاء اللحظي</a> &bull; <a href="/track-events">سجل المسارات</a>
+    </div>
+</main>
+</body>
+</html>
