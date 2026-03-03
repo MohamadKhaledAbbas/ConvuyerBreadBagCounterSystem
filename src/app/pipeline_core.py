@@ -81,18 +81,30 @@ class PipelineCore:
 
         # ── Evidence ring buffer for lost/invalid track snapshots ────────
         # Stores the last N annotated frames (with UI overlay), sampled
-        # every ~0.5 s.  When a track ends as lost/invalid, ALL frames in
-        # the buffer are saved as a filmstrip for post-mortem review.
+        # every ~0.5 s of VIDEO time.  When a track ends as lost/invalid,
+        # ALL frames in the buffer are saved as a filmstrip for post-mortem
+        # review.
         #
         # Default: 10 frames × 0.5 s = 5.0 s coverage.  This gives ~1 s
         # of context BEFORE the ghost phase starts (ghost timeout = 4 s),
         # so the bag is visible while still actively tracked.
         # Memory cost: 10 × (640×360×3 bytes) ≈ 6.6 MB  (frames are stored
         # at half-resolution to keep it light).
+        #
+        # Sampling is frame-count based (not wall-clock) to keep evidence
+        # frames evenly spaced in VIDEO time even when the pipeline processes
+        # frames faster or slower than real-time.  Using wall-clock time here
+        # caused consecutive evidence frames to jump 3-4 video seconds apart
+        # when the system processed video faster than real-time, making the
+        # on-screen camera clock appear to jump and tracked bags appear to
+        # vanish between evidence frames.
         # ─────────────────────────────────────────────────────────────────
         self._evidence_buffer: deque = deque(maxlen=self._tracking_config.evidence_buffer_size)
-        self._evidence_last_sample_time: float = 0.0
-        self._EVIDENCE_SAMPLE_INTERVAL: float = self._tracking_config.evidence_sample_interval
+        self._evidence_frame_counter: int = 0
+        _target_fps: float = getattr(self._tracking_config, 'target_fps', 25.0)
+        self._evidence_frames_interval: int = max(
+            1, round(_target_fps * self._tracking_config.evidence_sample_interval)
+        )
 
         # Ensure classified ROIs directory exists if saving is enabled
         if self._tracking_config.save_classified_rois:
@@ -135,6 +147,9 @@ class PipelineCore:
         Returns:
             Tuple of (detections, active_tracks, rois_collected)
         """
+        # Count every frame processed for evidence sampling interval tracking
+        self._evidence_frame_counter += 1
+
         # 1. Detection - use native NV12 path when available to avoid conversion overhead
         if (nv12_data is not None
                 and frame_size is not None
@@ -504,8 +519,15 @@ class PipelineCore:
         Store an annotated frame in the evidence ring buffer.
 
         Called by the app layer after each frame is processed and annotated.
-        Frames are sampled at configurable intervals (default 0.5 s) to keep
-        memory usage minimal (~6.6 MB for 10 half-resolution frames).
+        Frames are sampled every ``_evidence_frames_interval`` **video frames**
+        (computed as ``round(target_fps * evidence_sample_interval)``), which
+        guarantees even coverage in video time regardless of whether the
+        pipeline processes frames faster or slower than real-time.
+
+        Using wall-clock time here caused consecutive evidence frames to jump
+        3-4 video seconds apart when processing a recorded video faster than
+        real-time, making the on-screen camera clock appear to jump and tracked
+        bags appear to vanish between evidence frames.
 
         The stored frame is immediately downscaled to 50% to reduce memory
         footprint. When a track is lost/invalid, ALL frames in the buffer
@@ -514,11 +536,10 @@ class PipelineCore:
         Args:
             annotated_frame: BGR frame with all UI overlays drawn
         """
-        now = time.time()
-        if now - self._evidence_last_sample_time < self._EVIDENCE_SAMPLE_INTERVAL:
-            return  # Skip — too soon since last sample
-
-        self._evidence_last_sample_time = now
+        # Sample every N video frames; _evidence_frame_counter is incremented
+        # in process_frame() so it always matches the number of frames seen.
+        if self._evidence_frame_counter % self._evidence_frames_interval != 0:
+            return  # Skip — not yet at the next sample frame
 
         # Downscale immediately to save memory (~640×360 instead of 1280×720)
         h, w = annotated_frame.shape[:2]
