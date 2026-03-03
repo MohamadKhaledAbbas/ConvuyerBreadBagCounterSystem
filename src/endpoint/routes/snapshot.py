@@ -16,12 +16,14 @@ On-Demand Architecture:
 This approach minimizes disk I/O - frames are only written when requested.
 """
 
+import asyncio
 import json
 import os
 import time
 from typing import Optional
 
 from fastapi import APIRouter, Query
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response, HTMLResponse
 
 from src.constants import snapshot_requested_key
@@ -83,15 +85,22 @@ class SnapshotWriter:
             if frame_with_overlay is not None:
                 cv2.imwrite(self._overlay_path, frame_with_overlay, encode_params)
 
-            # Write metadata
+            # Write metadata LAST and atomically (tmp + rename).
+            # The /snapshot endpoint polls meta.timestamp to detect a fresh
+            # capture.  If we wrote the meta file non-atomically, the reader
+            # could see a truncated/empty JSON during the write, causing a
+            # parse error and falling back to the stale cached frame.
             meta = {
                 "frame_number": frame_number,
                 "timestamp": time.time(),
                 "width": frame.shape[1],
                 "height": frame.shape[0]
             }
-            with open(self._meta_path, 'w') as f:
+            tmp_meta = self._meta_path + ".tmp"
+            with open(tmp_meta, 'w') as f:
                 json.dump(meta, f)
+                f.flush()
+            os.replace(tmp_meta, self._meta_path)
 
             return True
 
@@ -193,27 +202,32 @@ async def snapshot(
         JPEG image response or 503 if capture failed
     """
     # Get current snapshot timestamp before requesting new one
-    old_timestamp = _get_snapshot_timestamp()
+    old_timestamp = await run_in_threadpool(_get_snapshot_timestamp)
 
-    # Request new snapshot
-    if not _request_snapshot():
+    # Request new snapshot (DB write — offload to thread pool)
+    flag_set = await run_in_threadpool(_request_snapshot)
+    if not flag_set:
         return Response(
             content="Failed to request snapshot - database error",
             status_code=500,
             media_type="text/plain"
         )
 
-    # Wait for new snapshot to be written
-    start_time = time.time()
-    while time.time() - start_time < timeout:
-        new_timestamp = _get_snapshot_timestamp()
+    # Poll for new snapshot using asyncio.sleep so the event loop stays alive.
+    # Previous implementation used blocking time.sleep() which froze the
+    # entire FastAPI server for up to `timeout` seconds — no other endpoint
+    # could be served, and on single-threaded uvicorn (RDK) this caused the
+    # response to always be the stale cached frame.
+    start_time = time.monotonic()
+    while time.monotonic() - start_time < timeout:
+        new_timestamp = await run_in_threadpool(_get_snapshot_timestamp)
         if new_timestamp > old_timestamp:
             # New snapshot available
             break
-        time.sleep(0.05)  # Poll every 50ms
+        await asyncio.sleep(0.05)  # Non-blocking 50ms yield
 
-    # Read the snapshot
-    jpeg_bytes, meta = _read_snapshot(overlay=overlay)
+    # Read the snapshot (blocking file I/O — offload)
+    jpeg_bytes, meta = await run_in_threadpool(_read_snapshot, overlay)
 
     if jpeg_bytes is None:
         return Response(
@@ -244,7 +258,7 @@ async def snapshot(
 @router.get("/snapshot/info")
 async def snapshot_info() -> dict:
     """Get information about the current snapshot."""
-    _, meta = _read_snapshot()
+    _, meta = await run_in_threadpool(_read_snapshot)
 
     if not meta:
         return {
@@ -274,37 +288,33 @@ async def get_background_frame() -> Response:
     Returns the background_frame.jpg from the snapshot directory.
     This is a fixed reference image showing the camera view without any bags.
     """
-    background_path = os.path.join(SNAPSHOT_DIR, "background_frame.jpg")
+    def _read_background() -> tuple:
+        background_path = os.path.join(SNAPSHOT_DIR, "background_frame.jpg")
+        if not os.path.exists(background_path):
+            background_path = SNAPSHOT_RAW_PATH
+        if not os.path.exists(background_path):
+            return None, None
+        try:
+            with open(background_path, "rb") as f:
+                return f.read(), None
+        except Exception as e:
+            return None, e
 
-    if not os.path.exists(background_path):
-        # Fallback to latest_raw.jpg if background_frame doesn't exist
-        background_path = SNAPSHOT_RAW_PATH
+    image_data, err = await run_in_threadpool(_read_background)
 
-    if not os.path.exists(background_path):
-        return Response(
-            content=b"",
-            status_code=404,
-            media_type="text/plain"
-        )
+    if image_data is None:
+        if err:
+            logger.error(f"[Snapshot] Failed to read background frame: {err}")
+            return Response(content=b"", status_code=500, media_type="text/plain")
+        return Response(content=b"", status_code=404, media_type="text/plain")
 
-    try:
-        with open(background_path, "rb") as f:
-            image_data = f.read()
-
-        return Response(
-            content=image_data,
-            media_type="image/jpeg",
-            headers={
-                "Cache-Control": "public, max-age=3600",  # Cache for 1 hour
-            }
-        )
-    except Exception as e:
-        logger.error(f"[Snapshot] Failed to read background frame: {e}")
-        return Response(
-            content=b"",
-            status_code=500,
-            media_type="text/plain"
-        )
+    return Response(
+        content=image_data,
+        media_type="image/jpeg",
+        headers={
+            "Cache-Control": "public, max-age=3600",  # Cache for 1 hour
+        }
+    )
 
 
 @router.get("/snapshot/view", response_class=HTMLResponse)
