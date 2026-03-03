@@ -93,6 +93,32 @@ def save_processor_state(state: ProcessorState, state_file: str) -> bool:
     """
     Save processor state to disk atomically.
 
+    The state file is a **soft crash-recovery checkpoint** whose only purpose
+    is to let the spool processor resume from roughly the right position after
+    an unclean shutdown.  Losing the state file (or getting a slightly stale
+    version) is perfectly safe — the processor will just re-scan the spool
+    directory and restart from the oldest available segment.
+
+    For this reason we deliberately do NOT call ``os.fsync()`` here.  On
+    slow embedded storage (eMMC, SD card, Horizon RDK) ``os.fsync()`` can
+    block for **4 + seconds** when the storage controller is doing garbage
+    collection or wear-levelling.  Because this function is called from the
+    SpoolProcessorNode's frame-publishing thread, that stall freezes the
+    entire H264 → hobot-codec → NV12 → app pipeline:
+
+        os.fsync() stalls 4 s
+            → SpoolProcessor stops publishing H264 frames
+            → hobot-codec stops decoding (no input)
+            → FrameServer receives 0 NV12 frames for 4 s
+            → app's frame_queue.get() loop spins with no frames to consume
+            → 0 Python-level dropped frames logged, 0 queue pressure
+            → wall-clock advances ~4 s between consecutive processed frames
+            → ghost tracks (max_age = 4.0 s) expire on the very next check
+
+    ``f.flush()`` is sufficient: it flushes the Python write buffer to the OS
+    kernel buffer, which is flushed to disk by the kernel's periodic writeback
+    (typically within a few seconds).
+
     Args:
         state: Current processor state
         state_file: Path to state file
@@ -107,12 +133,19 @@ def save_processor_state(state: ProcessorState, state_file: str) -> bool:
         data = asdict(state)
         data['saved_at'] = datetime.now().isoformat()
 
+        t0 = time.monotonic()
         with open(tmp_path, 'w') as f:
             json.dump(data, f, indent=2)
             f.flush()
-            os.fsync(f.fileno())
+            # NOTE: os.fsync() intentionally omitted — see docstring above.
 
         tmp_path.rename(state_path)
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        if elapsed_ms > 100:
+            logger.warning(
+                f"[SpoolUtils] State save took {elapsed_ms:.0f}ms "
+                f"(slow storage?): {state_file}"
+            )
         return True
 
     except Exception as e:
