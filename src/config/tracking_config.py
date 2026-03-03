@@ -638,9 +638,13 @@ class TrackingConfig:
 
     evidence_sample_interval: float = _parse_float_env("EVIDENCE_SAMPLE_INTERVAL", 0.5)
     """
-    Time in seconds between evidence frame samples.
+    Video-time interval in seconds between evidence frame samples.
+    Converted to a frame count as ``round(target_fps * evidence_sample_interval)``
+    so that sampling stays evenly spaced in video time regardless of whether the
+    pipeline processes frames faster or slower than real-time.
     Lower values give denser coverage but more memory/disk usage.
-    Default: 0.5 s → 10 frames covers 5.0 s (ghost timeout + 1 s pre-ghost context).
+    Default: 0.5 s → at 25 FPS, sample every 12 frames; 10 frames covers 5.0 s
+    (ghost timeout + 1 s pre-ghost context).
     """
 
     @property

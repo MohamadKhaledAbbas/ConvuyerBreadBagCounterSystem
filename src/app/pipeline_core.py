@@ -11,6 +11,7 @@ import os
 import threading
 import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import List, Optional, Callable, Tuple
 
@@ -79,20 +80,42 @@ class PipelineCore:
         # Used to infer classification for lost tracks
         self.get_current_batch_type: Optional[Callable[[], Optional[str]]] = None
 
+        # ── Bounded I/O thread pool for background JPEG writes ────────────
+        # Evidence snapshots and classified ROIs are written here instead of
+        # the main processing loop.  2 workers is sufficient for typical
+        # production rates (≤5 lost tracks/second); queued tasks execute
+        # as soon as a worker is free, with no risk of I/O contention from
+        # many simultaneous writes.
+        self._io_executor: ThreadPoolExecutor = ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="pipeline-io"
+        )
+
         # ── Evidence ring buffer for lost/invalid track snapshots ────────
         # Stores the last N annotated frames (with UI overlay), sampled
-        # every ~0.5 s.  When a track ends as lost/invalid, ALL frames in
-        # the buffer are saved as a filmstrip for post-mortem review.
+        # every ~0.5 s of VIDEO time.  When a track ends as lost/invalid,
+        # ALL frames in the buffer are saved as a filmstrip for post-mortem
+        # review.
         #
         # Default: 10 frames × 0.5 s = 5.0 s coverage.  This gives ~1 s
         # of context BEFORE the ghost phase starts (ghost timeout = 4 s),
         # so the bag is visible while still actively tracked.
         # Memory cost: 10 × (640×360×3 bytes) ≈ 6.6 MB  (frames are stored
         # at half-resolution to keep it light).
+        #
+        # Sampling is frame-count based (not wall-clock) to keep evidence
+        # frames evenly spaced in VIDEO time even when the pipeline processes
+        # frames faster or slower than real-time.  Using wall-clock time here
+        # caused consecutive evidence frames to jump 3-4 video seconds apart
+        # when the system processed video faster than real-time, making the
+        # on-screen camera clock appear to jump and tracked bags appear to
+        # vanish between evidence frames.
         # ─────────────────────────────────────────────────────────────────
         self._evidence_buffer: deque = deque(maxlen=self._tracking_config.evidence_buffer_size)
-        self._evidence_last_sample_time: float = 0.0
-        self._EVIDENCE_SAMPLE_INTERVAL: float = self._tracking_config.evidence_sample_interval
+        self._evidence_frame_counter: int = 0
+        _target_fps: float = getattr(self._tracking_config, 'target_fps', 25.0)
+        self._evidence_frames_interval: int = max(
+            1, round(_target_fps * self._tracking_config.evidence_sample_interval)
+        )
 
         # Ensure classified ROIs directory exists if saving is enabled
         if self._tracking_config.save_classified_rois:
@@ -135,6 +158,9 @@ class PipelineCore:
         Returns:
             Tuple of (detections, active_tracks, rois_collected)
         """
+        # Count every frame processed for evidence sampling interval tracking
+        self._evidence_frame_counter += 1
+
         # 1. Detection - use native NV12 path when available to avoid conversion overhead
         if (nv12_data is not None
                 and frame_size is not None
@@ -504,8 +530,15 @@ class PipelineCore:
         Store an annotated frame in the evidence ring buffer.
 
         Called by the app layer after each frame is processed and annotated.
-        Frames are sampled at configurable intervals (default 0.5 s) to keep
-        memory usage minimal (~6.6 MB for 10 half-resolution frames).
+        Frames are sampled every ``_evidence_frames_interval`` **video frames**
+        (computed as ``round(target_fps * evidence_sample_interval)``), which
+        guarantees even coverage in video time regardless of whether the
+        pipeline processes frames faster or slower than real-time.
+
+        Using wall-clock time here caused consecutive evidence frames to jump
+        3-4 video seconds apart when processing a recorded video faster than
+        real-time, making the on-screen camera clock appear to jump and tracked
+        bags appear to vanish between evidence frames.
 
         The stored frame is immediately downscaled to 50% to reduce memory
         footprint. When a track is lost/invalid, ALL frames in the buffer
@@ -514,30 +547,58 @@ class PipelineCore:
         Args:
             annotated_frame: BGR frame with all UI overlays drawn
         """
-        now = time.time()
-        if now - self._evidence_last_sample_time < self._EVIDENCE_SAMPLE_INTERVAL:
-            return  # Skip — too soon since last sample
-
-        self._evidence_last_sample_time = now
+        # Sample every N video frames; _evidence_frame_counter is incremented
+        # in process_frame() so it always matches the number of frames seen.
+        if self._evidence_frame_counter % self._evidence_frames_interval != 0:
+            return  # Skip — not yet at the next sample frame
 
         # Downscale immediately to save memory (~640×360 instead of 1280×720)
         h, w = annotated_frame.shape[:2]
         small = cv2.resize(annotated_frame, (w // 2, h // 2))
         self._evidence_buffer.append(small)
 
+    @staticmethod
+    def _write_jpeg_files(items: List[Tuple[str, np.ndarray]], encode_params: Optional[List[int]] = None) -> None:
+        """
+        Write a list of (filepath, image) pairs as JPEG files.
+
+        Runs in a background I/O thread (via ``_io_executor``) so the main
+        processing loop is never stalled by disk I/O.
+
+        Args:
+            items: List of (destination_path, numpy_image) tuples.
+            encode_params: Optional OpenCV encode parameters (e.g. [cv2.IMWRITE_JPEG_QUALITY, 60]).
+        """
+        for fp, img in items:
+            try:
+                if encode_params:
+                    cv2.imwrite(fp, img, encode_params)
+                else:
+                    cv2.imwrite(fp, img)
+            except Exception as exc:
+                logger.error(f"[PipelineCore] Failed to write JPEG {fp}: {exc}")
+
     def _save_lost_snapshot(self, event: TrackEvent) -> Optional[str]:
         """
         Save ALL annotated evidence frames when a track is lost or invalid.
 
         The evidence ring buffer stores the last N annotated frames (with
-        UI overlays) sampled every ~0.5 s (default: 10 frames = 5.0 s).
-        We save **all** of them so the user can review a filmstrip of
-        keyframes covering the full ghost timeout window plus ~1 s of
+        UI overlays) sampled every ~0.5 s of video time (default: 10 frames
+        = 5.0 s).  We save **all** of them so the user can review a filmstrip
+        of keyframes covering the full ghost timeout window plus ~1 s of
         pre-ghost context.  Frames are ordered oldest → newest.
 
         Each frame is already at 50 % resolution (downscaled on ingestion)
         and is saved as JPEG quality 60 (~15-25 KB per image, ~200 KB total
         for 10 frames).
+
+        The file I/O is offloaded to ``_io_executor`` (bounded 2-worker thread
+        pool) so the main processing loop is never stalled.  On slow embedded
+        storage (eMMC, SD card, NFS) a single ``cv2.imwrite()`` can take
+        100–500 ms; writing 10 files synchronously blocked the main loop for
+        up to 4 s, causing the frame-source queue to overflow, live camera
+        frames to be dropped, and a 3–4 second "clock jump" visible in the
+        factory camera view between consecutive processed frames.
 
         Args:
             event: Track lost/invalid event
@@ -553,13 +614,20 @@ class PipelineCore:
         try:
             timestamp_ms = int(time.time() * 1000)
             encode_params = [cv2.IMWRITE_JPEG_QUALITY, 60]
-            saved_filenames: list[str] = []
+            saved_filenames: List[str] = []
+            # Pair each frame with its destination path.  The frame numpy arrays
+            # are kept alive by this list even after the deque evicts them.
+            frames_to_write: List[Tuple[str, np.ndarray]] = []
 
             for idx, frame in enumerate(self._evidence_buffer):
                 filename = f"lost_T{event.track_id}_{timestamp_ms}_{idx}.jpg"
                 filepath = os.path.join(self._tracking_config.lost_snapshots_dir, filename)
-                cv2.imwrite(filepath, frame, encode_params)
                 saved_filenames.append(filename)
+                frames_to_write.append((filepath, frame))
+
+            # Offload disk writes to the bounded I/O thread pool.  Filenames
+            # are already known, so _log_track_event() can be called immediately.
+            self._io_executor.submit(self._write_jpeg_files, frames_to_write, encode_params)
 
             logger.debug(
                 f"[PipelineCore] Saved {len(saved_filenames)} evidence frames for T{event.track_id}"
@@ -584,13 +652,17 @@ class PipelineCore:
                 track_XXXX_roi_1_quality_YYY.jpg  (second best)
                 ...
 
+        File I/O is offloaded to ``_io_executor`` for the same reason as
+        ``_save_lost_snapshot()``: synchronous writes can stall the main loop
+        on slow embedded storage.
+
         Args:
             track_id: Track identifier
             rois_with_quality: List of (roi, quality_score) tuples, sorted by quality descending
         """
         try:
             timestamp = int(time.time() * 1000)
-            saved_count = 0
+            files_to_write: List[Tuple[str, np.ndarray]] = []
 
             for idx, (roi, quality) in enumerate(rois_with_quality):
                 if roi is None or roi.size == 0:
@@ -599,12 +671,15 @@ class PipelineCore:
                 # Filename includes track_id, roi index (by quality rank), quality score, timestamp
                 filename = f"track_{track_id}_{timestamp}_roi_{idx}_quality_{quality:.1f}.jpg"
                 filepath = os.path.join(self._tracking_config.classified_rois_dir, filename)
+                files_to_write.append((filepath, roi))
 
-                cv2.imwrite(filepath, roi)
-                saved_count += 1
+            if not files_to_write:
+                return
+
+            self._io_executor.submit(self._write_jpeg_files, files_to_write)
 
             logger.debug(
-                f"[PipelineCore] Saved {saved_count} classified ROIs for T{track_id} "
+                f"[PipelineCore] Saved {len(files_to_write)} classified ROIs for T{track_id} "
                 f"to {self._tracking_config.classified_rois_dir}"
             )
 
@@ -838,6 +913,10 @@ class PipelineCore:
 
         # Stop purge thread first
         self._stop_purge_thread()
+
+        # Shut down I/O thread pool — wait for any in-flight JPEG writes to finish
+        # so evidence files are fully flushed before the process exits.
+        self._io_executor.shutdown(wait=True)
 
         if self.classification_worker:
             self.classification_worker.stop(timeout=10.0)

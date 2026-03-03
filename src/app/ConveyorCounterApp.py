@@ -552,20 +552,20 @@ class ConveyorCounterApp:
             )
 
             # Push annotated frame into evidence buffer (already annotated).
-            # Check sampling interval here to avoid 23 unnecessary calls/sec.
+            # Guard uses frame count (not wall clock) to avoid unnecessary calls.
             pc = self._pipeline_core
-            if time.time() - pc._evidence_last_sample_time >= pc._EVIDENCE_SAMPLE_INTERVAL:
+            if pc._evidence_frame_counter % pc._evidence_frames_interval == 0:
                 pc.push_evidence_frame(frame)
         elif self._pipeline_visualizer:
             # Headless mode: annotate a frame ONLY when the evidence buffer
-            # is due to sample (every ~0.5 s).  At 25 FPS that means we
-            # annotate ~2 frames/sec (~8% of frames), the rest are skipped
-            # entirely — negligible CPU overhead.
+            # is due to sample (every N video frames at target_fps).
+            # At 25 FPS with a 0.5 s interval that means every 12 frames
+            # (~2 frames/sec, ~8% of frames) — negligible CPU overhead.
             #
             # annotate_frame() copies the frame internally, so we pass the
             # original without an extra .copy() to avoid a double-allocation.
             pc = self._pipeline_core
-            if time.time() - pc._evidence_last_sample_time >= pc._EVIDENCE_SAMPLE_INTERVAL:
+            if pc._evidence_frame_counter % pc._evidence_frames_interval == 0:
                 ghost_tracks = None
                 if hasattr(pc, 'tracker') and pc.tracker:
                     ghost_tracks = pc.tracker.get_ghost_tracks_for_visualization()
