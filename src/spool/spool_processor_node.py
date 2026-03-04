@@ -249,11 +249,19 @@ class SpoolProcessorNode(Node if is_rdk_platform() else object):
         """Main processing loop."""
         logger.info("[SpoolProcessor] Processing started")
 
-        # Determine starting position
-        start_segment = None
+        # ── Persistent cursor: only process segments STRICTLY AFTER this ──
+        # This is the key fix: prevents re-processing a segment that was
+        # already read+deleted in a previous batch when the cached segment
+        # list still contains the old number.
+        _last_processed_segment = -1
+
+        # Determine starting position from persisted state
         if self.state.last_segment >= 0:
-            start_segment = self.state.last_segment
-            logger.info(f"[SpoolProcessor] Resuming from segment {start_segment}")
+            _last_processed_segment = self.state.last_segment
+            logger.info(
+                f"[SpoolProcessor] Resuming: cursor after segment "
+                f"{_last_processed_segment}"
+            )
 
         # For REALTIME mode, track first frame timestamp
         first_frame_timestamp_ns = None
@@ -264,9 +272,13 @@ class SpoolProcessorNode(Node if is_rdk_platform() else object):
         # Cache the minimum interval to avoid per-frame division
         fast_min_interval_s = self.config.min_frame_interval_ms / 1000.0
 
+        # --- Diagnostic counters ---
+        _diag_batch_num = 0
+
         while not self._stop_event.is_set():
             try:
-                # Get available segments
+                # Get available segments (fresh scan — cache was invalidated
+                # after the last delete, or has naturally expired).
                 segments = self.reader.list_segments()
 
                 if not segments:
@@ -274,21 +286,36 @@ class SpoolProcessorNode(Node if is_rdk_platform() else object):
                     self._stop_event.wait(1.0)
                     continue
 
-                # Find starting point
-                if start_segment is not None:
-                    segments = [s for s in segments if s >= start_segment]
-                    start_segment = None
+                # ── FIX: always filter out already-processed segments ──
+                segments = [s for s in segments if s > _last_processed_segment]
+
 
                 if not segments:
                     self._stop_event.wait(1.0)
                     continue
 
+                _diag_batch_num += 1
+                logger.debug(
+                    f"[SpoolProcessor] BATCH #{_diag_batch_num} | "
+                    f"count={len(segments)} | "
+                    f"range={segments[0]}..{segments[-1]} | "
+                    f"cursor_after={_last_processed_segment}"
+                )
+
                 # Process each segment
-                for segment_num in segments:
+                for seg_idx, segment_num in enumerate(segments):
                     if self._stop_event.is_set():
                         break
 
-                    logger.debug(f"[SpoolProcessor] Processing segment {segment_num}")
+                    # ── Double-check guard (belt-and-suspenders) ──
+                    if segment_num <= _last_processed_segment:
+                        logger.warning(
+                            f"[SpoolProcessor] SEG_SKIP_DUPLICATE | "
+                            f"seg={segment_num} <= cursor={_last_processed_segment}"
+                        )
+                        continue
+
+                    seg_t0 = time.monotonic()
 
                     frame_count = 0
                     for record in self.reader.read_single_segment(segment_num):
@@ -343,6 +370,12 @@ class SpoolProcessorNode(Node if is_rdk_platform() else object):
                             save_processor_state(self.state, self.config.state_file)
                             self._last_state_save = now_mono
 
+                    seg_elapsed_ms = (time.monotonic() - seg_t0) * 1000
+
+
+                    # ── Advance cursor BEFORE delete ──
+                    _last_processed_segment = segment_num
+
                     # Segment complete
                     self.state.complete_segment(segment_num)
                     self._segments_processed += 1
@@ -350,6 +383,10 @@ class SpoolProcessorNode(Node if is_rdk_platform() else object):
                     # Delete processed segment immediately if configured
                     if self.retention and self.config.delete_processed_segments:
                         self.retention.delete_processed_immediately(segment_num)
+                        # Invalidate cached segment list so the next
+                        # list_segments() call does a fresh disk scan and
+                        # won't return this just-deleted segment.
+                        self.reader.invalidate_cache()
                     elif self.retention:
                         # Otherwise just mark for later cleanup
                         self.retention.mark_processed(segment_num)
@@ -367,6 +404,7 @@ class SpoolProcessorNode(Node if is_rdk_platform() else object):
                     save_processor_state(self.state, self.config.state_file)
                     self._last_state_save = time.monotonic()
 
+
                 # Brief wait before checking for new segments
                 self._stop_event.wait(0.5)
 
@@ -374,7 +412,10 @@ class SpoolProcessorNode(Node if is_rdk_platform() else object):
                 logger.error(f"[SpoolProcessor] Processing error: {e}")
                 self._stop_event.wait(1.0)
 
-        logger.info("[SpoolProcessor] Processing stopped")
+        logger.info(
+            f"[SpoolProcessor] Processing stopped | "
+            f"batches={_diag_batch_num}"
+        )
 
     def start(self):
         """Start processing in background thread."""

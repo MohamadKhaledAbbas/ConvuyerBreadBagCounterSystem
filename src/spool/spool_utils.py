@@ -149,7 +149,7 @@ def save_processor_state(state: ProcessorState, state_file: str) -> bool:
         return True
 
     except Exception as e:
-        logger.error(f"[SpoolUtils] Error saving state: {e}")
+        logger.error(f"[SpoolUtils] STATE_IO phase=save_error file={state_file} err={e}")
         return False
 
 
@@ -165,8 +165,10 @@ def load_processor_state(state_file: str) -> Optional[ProcessorState]:
     """
     try:
         state_path = Path(state_file)
+        t0 = time.monotonic()
 
         if not state_path.exists():
+            logger.info(f"[SpoolUtils] STATE_IO phase=load_miss file={state_file}")
             return None
 
         with open(state_path, 'r') as f:
@@ -182,13 +184,14 @@ def load_processor_state(state_file: str) -> Optional[ProcessorState]:
         )
 
         logger.info(
-            f"[SpoolUtils] Loaded state: segment={state.last_segment}, "
-            f"frame={state.last_frame_index}"
+            f"[SpoolUtils] STATE_IO phase=load_done file={state_file} "
+            f"seg={state.last_segment} frame={state.last_frame_index} "
+            f"elapsed_ms={(time.monotonic() - t0) * 1000:.1f}"
         )
         return state
 
     except Exception as e:
-        logger.error(f"[SpoolUtils] Error loading state: {e}")
+        logger.error(f"[SpoolUtils] STATE_IO phase=load_error file={state_file} err={e}")
         return None
 
 

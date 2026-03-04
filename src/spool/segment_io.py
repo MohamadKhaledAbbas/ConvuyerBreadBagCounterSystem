@@ -304,7 +304,7 @@ class SegmentWriter:
                 # Non-fatal — the segment itself is already finalized
 
         self.segments_completed += 1
-        logger.info(
+        logger.debug(
             f"[SegmentWriter] Closed segment {self._current_segment}: "
             f"{self._current_metadata.frame_count} frames, "
             f"{self._current_metadata.bytes_written} bytes"
@@ -436,6 +436,8 @@ class SegmentReader:
         self._last_completed_segment: int = -1
         self._segment_lock = threading.Lock()
 
+
+
     def list_segments(self, use_cache: bool = True) -> List[int]:
         """
         List available segment numbers, sorted ascending.
@@ -448,8 +450,10 @@ class SegmentReader:
         """
         with self._cache_lock:
             now = time.time()
-            if use_cache and (now - self._cache_time) < self.cache_refresh_interval:
-                return self._segment_cache.copy()
+            cache_age = now - self._cache_time
+            if use_cache and cache_age < self.cache_refresh_interval:
+                cached = self._segment_cache.copy()
+                return cached
 
             segments = []
             try:
@@ -474,6 +478,11 @@ class SegmentReader:
                 logger.error(f"[SegmentReader] Error listing segments: {e}")
 
             return segments
+
+    def invalidate_cache(self):
+        """Force next list_segments() call to do a fresh disk scan."""
+        with self._cache_lock:
+            self._cache_time = 0.0
 
     def get_oldest_segment(self) -> Optional[int]:
         """Get the oldest available segment number."""
@@ -519,8 +528,11 @@ class SegmentReader:
             FrameRecord objects
         """
         path = self.spool_dir / f"seg_{segment_num:06d}.bin"
+        read_t0 = time.monotonic()
         if not path.exists():
-            logger.warning(f"[SegmentReader] Segment {segment_num} not found")
+            logger.warning(
+                f"[SegmentReader] SEG_READ phase=miss seg={segment_num} path={path}"
+            )
             return
 
         try:
@@ -561,7 +573,10 @@ class SegmentReader:
                         continue
 
         except Exception as e:
-            logger.error(f"[SegmentReader] Error reading segment {segment_num}: {e}")
+            logger.error(
+                f"[SegmentReader] SEG_READ phase=error seg={segment_num} "
+                f"path={path} elapsed_ms={(time.monotonic() - read_t0) * 1000:.1f} err={e}"
+            )
 
     def read_single_segment(self, segment_num: int) -> Iterator[FrameRecord]:
         """
@@ -571,11 +586,9 @@ class SegmentReader:
         """
         with self._segment_lock:
             self._current_segment = segment_num
-        
-        logger.debug(f"[SegmentReader] Reading segment {segment_num}")
-        
+
         yield from self.read_segment(segment_num)
-        
+
         with self._segment_lock:
             self._last_completed_segment = segment_num
 

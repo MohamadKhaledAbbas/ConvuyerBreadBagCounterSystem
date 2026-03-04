@@ -78,7 +78,6 @@ class RetentionPolicy:
         """
         with self._processed_lock:
             self._processed_segments.add(segment_num)
-            logger.debug(f"[Retention] Marked segment {segment_num} as processed")
 
     def delete_processed_immediately(self, segment_num: int) -> bool:
         """
@@ -94,9 +93,13 @@ class RetentionPolicy:
             True if segment was deleted, False otherwise
         """
         segment_path = self.spool_dir / f"seg_{segment_num:06d}.bin"
+        t0 = time.monotonic()
 
         if not segment_path.exists():
-            logger.debug(f"[Retention] Segment {segment_num} already deleted")
+            logger.warning(
+                f"[Retention] SEG_DELETE phase=immediate_missing seg={segment_num} "
+                f"path={segment_path} elapsed_ms={(time.monotonic() - t0) * 1000:.1f}"
+            )
             return False
 
         try:
@@ -116,11 +119,18 @@ class RetentionPolicy:
             self.total_deleted += 1
             self.bytes_freed += size
 
-            logger.info(f"[Retention] Deleted processed segment {segment_num} ({size / 1024:.1f}KB)")
+            logger.debug(
+                f"[Retention] SEG_DELETE phase=immediate_done seg={segment_num} "
+                f"size_kb={size / 1024:.1f} elapsed_ms={(time.monotonic() - t0) * 1000:.1f} "
+                f"deleted_total={self.total_deleted}"
+            )
             return True
 
         except OSError as e:
-            logger.error(f"[Retention] Error deleting segment {segment_num}: {e}")
+            logger.error(
+                f"[Retention] SEG_DELETE phase=immediate_error seg={segment_num} "
+                f"path={segment_path} elapsed_ms={(time.monotonic() - t0) * 1000:.1f} err={e}"
+            )
             return False
 
     def is_processed(self, segment_num: int) -> bool:
@@ -136,6 +146,7 @@ class RetentionPolicy:
             List of (segment_num, path, size, mtime) tuples, sorted oldest first
         """
         segments = []
+        t0 = time.monotonic()
 
         try:
             for entry in os.scandir(self.spool_dir):
@@ -176,6 +187,7 @@ class RetentionPolicy:
             path: Path to segment file
         """
         deleted_size = 0
+        t0 = time.monotonic()
 
         try:
             # Delete main segment file
@@ -195,10 +207,16 @@ class RetentionPolicy:
             self.total_deleted += 1
             self.bytes_freed += deleted_size
 
-            logger.info(f"[Retention] Deleted segment {segment_num} ({deleted_size} bytes)")
+            logger.warning(
+                f"[Retention] SEG_DELETE phase=bg_done seg={segment_num} "
+                f"size_bytes={deleted_size} elapsed_ms={(time.monotonic() - t0) * 1000:.1f}"
+            )
 
         except OSError as e:
-            logger.error(f"[Retention] Error deleting segment {segment_num}: {e}")
+            logger.error(
+                f"[Retention] SEG_DELETE phase=bg_error seg={segment_num} "
+                f"path={path} elapsed_ms={(time.monotonic() - t0) * 1000:.1f} err={e}"
+            )
 
     def _get_total_storage(self, segments: List[tuple]) -> int:
         """Calculate total storage used by segments."""
@@ -212,10 +230,12 @@ class RetentionPolicy:
             Number of segments deleted
         """
         self.last_check_time = time.time()
+        cycle_t0 = time.monotonic()
         segments = self._list_segment_files()
 
         if not segments:
             return 0
+
 
         deleted_count = 0
         now = time.time()
@@ -242,7 +262,6 @@ class RetentionPolicy:
             # Check processing policy
             if self.config.only_delete_processed:
                 if not self.is_processed(segment_num):
-                    logger.debug(f"[Retention] Skipping unprocessed segment {segment_num}")
                     continue
 
             self._delete_segment(segment_num, path)
@@ -255,7 +274,6 @@ class RetentionPolicy:
         if total_storage > self.config.max_storage_bytes:
             can_delete_count = max(0, len(segments) - min_keep)
             deletion_candidates = segments[:can_delete_count]
-
             for segment_num, path, size, mtime in deletion_candidates:
                 if total_storage <= self.config.max_storage_bytes:
                     break
@@ -271,8 +289,9 @@ class RetentionPolicy:
 
         if deleted_count > 0:
             logger.info(
-                f"[Retention] Cleanup complete: {deleted_count} deleted, "
-                f"{self._get_total_storage(self._list_segment_files()) / (1024 ** 3):.2f}GB used"
+                f"[Retention] CLEANUP_CYCLE phase=done deleted={deleted_count} "
+                f"used_gb={self._get_total_storage(self._list_segment_files()) / (1024 ** 3):.2f} "
+                f"elapsed_ms={(time.monotonic() - cycle_t0) * 1000:.1f}"
             )
 
         return deleted_count

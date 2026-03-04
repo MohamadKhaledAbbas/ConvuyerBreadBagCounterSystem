@@ -24,7 +24,9 @@ share/python-wheels/
 MANIFEST
 
 # Virtual Environment
-venv/
+.venv/
+output/
+helper_scripts/
 env/
 ENV/
 env.bak/
@@ -59,6 +61,7 @@ logs/
 .coverage
 htmlcov/
 .tox/
+**/*test*
 
 # Model files (if large)
 *.h5
