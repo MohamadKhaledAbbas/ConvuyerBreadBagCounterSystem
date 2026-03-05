@@ -197,6 +197,89 @@ async def lost_tracks_page(
         raise HTTPException(500, str(e))
 
 
+@router.get("/lost-tracks/browse", response_class=HTMLResponse)
+async def lost_tracks_browse(
+    request: Request,
+    start_time: Optional[str] = Query(None),
+    end_time: Optional[str] = Query(None),
+    index: int = Query(0, ge=0),
+):
+    """
+    Browse lost track simulations one-by-one with prev/next navigation.
+
+    Renders the track visualization page for the lost track at the given
+    index within the filtered time range, with navigation controls to
+    move between lost tracks without returning to the list page.
+
+    Query params:
+        start_time: ISO datetime start (optional, defaults to last 24h)
+        end_time: ISO datetime end (optional, defaults to now)
+        index: 0-based index into the lost tracks list
+    """
+    templates = get_templates()
+    service = _get_service()
+
+    try:
+        if start_time and end_time:
+            start_dt = service.parse_datetime(start_time)
+            end_dt = service.parse_datetime(end_time)
+            if start_dt >= end_dt:
+                raise HTTPException(422, 'Start time must be before end time')
+        else:
+            start_dt, end_dt = service.get_default_time_range()
+
+        # Get the single event at the requested index + total count
+        events, total_count = service.repo.get_track_events_page(
+            start_dt, end_dt,
+            event_type='track_lost',
+            limit=1,
+            offset=index
+        )
+
+        if not events or total_count == 0:
+            raise HTTPException(404, 'No lost tracks found in this time range')
+
+        if index >= total_count:
+            raise HTTPException(404, f'Index {index} out of range (total: {total_count})')
+
+        event = events[0]
+        animation_data = service.get_track_animation_by_event_id(event['id'])
+        if animation_data is None:
+            raise HTTPException(404, f"Animation data not found for event {event['id']}")
+
+        db = get_db()
+        bag_types = db.get_all_bag_types()
+        name_to_arabic = {bt['name']: bt.get('arabic_name', bt['name']) for bt in bag_types}
+
+        start_time_str = start_dt.strftime('%Y-%m-%dT%H:%M') if start_dt else ''
+        end_time_str = end_dt.strftime('%Y-%m-%dT%H:%M') if end_dt else ''
+
+        context = {
+            'request': request,
+            'track_id': animation_data['track_id'],
+            'data': animation_data,
+            'name_to_arabic': name_to_arabic,
+            'browse': {
+                'index': index,
+                'total': total_count,
+                'has_prev': index > 0,
+                'has_next': index < total_count - 1,
+                'prev_url': f"/lost-tracks/browse?start_time={start_time_str}&end_time={end_time_str}&index={index - 1}" if index > 0 else None,
+                'next_url': f"/lost-tracks/browse?start_time={start_time_str}&end_time={end_time_str}&index={index + 1}" if index < total_count - 1 else None,
+                'back_url': f"/lost-tracks?start_time={start_time_str}&end_time={end_time_str}",
+            },
+        }
+
+        logger.info(f"[LostTracks] Browse {index + 1}/{total_count} (event_id={event['id']}, track_id={event['track_id']})")
+        return templates.TemplateResponse('track_visualization_ar.html', context)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f'[LostTracks] Browse error: {e}', exc_info=True)
+        raise HTTPException(500, str(e))
+
+
 @router.get("/track-events", response_class=HTMLResponse)
 async def track_events_page(
     request: Request,
