@@ -42,16 +42,107 @@
         .legend-item { display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; color: var(--text-secondary); }
         .legend-color { width: 14px; height: 14px; border-radius: 3px; }
         @media (max-width: 1000px) { .container { grid-template-columns: 1fr; } canvas { height: 350px; } }
+
+        /* Browse navigation bar */
+        .browse-nav {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+            padding: 0.75rem 1.25rem;
+            background: var(--glass-bg);
+            border: 1px solid rgba(248, 113, 113, 0.25);
+            border-radius: var(--radius-md);
+        }
+        .browse-nav .browse-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.5rem 1.25rem;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--glass-border);
+            background: rgba(15, 23, 42, 0.5);
+            color: var(--accent-primary);
+            text-decoration: none;
+            font-size: 0.85rem;
+            font-weight: 600;
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+        .browse-nav .browse-btn:hover:not(.disabled) {
+            background: rgba(56, 189, 248, 0.1);
+            border-color: var(--accent-primary);
+        }
+        .browse-nav .browse-btn.disabled {
+            opacity: 0.35;
+            pointer-events: none;
+            cursor: default;
+        }
+        .browse-nav .browse-counter {
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            min-width: 80px;
+            text-align: center;
+            font-family: 'Inter', sans-serif;
+        }
+        .browse-nav .browse-counter .browse-index {
+            color: var(--accent-danger);
+        }
+        .browse-nav .browse-back {
+            margin-right: auto;
+            color: var(--text-secondary);
+            border-color: transparent;
+            background: transparent;
+        }
+        .browse-nav .browse-back:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.05);
+        }
+        .browse-nav .browse-hint {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            position: absolute;
+            bottom: -1.4rem;
+        }
+        @media (max-width: 600px) {
+            .browse-nav { flex-wrap: wrap; gap: 0.5rem; }
+            .browse-nav .browse-back { margin-right: 0; width: 100%; justify-content: center; }
+        }
     </style>
 </head>
 <body>
 <main>
+    {% if browse is defined and browse %}
+    <a href="{{ browse.back_url }}" class="back-home"><i class="fa-solid fa-ghost"></i> العودة للمسارات المفقودة</a>
+    {% else %}
     <a href="/track-events" class="back-home"><i class="fa-solid fa-arrow-right"></i> العودة لسجل المسارات</a>
+    {% endif %}
 
     <div class="page-header">
         <h1><i class="fa-solid fa-film"></i> محاكاة المسار #{{ track_id }}</h1>
         <p class="subtitle">عرض مرئي لرحلة الكيس على خط الإنتاج من نقطة الرصد حتى الخروج</p>
     </div>
+
+    {% if browse is defined and browse %}
+    <!-- Browse Navigation Bar -->
+    <div class="browse-nav" style="position: relative;">
+        <a href="{{ browse.back_url }}" class="browse-btn browse-back">
+            <i class="fa-solid fa-list"></i> القائمة
+        </a>
+        <a href="{{ browse.prev_url or '#' }}" class="browse-btn {{ 'disabled' if not browse.has_prev }}" id="browseNavPrev">
+            <i class="fa-solid fa-chevron-left"></i> السابق
+        </a>
+        <span class="browse-counter">
+            <span class="browse-index">{{ browse.index + 1 }}</span> / {{ browse.total }}
+        </span>
+        <a href="{{ browse.next_url or '#' }}" class="browse-btn {{ 'disabled' if not browse.has_next }}" id="browseNavNext">
+            التالي <i class="fa-solid fa-chevron-right"></i>
+        </a>
+        <span class="browse-hint"><i class="fa-solid fa-keyboard"></i> استخدم ← → للتنقل</span>
+    </div>
+    {% endif %}
 
     <div class="container">
         <div class="canvas-wrapper">
@@ -654,6 +745,26 @@ document.addEventListener('keydown', function(e) {
     else if (e.key === 'ArrowLeft') navigateEvidence(-1);
     else if (e.key === 'ArrowRight') navigateEvidence(1);
 });
+
+/* Browse mode keyboard navigation (← →) */
+(function() {
+    const prevBtn = document.getElementById('browseNavPrev');
+    const nextBtn = document.getElementById('browseNavNext');
+    if (!prevBtn && !nextBtn) return;
+
+    document.addEventListener('keydown', function(e) {
+        /* Skip if evidence modal is open or focus is on an input */
+        const modal = document.getElementById('evidenceModal');
+        if (modal && modal.style.display === 'flex') return;
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+        if (e.key === 'ArrowLeft' && prevBtn && !prevBtn.classList.contains('disabled')) {
+            window.location.href = prevBtn.href;
+        } else if (e.key === 'ArrowRight' && nextBtn && !nextBtn.classList.contains('disabled')) {
+            window.location.href = nextBtn.href;
+        }
+    });
+})();
 </script>
 </body>
 </html>

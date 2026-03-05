@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>المسارات المفقودة</title>
+    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="/static/theme.css">
+    <style>
+        body { direction: ltr; }
+
+        /* Force English numbers */
+        .stat-value, .track-id, .track-meta-value, td, .pagination span {
+            font-family: 'Inter', sans-serif !important;
+            font-feature-settings: "tnum" 1;
+        }
+
+        /* Summary Stats */
+        .lost-stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+        .lost-stat-card {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-md);
+            padding: 1.25rem;
+            text-align: center;
+        }
+        .lost-stat-card .stat-value {
+            font-size: 2.2rem;
+            font-weight: 800;
+            line-height: 1.1;
+        }
+        .lost-stat-card .stat-value.danger { color: var(--accent-danger); }
+        .lost-stat-card .stat-value.warning { color: var(--accent-warning); }
+        .lost-stat-card .stat-value.primary { color: var(--accent-primary); }
+        .lost-stat-card .stat-label {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            margin-top: 0.4rem;
+        }
+
+        /* Filter Bar */
+        .lost-filter-bar {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-md);
+            padding: 1rem 1.5rem;
+            margin-bottom: 2rem;
+            display: flex;
+            gap: 1rem;
+            align-items: flex-end;
+            flex-wrap: wrap;
+        }
+        .lost-filter-bar .field {
+            display: flex;
+            flex-direction: column;
+            gap: 0.3rem;
+        }
+        .lost-filter-bar .field label {
+            direction: rtl;
+            text-align: right;
+        }
+
+        /* Card Grid */
+        .lost-tracks-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        /* Lost Track Card */
+        .lost-card {
+            background: var(--glass-bg);
+            border: 1px solid rgba(248, 113, 113, 0.2);
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+            transition: all 0.3s ease;
+        }
+        .lost-card:hover {
+            border-color: rgba(248, 113, 113, 0.5);
+            transform: translateY(-3px);
+            box-shadow: 0 8px 30px rgba(248, 113, 113, 0.1);
+        }
+
+        /* Snapshot Section */
+        .lost-card-snapshot {
+            position: relative;
+            width: 100%;
+            height: 200px;
+            background: rgba(15, 23, 42, 0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+        .lost-card-snapshot img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .lost-card-snapshot .no-snapshot {
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            text-align: center;
+        }
+        .lost-card-snapshot .no-snapshot i {
+            display: block;
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+            opacity: 0.5;
+        }
+
+        /* Track Header Badge */
+        .lost-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem 1.25rem 0.5rem;
+        }
+        .track-id {
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: var(--accent-danger);
+        }
+        .lost-badge {
+            padding: 0.2rem 0.7rem;
+            border-radius: 20px;
+            font-size: 0.72rem;
+            font-weight: 700;
+            background: rgba(248, 113, 113, 0.15);
+            color: var(--accent-danger);
+        }
+
+        /* Track Info */
+        .lost-card-body {
+            padding: 0.5rem 1.25rem 1.25rem;
+        }
+        .track-meta-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.6rem;
+        }
+        .track-meta-item {
+            display: flex;
+            flex-direction: column;
+            gap: 0.15rem;
+        }
+        .track-meta-label {
+            font-size: 0.72rem;
+            color: var(--text-muted);
+            direction: rtl;
+            text-align: right;
+        }
+        .track-meta-value {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        /* Classification pill */
+        .class-pill {
+            display: inline-block;
+            padding: 0.15rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            background: rgba(167, 139, 250, 0.15);
+            color: var(--accent-purple);
+        }
+        .class-pill.none {
+            background: rgba(100, 116, 139, 0.15);
+            color: var(--text-muted);
+        }
+
+        /* Card Actions */
+        .lost-card-actions {
+            display: flex;
+            gap: 0.5rem;
+            padding: 0 1.25rem 1rem;
+        }
+        .lost-card-actions a {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.4rem;
+            padding: 0.5rem;
+            background: rgba(15, 23, 42, 0.5);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-sm);
+            color: var(--accent-primary);
+            text-decoration: none;
+            font-size: 0.78rem;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+        .lost-card-actions a:hover {
+            background: rgba(56, 189, 248, 0.1);
+            border-color: var(--accent-primary);
+        }
+
+        /* Ghost Recovery Tag */
+        .ghost-tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            padding: 0.15rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.72rem;
+            font-weight: 600;
+            background: rgba(251, 191, 36, 0.15);
+            color: var(--accent-warning);
+        }
+
+        /* Pagination */
+        .pagination {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 1rem;
+            margin-top: 2rem;
+            flex-wrap: wrap;
+        }
+        .pagination a {
+            padding: 0.5rem 0.75rem;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-sm);
+            color: var(--accent-primary);
+            text-decoration: none;
+            font-size: 0.8rem;
+            transition: all 0.2s;
+        }
+        .pagination a:hover {
+            background: rgba(56, 189, 248, 0.1);
+            border-color: var(--accent-primary);
+        }
+        .pagination span {
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+        }
+
+        /* Empty state */
+        .empty-state-lost {
+            text-align: center;
+            padding: 4rem 2rem;
+            color: var(--text-secondary);
+        }
+        .empty-state-lost i {
+            font-size: 3.5rem;
+            margin-bottom: 1rem;
+            display: block;
+            color: var(--accent-success);
+            opacity: 0.6;
+        }
+        .empty-state-lost h3 {
+            font-size: 1.3rem;
+            margin-bottom: 0.5rem;
+            color: var(--text-primary);
+        }
+        .empty-state-lost p {
+            font-size: 0.95rem;
+            max-width: 400px;
+            margin: 0 auto;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .lost-tracks-grid {
+                grid-template-columns: 1fr;
+            }
+            .lost-filter-bar {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <a href="/" class="back-home"><i class="fa-solid fa-home"></i> الرئيسية</a>
+
+    <div class="page-header">
+        <h1><i class="fa-solid fa-ghost"></i> المسارات المفقودة</h1>
+        <p class="subtitle">الربطات التي فُقدت أثناء التتبع — اختفت دون خروج صحيح من خط الإنتاج</p>
+    </div>
+
+    <!-- Stats Summary -->
+    <div class="lost-stats">
+        <div class="lost-stat-card">
+            <div class="stat-value danger">{{ stats.lost_count }}</div>
+            <div class="stat-label">ربطة مفقودة</div>
+        </div>
+        <div class="lost-stat-card">
+            <div class="stat-value warning">{{ stats.with_snapshot }}</div>
+            <div class="stat-label">مع صورة</div>
+        </div>
+        <div class="lost-stat-card">
+            <div class="stat-value primary">{{ "%.1f"|format(stats.avg_duration) }}s</div>
+            <div class="stat-label">متوسط المدة</div>
+        </div>
+        <div class="lost-stat-card">
+            <div class="stat-value primary">{{ "%.0f"|format(stats.avg_hits) }}</div>
+            <div class="stat-label">متوسط الالتقاطات</div>
+        </div>
+    </div>
+
+    <!-- Filter Bar -->
+    <form class="lost-filter-bar" method="get" action="/lost-tracks">
+        <div class="field">
+            <label for="start_time"><i class="fa-solid fa-calendar"></i> من تاريخ</label>
+            <input type="datetime-local" id="start_time" name="start_time"
+                   value="{{ start_time_str }}"
+                   style="font-family: 'Inter', sans-serif;">
+        </div>
+        <div class="field">
+            <label for="end_time">إلى تاريخ</label>
+            <input type="datetime-local" id="end_time" name="end_time"
+                   value="{{ end_time_str }}"
+                   style="font-family: 'Inter', sans-serif;">
+        </div>
+        <button type="submit" class="btn btn-primary"><i class="fa-solid fa-filter"></i> تصفية</button>
+        <a href="/lost-tracks" class="btn btn-secondary"><i class="fa-solid fa-rotate"></i> إعادة تعيين</a>
+    </form>
+
+    {% if events|length > 0 %}
+    <!-- Browse All Simulations -->
+    <div style="text-align: center; margin-bottom: 2rem;">
+        <a href="/lost-tracks/browse?start_time={{ start_time_str }}&end_time={{ end_time_str }}"
+           class="btn btn-primary" style="text-decoration: none; font-size: 1rem; padding: 0.75rem 2rem; gap: 0.5rem; display: inline-flex; align-items: center;">
+            <i class="fa-solid fa-play-circle"></i> تصفح جميع المحاكاة ({{ stats.lost_count }})
+        </a>
+        <p style="color: var(--text-muted); font-size: 0.8rem; margin-top: 0.5rem;">
+            تصفح محاكاة كل ربطة مفقودة واحدة تلو الأخرى بدون انقطاع
+        </p>
+    </div>
+
+    <!-- Lost Track Cards -->
+    <div class="lost-tracks-grid">
+        {% for event in events %}
+        <div class="lost-card">
+            <!-- Snapshot -->
+            <div class="lost-card-snapshot">
+                {% if event._snapshot_paths and event._snapshot_paths|length > 0 %}
+                    <img src="/track-events/snapshot/{{ event._snapshot_paths[0].split('/')[-1] }}"
+                         alt="Lost Track T{{ event.track_id }}"
+                         onerror="this.style.display='none';this.nextElementSibling.style.display='';">
+                    <div class="no-snapshot" style="display:none;">
+                        <i class="fa-solid fa-image-slash"></i>
+                        الصورة غير متاحة
+                    </div>>
+                {% else %}
+                    <div class="no-snapshot">
+                        <i class="fa-solid fa-camera-slash"></i>
+                        لا توجد صورة
+                    </div>
+                {% endif %}
+            </div>
+
+            <!-- Header -->
+            <div class="lost-card-header">
+                <span class="track-id">T{{ event.track_id }}</span>
+                <span class="lost-badge"><i class="fa-solid fa-ghost"></i> مفقود</span>
+            </div>
+
+            <!-- Body -->
+            <div class="lost-card-body">
+                <div class="track-meta-grid">
+                    <div class="track-meta-item">
+                        <span class="track-meta-label">الوقت</span>
+                        <span class="track-meta-value">{{ event.timestamp[11:19] if event.timestamp else '—' }}</span>
+                    </div>
+                    <div class="track-meta-item">
+                        <span class="track-meta-label">المدة</span>
+                        <span class="track-meta-value">{{ "%.1f"|format(event.duration_seconds) if event.duration_seconds else '—' }}s</span>
+                    </div>
+                    <div class="track-meta-item">
+                        <span class="track-meta-label">الالتقاطات</span>
+                        <span class="track-meta-value">{{ event.total_hits if event.total_hits else '—' }}</span>
+                    </div>
+                    <div class="track-meta-item">
+                        <span class="track-meta-label">المسافة</span>
+                        <span class="track-meta-value">{{ "%.0f"|format(event.distance_pixels) if event.distance_pixels else '—' }}px</span>
+                    </div>
+                    <div class="track-meta-item">
+                        <span class="track-meta-label">التصنيف</span>
+                        <span class="track-meta-value">
+                            {% if event.classification %}
+                                <span class="class-pill">{{ name_to_arabic.get(event.classification, event.classification) }}</span>
+                            {% else %}
+                                <span class="class-pill none">بدون تصنيف</span>
+                            {% endif %}
+                        </span>
+                    </div>
+                    <div class="track-meta-item">
+                        <span class="track-meta-label">نوع الدخول</span>
+                        <span class="track-meta-value">{{ event.entry_type or '—' }}</span>
+                    </div>
+                </div>
+                {% if event.ghost_recovery_count and event.ghost_recovery_count > 0 %}
+                <div style="margin-top: 0.6rem;">
+                    <span class="ghost-tag"><i class="fa-solid fa-wand-magic-sparkles"></i> استعادة شبح ×{{ event.ghost_recovery_count }}</span>
+                </div>
+                {% endif %}
+            </div>
+
+            <!-- Actions -->
+            <div class="lost-card-actions">
+                <a href="/track-events/visualize/{{ event.id }}" target="_blank">
+                    <i class="fa-solid fa-play"></i> محاكاة
+                </a>
+                <a href="/track-events?track_search=T{{ event.track_id }}&start_time={{ start_time_str }}&end_time={{ end_time_str }}" target="_blank">
+                    <i class="fa-solid fa-magnifying-glass"></i> تفاصيل
+                </a>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- Pagination -->
+    {% if pagination.total_pages > 1 %}
+    <div class="pagination">
+        {% if pagination.has_prev %}
+        <a href="/lost-tracks?page={{ pagination.page - 1 }}&start_time={{ start_time_str }}&end_time={{ end_time_str }}">
+            <i class="fa-solid fa-chevron-left"></i> السابق
+        </a>
+        {% endif %}
+        <span>صفحة {{ pagination.page }} من {{ pagination.total_pages }} ({{ pagination.total_count }} مفقود)</span>
+        {% if pagination.has_next %}
+        <a href="/lost-tracks?page={{ pagination.page + 1 }}&start_time={{ start_time_str }}&end_time={{ end_time_str }}">
+            التالي <i class="fa-solid fa-chevron-right"></i>
+        </a>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {% else %}
+    <!-- Empty state -->
+    <div class="empty-state-lost">
+        <i class="fa-solid fa-circle-check"></i>
+        <h3>لا توجد مسارات مفقودة</h3>
+        <p>لم يتم رصد أي ربطات مفقودة في الفترة الزمنية المحددة — النظام يعمل بكفاءة عالية!</p>
+    </div>
+    {% endif %}
+
+    <!-- Link to detailed track events -->
+    <div style="text-align: center; margin-top: 2rem; padding: 1.5rem; background: var(--glass-bg); border: 1px solid var(--glass-border); border-radius: var(--radius-md);">
+        <p style="color: var(--text-secondary); margin-bottom: 0.8rem; font-size: 0.9rem;">
+            <i class="fa-solid fa-info-circle"></i>
+            للتحليل المتقدم وعرض جميع المسارات (مكتملة، مفقودة، خاطئة) مع فلاتر تفصيلية:
+        </p>
+        <a href="/track-events?event_type=track_lost" class="btn btn-primary" style="text-decoration: none;">
+            <i class="fa-solid fa-route"></i> سجل المسارات التفصيلي
+        </a>
+    </div>
+</main>
+</body>
+</html>

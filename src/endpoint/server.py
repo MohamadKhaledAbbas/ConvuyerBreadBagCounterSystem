@@ -116,6 +116,20 @@ async def root(request: Request):
     })
 
 
+@app.get("/endpoints", response_class=HTMLResponse)
+async def endpoints_page(request: Request):
+    """
+    API endpoints directory page.
+
+    Lists all available REST API endpoints and pages with descriptions,
+    organized by category. Useful for developers integrating with the system.
+    """
+    templates = get_templates()
+    return templates.TemplateResponse('endpoints_ar.html', {
+        'request': request,
+    })
+
+
 @app.get("/health")
 async def health() -> Dict[str, Any]:
     """

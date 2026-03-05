@@ -39,7 +39,7 @@
         }
 
         /* Force English numbers */
-        #current-time, .api-path, .version {
+        #current-time, .version {
             font-family: 'Inter', sans-serif !important;
             font-feature-settings: "tnum" 1;
         }
@@ -230,6 +230,9 @@
         .nav-card:nth-child(4) { animation-delay: 0.4s; }
         .nav-card:nth-child(5) { animation-delay: 0.5s; }
         .nav-card:nth-child(6) { animation-delay: 0.6s; }
+        .nav-card:nth-child(7) { animation-delay: 0.7s; }
+        .nav-card:nth-child(8) { animation-delay: 0.8s; }
+        .nav-card:nth-child(9) { animation-delay: 0.9s; }
 
         .nav-card::before {
             content: '';
@@ -299,65 +302,6 @@
             transform: translateX(0);
         }
 
-        /* API Section */
-        .api-section {
-            background: var(--glass-bg);
-            border: 1px solid var(--glass-border);
-            border-radius: var(--radius-lg);
-            padding: 2rem;
-            margin-bottom: 3rem;
-            backdrop-filter: blur(10px);
-            animation: fadeIn 1.2s ease-out;
-        }
-        .api-section h2 {
-            font-size: 1.6rem;
-            font-weight: 700;
-            margin-bottom: 1.5rem;
-            color: var(--accent-primary);
-        }
-        .api-list {
-            display: grid;
-            gap: 1rem;
-        }
-        .api-item {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 1rem;
-            background: rgba(15, 23, 42, 0.5);
-            border: 1px solid var(--glass-border);
-            border-radius: var(--radius-sm);
-            transition: all 0.2s;
-            direction: ltr;
-            text-align: left;
-        }
-        .api-item:hover {
-            background: rgba(56, 189, 248, 0.05);
-            border-color: var(--accent-primary);
-        }
-        .api-method {
-            display: inline-block;
-            padding: 0.25rem 0.5rem;
-            border-radius: 4px;
-            font-size: 0.75rem;
-            font-weight: 700;
-            font-family: 'Courier New', monospace;
-        }
-        .api-method.get { background: rgba(45, 212, 191, 0.15); color: var(--accent-success); }
-        .api-path {
-            flex: 1;
-            margin-left: 1rem;
-            font-family: 'Courier New', monospace;
-            font-size: 0.9rem;
-            color: var(--text-secondary);
-        }
-        .api-desc {
-            color: var(--text-muted);
-            font-size: 0.85rem;
-            margin-left: 1rem;
-            direction: rtl;
-        }
-
         /* Footer */
         .footer {
             text-align: center;
@@ -394,8 +338,6 @@
             .header h1 { font-size: 2rem; }
             .nav-grid { grid-template-columns: 1fr; }
             .status-row { flex-direction: column; gap: 1rem; }
-            .api-item { flex-direction: column; align-items: flex-start; }
-            .api-path, .api-desc { margin-left: 0; margin-top: 0.5rem; }
         }
     </style>
 </head>
@@ -491,6 +433,18 @@
                 <i class="fa-solid fa-arrow-right nav-card-arrow"></i>
             </a>
 
+            <!-- Lost Tracks -->
+            <a href="/lost-tracks" class="nav-card">
+                <div class="nav-card-icon danger">
+                    <i class="fa-solid fa-ghost"></i>
+                </div>
+                <div class="nav-card-content">
+                    <h2>المسارات المفقودة</h2>
+                    <p>عرض الربطات التي فُقدت أثناء التتبع مع صور لحظة الفقدان وتفاصيل سريعة.</p>
+                </div>
+                <i class="fa-solid fa-arrow-right nav-card-arrow"></i>
+            </a>
+
             <!-- Track Lifecycle Events -->
             <a href="/track-events" class="nav-card">
                 <div class="nav-card-icon warning">
@@ -515,16 +469,16 @@
                 <i class="fa-solid fa-arrow-right nav-card-arrow"></i>
             </a>
 
-            <!-- API Documentation -->
-            <a href="#api-endpoints" class="nav-card" onclick="event.preventDefault(); document.getElementById('api-endpoints').scrollIntoView({behavior: 'smooth'});">
-                <div class="nav-card-icon danger">
+            <!-- API Documentation (separate page) -->
+            <a href="/endpoints" class="nav-card">
+                <div class="nav-card-icon" style="background: linear-gradient(135deg, var(--accent-danger), var(--accent-orange));">
                     <i class="fa-solid fa-code"></i>
                 </div>
                 <div class="nav-card-content">
                     <h2>واجهة المطورين</h2>
                     <p>نقاط اتصال REST API للربط البرمجي مع الأنظمة الخارجية واستخراج البيانات.</p>
                 </div>
-                <i class="fa-solid fa-arrow-down nav-card-arrow"></i>
+                <i class="fa-solid fa-arrow-right nav-card-arrow"></i>
             </a>
 
             <!-- Guidelines -->
@@ -538,71 +492,6 @@
                 </div>
                 <i class="fa-solid fa-arrow-right nav-card-arrow"></i>
             </a>
-        </div>
-
-        <!-- API Endpoints Section -->
-        <div class="api-section" id="api-endpoints">
-            <h2><i class="fa-solid fa-plug"></i> نقاط الاتصال البرمجية</h2>
-
-            <div class="api-list">
-                <!-- Real-time Counts -->
-                <div class="api-item">
-                    <span class="api-method get">GET</span>
-                    <span class="api-path">/api/counts</span>
-                    <span class="api-desc">بيانات الإحصاء الفوري (مؤكد | قيد المعالجة | مصنّف)</span>
-                </div>
-                <div class="api-item">
-                    <span class="api-method get">GET</span>
-                    <span class="api-path">/api/counts/stream</span>
-                    <span class="api-desc">بث مباشر للتحديثات عبر SSE</span>
-                </div>
-                <div class="api-item">
-                    <span class="api-method get">GET</span>
-                    <span class="api-path">/api/bag-types</span>
-                    <span class="api-desc">قائمة أنواع الأكياس مع الصور والأوزان</span>
-                </div>
-
-                <!-- Track Events -->
-                <div class="api-item">
-                    <span class="api-method get">GET</span>
-                    <span class="api-path">/api/track-events</span>
-                    <span class="api-desc">سجل المسارات مع التصفية والترقيم</span>
-                </div>
-                <div class="api-item">
-                    <span class="api-method get">GET</span>
-                    <span class="api-path">/api/track-events/stats</span>
-                    <span class="api-desc">إحصائيات مفصّلة مع التوزيعات البيانية</span>
-                </div>
-                <div class="api-item">
-                    <span class="api-method get">GET</span>
-                    <span class="api-path">/track-events/{track_id}</span>
-                    <span class="api-desc">تفاصيل رحلة مسار محدد</span>
-                </div>
-                <div class="api-item">
-                    <span class="api-method get">GET</span>
-                    <span class="api-path">/track-events/{track_id}/animation</span>
-                    <span class="api-desc">بيانات المحاكاة البصرية للمسار</span>
-                </div>
-
-                <!-- Snapshot -->
-                <div class="api-item">
-                    <span class="api-method get">GET</span>
-                    <span class="api-path">/snapshot</span>
-                    <span class="api-desc">التقاط صورة من الكاميرا (خام أو مع التوضيحات)</span>
-                </div>
-
-                <!-- Health -->
-                <div class="api-item">
-                    <span class="api-method get">GET</span>
-                    <span class="api-path">/health</span>
-                    <span class="api-desc">فحص حالة الخادم (JSON)</span>
-                </div>
-                <div class="api-item">
-                    <span class="api-method get">GET</span>
-                    <span class="api-path">/health/view</span>
-                    <span class="api-desc">صفحة حالة المنظومة التفصيلية مع تحديث تلقائي</span>
-                </div>
-            </div>
         </div>
 
         <!-- Footer -->
