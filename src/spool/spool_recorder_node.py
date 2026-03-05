@@ -14,9 +14,11 @@ Features:
 - Frame indexing with timestamps
 """
 
+import queue
+import threading
 import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple
 
 from src.spool.h264_nal import extract_sps_pps, is_idr_frame
 from src.spool.segment_io import SegmentWriter, FrameRecord
@@ -51,6 +53,11 @@ class RecorderConfig:
     write_metadata: bool = True
     qos_depth: int = 10
     channel_id: int = 0
+    # Buffer between ROS2 callback thread and writer thread.
+    # Absorbs storage I/O stalls (eMMC GC, log rotation) so the
+    # callback returns immediately and frames are never lost.
+    # ~5 s at 17 fps ≈ 85 frames; 150 gives comfortable margin.
+    write_queue_size: int = 150
 
 
 class SpoolRecorderNode(Node if is_rdk_platform() else object):
@@ -104,6 +111,26 @@ class SpoolRecorderNode(Node if is_rdk_platform() else object):
             self._idr_count = 0
             self._start_time = time.time()
 
+            # ── Write-buffer queue & writer thread ──
+            # The ROS2 callback enqueues (FrameRecord, has_idr) tuples
+            # and returns immediately.  The writer thread drains the
+            # queue and performs the actual disk I/O (segment writes,
+            # rotation, metadata).  This decouples storage stalls
+            # (eMMC GC, log rotation gzip) from frame ingestion.
+            self._write_queue: queue.Queue[Optional[Tuple[FrameRecord, bool]]] = queue.Queue(
+                maxsize=self.config.write_queue_size
+            )
+            self._writer_stop = threading.Event()
+            self._writer_thread = threading.Thread(
+                target=self._writer_loop,
+                name="SpoolRecorderWriter",
+                daemon=True,
+            )
+            self._writer_thread.start()
+
+            # High-watermark tracking for diagnostics
+            self._write_queue_hwm = 0
+
             # Create subscription if message type available
             if HAS_H26X_MSG:
                 self._subscription = self.create_subscription(
@@ -114,7 +141,8 @@ class SpoolRecorderNode(Node if is_rdk_platform() else object):
                 )
                 logger.info(
                     f"[SpoolRecorder] Subscribed to {self.config.topic}, "
-                    f"writing to {self.config.spool_dir}"
+                    f"writing to {self.config.spool_dir}, "
+                    f"write_queue_size={self.config.write_queue_size}"
                 )
             else:
                 self._subscription = None
@@ -124,10 +152,47 @@ class SpoolRecorderNode(Node if is_rdk_platform() else object):
             logger.warning("[SpoolRecorder] Not on RDK platform, recorder disabled")
             self.writer = None
             self._subscription = None
+            self._write_queue = None
+            self._writer_thread = None
+            self._writer_stop = None
+
+    # ─── Writer thread ────────────────────────────────────────────
+
+    def _writer_loop(self):
+        """Background thread that drains the write queue and writes to disk.
+
+        All slow disk I/O (segment writes, rotation, metadata) happens
+        here so the ROS2 callback thread is never blocked.
+        """
+        logger.info("[SpoolRecorder] Writer thread started")
+        while not self._writer_stop.is_set():
+            try:
+                item = self._write_queue.get(timeout=0.5)
+                if item is None:
+                    # Poison pill — shutdown signal
+                    break
+                record, has_idr = item
+
+                # Update SPS/PPS before writing (already cached by callback)
+                self.writer.update_sps_pps(self._cached_sps, self._cached_pps)
+                self.writer.write_frame(record, has_idr=has_idr)
+
+            except queue.Empty:
+                continue
+            except Exception as e:
+                logger.error(f"[SpoolRecorder] Writer thread error: {e}")
+
+        logger.info("[SpoolRecorder] Writer thread stopped")
+
+    # ─── ROS2 callback ──────────────────────────────────────────
 
     def _frame_callback(self, msg):
         """
         Handle incoming H.264 frame.
+
+        This runs in the ROS2 callback thread.  It does ONLY cheap
+        in-memory work (NAL parsing, record construction) and enqueues
+        the result for the writer thread.  No disk I/O here.
 
         Args:
             msg: H26XFrame message
@@ -190,9 +255,6 @@ class SpoolRecorderNode(Node if is_rdk_platform() else object):
                 self._idr_count += 1
                 self._last_idr_time = time.time()
 
-            # Update writer's cached parameters
-            self.writer.update_sps_pps(self._cached_sps, self._cached_pps)
-
             # Create frame record
             record = FrameRecord(
                 index=self._frame_index,
@@ -206,27 +268,47 @@ class SpoolRecorderNode(Node if is_rdk_platform() else object):
                 data=data
             )
 
-            # Write to segment
-            success = self.writer.write_frame(record, has_idr=has_idr)
+            # ── Enqueue for writer thread (non-blocking) ──
+            try:
+                self._write_queue.put_nowait((record, has_idr))
+            except queue.Full:
+                # Queue full → storage I/O stalled too long.
+                # Drop oldest frame and enqueue the new one so we stay
+                # close to real-time.
+                try:
+                    self._write_queue.get_nowait()
+                except queue.Empty:
+                    pass
+                self._write_queue.put_nowait((record, has_idr))
+                logger.warning(
+                    f"[SpoolRecorder] WRITE_QUEUE_FULL — dropped oldest frame "
+                    f"(queue_size={self.config.write_queue_size})"
+                )
 
-            if success:
-                self._frames_received += 1
-                self._frame_index += 1
+            self._frames_received += 1
+            self._frame_index += 1
 
-                # Periodic logging
-                if self._frames_received % 300 == 0:
-                    elapsed = time.time() - self._start_time
-                    fps = self._frames_received / elapsed if elapsed > 0 else 0
-                    logger.info(
-                        format_structured_log(
-                            "recorder_stats",
-                            frame=self._frame_index,
-                            frames_total=self._frames_received,
-                            idr_count=self._idr_count,
-                            fps=fps,
-                            segments=self.writer.segments_completed
-                        )
+            # Track write-queue high watermark
+            qsize = self._write_queue.qsize()
+            if qsize > self._write_queue_hwm:
+                self._write_queue_hwm = qsize
+
+            # Periodic logging
+            if self._frames_received % 300 == 0:
+                elapsed = time.time() - self._start_time
+                fps = self._frames_received / elapsed if elapsed > 0 else 0
+                logger.info(
+                    format_structured_log(
+                        "recorder_stats",
+                        frame=self._frame_index,
+                        frames_total=self._frames_received,
+                        idr_count=self._idr_count,
+                        fps=fps,
+                        segments=self.writer.segments_completed,
+                        write_q=qsize,
+                        write_q_hwm=self._write_queue_hwm,
                     )
+                )
 
         except Exception as e:
             logger.error(f"[SpoolRecorder] Error processing frame: {e}")
@@ -241,11 +323,25 @@ class SpoolRecorderNode(Node if is_rdk_platform() else object):
             'segments_completed': self.writer.segments_completed if self.writer else 0,
             'total_bytes': self.writer.total_bytes_written if self.writer else 0,
             'elapsed_seconds': elapsed,
-            'avg_fps': self._frames_received / elapsed if elapsed > 0 else 0
+            'avg_fps': self._frames_received / elapsed if elapsed > 0 else 0,
+            'write_queue_size': self._write_queue.qsize() if self._write_queue else 0,
+            'write_queue_hwm': self._write_queue_hwm if hasattr(self, '_write_queue_hwm') else 0,
         }
 
     def stop(self):
-        """Stop the recorder and close writer."""
+        """Stop the recorder, drain the write queue, and close writer."""
+        # Signal writer thread to stop
+        if self._writer_stop:
+            self._writer_stop.set()
+        # Send poison pill so writer thread exits get() even if queue is empty
+        if self._write_queue is not None:
+            try:
+                self._write_queue.put_nowait(None)
+            except queue.Full:
+                pass
+        # Wait for writer thread to finish draining
+        if self._writer_thread is not None and self._writer_thread.is_alive():
+            self._writer_thread.join(timeout=5.0)
         if self.writer:
             self.writer.close()
         logger.info("[SpoolRecorder] Stopped")

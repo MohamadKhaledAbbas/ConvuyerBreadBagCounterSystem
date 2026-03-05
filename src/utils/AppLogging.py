@@ -7,6 +7,8 @@ Production-grade logging with:
 - Age-based retention that cleans up old rotated/compressed logs
 - Separate error log file for quick issue triage
 - Compressed (.gz) archived rotated logs to save disk space
+- **Non-blocking** gzip compression via background thread to prevent
+  frame pipeline stalls during log rotation
 - Thread-safe log cleanup
 - Consistent formatters across all handlers
 
@@ -20,6 +22,7 @@ import logging.handlers
 import os
 import shutil
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Dict
@@ -57,8 +60,11 @@ def _namer(name: str) -> str:
     return name + ".gz"
 
 
-def _rotator(source: str, dest: str) -> None:
-    """Compress rotated log file with gzip."""
+def _compress_in_background(source: str, dest: str) -> None:
+    """Background worker: gzip-compress *source* into *dest*, then remove *source*.
+
+    Runs in a daemon thread so it never blocks the logging lock.
+    """
     try:
         with open(source, "rb") as f_in:
             with gzip.open(dest, "wb") as f_out:
@@ -70,6 +76,43 @@ def _rotator(source: str, dest: str) -> None:
             os.rename(source, dest)
         except Exception:
             pass
+
+
+def _rotator(source: str, dest: str) -> None:
+    """Move the rotated log aside and compress it **without blocking**.
+
+    The previous implementation did synchronous gzip compression while
+    holding Python's logging lock.  On slow embedded storage (eMMC /
+    SD card / Horizon RDK) that blocked **every** thread calling
+    ``logger.*()`` for 2-4 seconds — including the SpoolRecorder's
+    ROS2 callback and the SpoolProcessor's frame-publishing thread.
+    The result was a 2-3 second gap in frame timestamps and lost tracks.
+
+    New approach:
+    1. Cheaply ``rename`` *source* → intermediate path (microseconds).
+    2. Spawn a daemon thread to gzip the intermediate → *dest*.
+    The logging lock is released immediately after the rename.
+    """
+    # Use an intermediate name so the logging handler doesn't see the
+    # file while the background thread is still compressing it.
+    intermediate = source + ".rotating"
+    try:
+        os.rename(source, intermediate)
+    except Exception:
+        # If even the rename fails, fall back to synchronous path
+        try:
+            os.rename(source, dest)
+        except Exception:
+            pass
+        return
+
+    t = threading.Thread(
+        target=_compress_in_background,
+        args=(intermediate, dest),
+        name="log-compressor",
+        daemon=True,
+    )
+    t.start()
 
 
 # ============================================================================
@@ -204,6 +247,7 @@ def _cleanup_old_logs(log_dir: str, retention_days: int = LOG_RETENTION_DAYS) ->
         "convuyer_counter*.log",
         "convuyer_counter*.log.*",
         "convuyer_counter*.gz",
+        "convuyer_counter*.rotating",  # intermediate files from non-blocking log rotation
     ]
     try:
         log_path = Path(log_dir)

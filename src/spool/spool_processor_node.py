@@ -272,6 +272,15 @@ class SpoolProcessorNode(Node if is_rdk_platform() else object):
         # Cache the minimum interval to avoid per-frame division
         fast_min_interval_s = self.config.min_frame_interval_ms / 1000.0
 
+        # --- Frame-gap detection ---
+        # Track DTS of the last published frame.  If the gap between
+        # consecutive published DTS values exceeds 2× the expected frame
+        # interval we log a FRAME_GAP event so storage stalls / dropped
+        # segments become clearly visible in the logs.
+        _last_dts_ns: int = 0
+        _expected_interval_ns: int = int(1_000_000_000 / max(self.config.base_fps, 1))
+        _gap_threshold_ns: int = _expected_interval_ns * 3  # 3× to avoid false positives on jitter
+
         # --- Diagnostic counters ---
         _diag_batch_num = 0
 
@@ -364,6 +373,20 @@ class SpoolProcessorNode(Node if is_rdk_platform() else object):
                             self.state.update(segment_num, record.index)
                             frame_count += 1
 
+                            # ── Frame-gap detection ──
+                            dts_ns = record.dts_sec * 1_000_000_000 + record.dts_nsec
+                            if _last_dts_ns > 0 and dts_ns > _last_dts_ns:
+                                gap_ns = dts_ns - _last_dts_ns
+                                if gap_ns > _gap_threshold_ns:
+                                    gap_ms = gap_ns / 1_000_000
+                                    logger.warning(
+                                        f"[SpoolProcessor] FRAME_GAP | "
+                                        f"gap={gap_ms:.0f}ms "
+                                        f"(expected<{_expected_interval_ns / 1_000_000:.0f}ms) | "
+                                        f"seg={segment_num} frame={record.index}"
+                                    )
+                            _last_dts_ns = dts_ns
+
                         # Periodic state save (monotonic clock avoids NTP jumps)
                         now_mono = time.monotonic()
                         if (now_mono - self._last_state_save) >= self.config.state_save_interval:
@@ -406,7 +429,10 @@ class SpoolProcessorNode(Node if is_rdk_platform() else object):
 
 
                 # Brief wait before checking for new segments
-                self._stop_event.wait(0.5)
+                # Keep this short (50ms) to minimize dead time between
+                # segment batches — previously 500ms, which added up to
+                # half a second of no-frame gaps at segment boundaries.
+                self._stop_event.wait(0.05)
 
             except Exception as e:
                 logger.error(f"[SpoolProcessor] Processing error: {e}")
