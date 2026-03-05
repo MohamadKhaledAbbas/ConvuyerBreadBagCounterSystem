@@ -147,7 +147,7 @@ class TrackLifecycleRepository:
         entry_type: Optional[str] = None,
         exit_direction: Optional[str] = None,
         has_classification: Optional[bool] = None,
-        min_distance: Optional[float] = None,
+        min_distance: Optional[float] = 30.0,
         max_distance: Optional[float] = None,
         min_hits: Optional[int] = None,
         max_hits: Optional[int] = None,
