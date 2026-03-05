@@ -7,6 +7,7 @@ Enhanced with:
 - Track animation data endpoint
 """
 
+import json
 import os
 import re
 from typing import Optional
@@ -115,8 +116,6 @@ async def lost_tracks_page(
         page: Page number (1-based)
         page_size: Cards per page (6-96, default 24)
     """
-    import json
-
     templates = get_templates()
     service = _get_service()
 

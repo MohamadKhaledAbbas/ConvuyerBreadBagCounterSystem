@@ -339,7 +339,11 @@
                 {% if event._snapshot_paths and event._snapshot_paths|length > 0 %}
                     <img src="/track-events/snapshot/{{ event._snapshot_paths[0].split('/')[-1] }}"
                          alt="Lost Track T{{ event.track_id }}"
-                         onerror="this.parentElement.innerHTML='<div class=\'no-snapshot\'><i class=\'fa-solid fa-image-slash\'></i>الصورة غير متاحة</div>';">
+                         onerror="this.style.display='none';this.nextElementSibling.style.display='';">
+                    <div class="no-snapshot" style="display:none;">
+                        <i class="fa-solid fa-image-slash"></i>
+                        الصورة غير متاحة
+                    </div>>
                 {% else %}
                     <div class="no-snapshot">
                         <i class="fa-solid fa-camera-slash"></i>
