@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>نقاط الاتصال البرمجية</title>
+    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="/static/theme.css">
+    <style>
+        body { direction: ltr; }
+
+        .api-path, .api-method {
+            font-family: 'Inter', 'Courier New', monospace !important;
+            font-feature-settings: "tnum" 1;
+        }
+
+        /* Category Sections */
+        .api-category {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-lg);
+            padding: 1.5rem 2rem;
+            margin-bottom: 1.5rem;
+            backdrop-filter: blur(10px);
+        }
+        .api-category-header {
+            display: flex;
+            align-items: center;
+            gap: 0.8rem;
+            margin-bottom: 1.2rem;
+            padding-bottom: 0.8rem;
+            border-bottom: 1px solid var(--glass-border);
+        }
+        .api-category-header i {
+            font-size: 1.3rem;
+            width: 36px;
+            height: 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: var(--radius-sm);
+        }
+        .api-category-header h2 {
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            direction: rtl;
+        }
+
+        /* Endpoint Items */
+        .api-list {
+            display: grid;
+            gap: 0.75rem;
+        }
+        .api-item {
+            display: flex;
+            align-items: center;
+            padding: 0.8rem 1rem;
+            background: rgba(15, 23, 42, 0.5);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-sm);
+            transition: all 0.2s;
+            text-decoration: none;
+            color: inherit;
+        }
+        .api-item:hover {
+            background: rgba(56, 189, 248, 0.05);
+            border-color: var(--accent-primary);
+        }
+        .api-method {
+            display: inline-block;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.72rem;
+            font-weight: 700;
+            min-width: 48px;
+            text-align: center;
+            flex-shrink: 0;
+        }
+        .api-method.get { background: rgba(45, 212, 191, 0.15); color: var(--accent-success); }
+        .api-method.post { background: rgba(56, 189, 248, 0.15); color: var(--accent-primary); }
+        .api-method.sse { background: rgba(167, 139, 250, 0.15); color: var(--accent-purple); }
+        .api-method.html { background: rgba(251, 191, 36, 0.15); color: var(--accent-warning); }
+
+        .api-path {
+            flex: 1;
+            margin-left: 0.8rem;
+            font-size: 0.88rem;
+            color: var(--text-secondary);
+        }
+        .api-desc {
+            color: var(--text-muted);
+            font-size: 0.82rem;
+            margin-left: 1rem;
+            direction: rtl;
+            text-align: right;
+            max-width: 340px;
+        }
+        .api-type-tag {
+            padding: 0.15rem 0.4rem;
+            border-radius: 4px;
+            font-size: 0.68rem;
+            font-weight: 600;
+            margin-left: 0.5rem;
+            flex-shrink: 0;
+        }
+        .api-type-tag.json { background: rgba(45, 212, 191, 0.1); color: var(--accent-success); }
+        .api-type-tag.page { background: rgba(251, 191, 36, 0.1); color: var(--accent-warning); }
+        .api-type-tag.stream { background: rgba(167, 139, 250, 0.1); color: var(--accent-purple); }
+        .api-type-tag.image { background: rgba(248, 113, 113, 0.1); color: var(--accent-danger); }
+
+        /* Legend */
+        .legend {
+            display: flex;
+            gap: 1.5rem;
+            flex-wrap: wrap;
+            margin-bottom: 2rem;
+            padding: 1rem 1.5rem;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-md);
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.82rem;
+            color: var(--text-secondary);
+        }
+
+        @media (max-width: 768px) {
+            .api-item {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 0.4rem;
+            }
+            .api-path, .api-desc { margin-left: 0; }
+            .api-desc { text-align: left; direction: ltr; }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <a href="/" class="back-home"><i class="fa-solid fa-home"></i> الرئيسية</a>
+
+    <div class="page-header">
+        <h1><i class="fa-solid fa-plug"></i> نقاط الاتصال البرمجية</h1>
+        <p class="subtitle">جميع واجهات REST API والصفحات المتاحة في المنظومة للربط البرمجي والوصول المباشر</p>
+    </div>
+
+    <!-- Legend -->
+    <div class="legend">
+        <div class="legend-item">
+            <span class="api-type-tag json">JSON</span> بيانات برمجية
+        </div>
+        <div class="legend-item">
+            <span class="api-type-tag page">صفحة</span> واجهة HTML
+        </div>
+        <div class="legend-item">
+            <span class="api-type-tag stream">بث</span> بث مباشر SSE
+        </div>
+        <div class="legend-item">
+            <span class="api-type-tag image">صورة</span> ملف صورة
+        </div>
+    </div>
+
+    <!-- ═══ Pages ═══ -->
+    <div class="api-category">
+        <div class="api-category-header">
+            <i class="fa-solid fa-browser" style="background: rgba(251, 191, 36, 0.15); color: var(--accent-warning);"></i>
+            <h2>الصفحات والواجهات</h2>
+        </div>
+        <div class="api-list">
+            <a href="/" class="api-item">
+                <span class="api-method get">GET</span>
+                <span class="api-path">/</span>
+                <span class="api-type-tag page">صفحة</span>
+                <span class="api-desc">لوحة التحكم الرئيسية</span>
+            </a>
+            <a href="/counts" class="api-item">
+                <span class="api-method get">GET</span>
+                <span class="api-path">/counts</span>
+                <span class="api-type-tag page">صفحة</span>
+                <span class="api-desc">لوحة الإحصاء اللحظي</span>
+            </a>
+            <a href="/analytics" class="api-item">
+                <span class="api-method get">GET</span>
+                <span class="api-path">/analytics</span>
+                <span class="api-type-tag page">صفحة</span>
+                <span class="api-desc">الإحصاءات المسجلة مع تحديد فترة زمنية</span>
+            </a>
+            <a href="/analytics/daily" class="api-item">
+                <span class="api-method get">GET</span>
+                <span class="api-path">/analytics/daily</span>
+                <span class="api-type-tag page">صفحة</span>
+                <span class="api-desc">إحصائيات الوردية اليومية</span>
+            </a>
+            <a href="/lost-tracks" class="api-item">
+                <span class="api-method get">GET</span>
+                <span class="api-path">/lost-tracks</span>
+                <span class="api-type-tag page">صفحة</span>
+                <span class="api-desc">المسارات المفقودة</span>
+            </a>
+            <a href="/track-events" class="api-item">
+                <span class="api-method get">GET</span>
+                <span class="api-path">/track-events</span>
+                <span class="api-type-tag page">صفحة</span>
+                <span class="api-desc">سجل المسارات التفصيلي مع فلاتر متقدمة</span>
+            </a>
+            <a href="/snapshot/view" class="api-item">
+                <span class="api-method get">GET</span>
+                <span class="api-path">/snapshot/view</span>
+                <span class="api-type-tag page">صفحة</span>
+                <span class="api-desc">البث المباشر للكاميرا</span>
+            </a>
+            <a href="/health/view" class="api-item">
+                <span class="api-method get">GET</span>
+                <span class="api-path">/health/view</span>
+                <span class="api-type-tag page">صفحة</span>
+                <span class="api-desc">صفحة حالة المنظومة التفصيلية</span>
+            </a>
+            <a href="/settings/conveyor-roi" class="api-item">
+                <span class="api-method get">GET</span>
+                <span class="api-path">/settings/conveyor-roi</span>
+                <span class="api-type-tag page">صفحة</span>
+                <span class="api-desc">إعدادات منطقة الكشف على السير</span>
+            </a>
+            <a href="/guidelines" class="api-item">
+                <span class="api-method get">GET</span>
+                <span class="api-path">/guidelines</span>
+                <span class="api-type-tag page">صفحة</span>
+                <span class="api-desc">تعليمات التشغيل والإرشادات</span>
+            </a>
+        </div>
+    </div>
+
+    <!-- ═══ Counts API ═══ -->
+    <div class="api-category">
+        <div class="api-category-header">
+            <i class="fa-solid fa-gauge-high" style="background: rgba(45, 212, 191, 0.15); color: var(--accent-success);"></i>
+            <h2>الإحصاء اللحظي</h2>
+        </div>
+        <div class="api-list">
+            <a href="/api/counts" class="api-item" target="_blank">
+                <span class="api-method get">GET</span>
+                <span class="api-path">/api/counts</span>
+                <span class="api-type-tag json">JSON</span>
+                <span class="api-desc">بيانات الإحصاء الفوري (مؤكد | قيد المعالجة | مصنّف)</span>
+            </a>
+            <a href="/api/counts/stream" class="api-item" target="_blank">
+                <span class="api-method sse">SSE</span>
+                <span class="api-path">/api/counts/stream</span>
+                <span class="api-type-tag stream">بث</span>
+                <span class="api-desc">بث مباشر للتحديثات عبر Server-Sent Events</span>
+            </a>
+            <a href="/api/bag-types" class="api-item" target="_blank">
+                <span class="api-method get">GET</span>
+                <span class="api-path">/api/bag-types</span>
+                <span class="api-type-tag json">JSON</span>
+                <span class="api-desc">قائمة أنواع الأكياس مع الصور والأوزان</span>
+            </a>
+        </div>
+    </div>
+
+    <!-- ═══ Track Events API ═══ -->
+    <div class="api-category">
+        <div class="api-category-header">
+            <i class="fa-solid fa-route" style="background: rgba(251, 191, 36, 0.15); color: var(--accent-warning);"></i>
+            <h2>المسارات والأحداث</h2>
+        </div>
+        <div class="api-list">
+            <a href="/api/track-events" class="api-item" target="_blank">
+                <span class="api-method get">GET</span>
+                <span class="api-path">/api/track-events</span>
+                <span class="api-type-tag json">JSON</span>
+                <span class="api-desc">سجل المسارات مع التصفية والترقيم</span>
+            </a>
+            <a href="/api/track-events/stats" class="api-item" target="_blank">
+                <span class="api-method get">GET</span>
+                <span class="api-path">/api/track-events/stats</span>
+                <span class="api-type-tag json">JSON</span>
+                <span class="api-desc">إحصائيات مفصّلة مع التوزيعات البيانية</span>
+            </a>
+            <div class="api-item">
+                <span class="api-method get">GET</span>
+                <span class="api-path">/track-events/{track_id}</span>
+                <span class="api-type-tag json">JSON</span>
+                <span class="api-desc">تفاصيل رحلة مسار محدد (بمعرف المسار)</span>
+            </div>
+            <div class="api-item">
+                <span class="api-method get">GET</span>
+                <span class="api-path">/track-events/by-event/{event_id}</span>
+                <span class="api-type-tag json">JSON</span>
+                <span class="api-desc">تفاصيل مسار بمعرف الحدث الفريد (مُوصى به)</span>
+            </div>
+            <div class="api-item">
+                <span class="api-method get">GET</span>
+                <span class="api-path">/track-events/{track_id}/animation</span>
+                <span class="api-type-tag json">JSON</span>
+                <span class="api-desc">بيانات المحاكاة البصرية للمسار</span>
+            </div>
+            <div class="api-item">
+                <span class="api-method get">GET</span>
+                <span class="api-path">/track-events/visualize/{event_id}</span>
+                <span class="api-type-tag page">صفحة</span>
+                <span class="api-desc">صفحة المحاكاة البصرية بمعرف الحدث (مُوصى به)</span>
+            </div>
+            <div class="api-item">
+                <span class="api-method get">GET</span>
+                <span class="api-path">/track-events/{track_id}/visualize</span>
+                <span class="api-type-tag page">صفحة</span>
+                <span class="api-desc">صفحة المحاكاة البصرية بمعرف المسار</span>
+            </div>
+            <div class="api-item">
+                <span class="api-method get">GET</span>
+                <span class="api-path">/track-events/snapshot/{filename}</span>
+                <span class="api-type-tag image">صورة</span>
+                <span class="api-desc">صورة لحظة فقدان المسار (JPEG)</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ Snapshot / Camera API ═══ -->
+    <div class="api-category">
+        <div class="api-category-header">
+            <i class="fa-solid fa-camera" style="background: rgba(167, 139, 250, 0.15); color: var(--accent-purple);"></i>
+            <h2>الكاميرا والصور</h2>
+        </div>
+        <div class="api-list">
+            <a href="/snapshot" class="api-item" target="_blank">
+                <span class="api-method get">GET</span>
+                <span class="api-path">/snapshot</span>
+                <span class="api-type-tag image">صورة</span>
+                <span class="api-desc">التقاط صورة من الكاميرا (خام أو مع التوضيحات)</span>
+            </a>
+            <a href="/snapshot/info" class="api-item" target="_blank">
+                <span class="api-method get">GET</span>
+                <span class="api-path">/snapshot/info</span>
+                <span class="api-type-tag json">JSON</span>
+                <span class="api-desc">بيانات وصفية عن آخر لقطة (الأبعاد، التوقيت)</span>
+            </a>
+            <a href="/snapshot/background" class="api-item" target="_blank">
+                <span class="api-method get">GET</span>
+                <span class="api-path">/snapshot/background</span>
+                <span class="api-type-tag image">صورة</span>
+                <span class="api-desc">صورة الخلفية المرجعية للكشف</span>
+            </a>
+        </div>
+    </div>
+
+    <!-- ═══ Conveyor ROI ═══ -->
+    <div class="api-category">
+        <div class="api-category-header">
+            <i class="fa-solid fa-crop-simple" style="background: rgba(248, 113, 113, 0.15); color: var(--accent-danger);"></i>
+            <h2>منطقة الكشف (ROI)</h2>
+        </div>
+        <div class="api-list">
+            <a href="/api/conveyor-roi" class="api-item" target="_blank">
+                <span class="api-method get">GET</span>
+                <span class="api-path">/api/conveyor-roi</span>
+                <span class="api-type-tag json">JSON</span>
+                <span class="api-desc">إعدادات منطقة الكشف الحالية</span>
+            </a>
+            <div class="api-item">
+                <span class="api-method post">POST</span>
+                <span class="api-path">/api/conveyor-roi</span>
+                <span class="api-type-tag json">JSON</span>
+                <span class="api-desc">تحديث إعدادات منطقة الكشف (JSON body)</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ Health ═══ -->
+    <div class="api-category">
+        <div class="api-category-header">
+            <i class="fa-solid fa-heart-pulse" style="background: rgba(45, 212, 191, 0.15); color: var(--accent-success);"></i>
+            <h2>حالة المنظومة</h2>
+        </div>
+        <div class="api-list">
+            <a href="/health" class="api-item" target="_blank">
+                <span class="api-method get">GET</span>
+                <span class="api-path">/health</span>
+                <span class="api-type-tag json">JSON</span>
+                <span class="api-desc">فحص حالة الخادم مع التشخيصات</span>
+            </a>
+        </div>
+    </div>
+</main>
+</body>
+</html>

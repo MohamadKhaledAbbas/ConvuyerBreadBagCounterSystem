@@ -95,6 +95,109 @@ def _parse_track_search(val: Optional[str]):
     return None, None
 
 
+@router.get("/lost-tracks", response_class=HTMLResponse)
+async def lost_tracks_page(
+    request: Request,
+    start_time: Optional[str] = Query(None),
+    end_time: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(24, ge=6, le=96)
+):
+    """
+    Dedicated lost tracks page with user-friendly card-based UX.
+
+    Shows only tracks with event_type='track_lost' in a visual card layout
+    with snapshot thumbnails, key metrics, and quick actions.
+
+    Query params:
+        start_time: ISO datetime start (optional, defaults to last 24h)
+        end_time: ISO datetime end (optional, defaults to now)
+        page: Page number (1-based)
+        page_size: Cards per page (6-96, default 24)
+    """
+    import json
+
+    templates = get_templates()
+    service = _get_service()
+
+    try:
+        if start_time and end_time:
+            start_dt = service.parse_datetime(start_time)
+            end_dt = service.parse_datetime(end_time)
+            if start_dt >= end_dt:
+                raise HTTPException(422, 'Start time must be before end time')
+        else:
+            start_dt, end_dt = service.get_default_time_range()
+
+        # Query lost tracks only (no noise filtering — lost tracks are always relevant)
+        events, total_count = service.repo.get_track_events_page(
+            start_dt, end_dt,
+            event_type='track_lost',
+            limit=page_size,
+            offset=(page - 1) * page_size
+        )
+
+        # Parse snapshot paths for template
+        for event in events:
+            raw_snap = event.get('snapshot_path')
+            if raw_snap:
+                try:
+                    parsed = json.loads(raw_snap)
+                    if isinstance(parsed, list):
+                        event['_snapshot_paths'] = parsed
+                    else:
+                        event['_snapshot_paths'] = [raw_snap]
+                except (json.JSONDecodeError, TypeError):
+                    event['_snapshot_paths'] = [raw_snap]
+            else:
+                event['_snapshot_paths'] = []
+
+        # Calculate summary stats
+        with_snapshot = sum(1 for e in events if e.get('_snapshot_paths'))
+        durations = [e['duration_seconds'] for e in events if e.get('duration_seconds')]
+        hits_list = [e['total_hits'] for e in events if e.get('total_hits')]
+        avg_duration = sum(durations) / len(durations) if durations else 0.0
+        avg_hits = sum(hits_list) / len(hits_list) if hits_list else 0.0
+
+        total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 1
+
+        # Build name→arabic_name mapping
+        db = get_db()
+        bag_types = db.get_all_bag_types()
+        name_to_arabic = {bt['name']: bt.get('arabic_name', bt['name']) for bt in bag_types}
+
+        context = {
+            'request': request,
+            'events': events,
+            'stats': {
+                'lost_count': total_count,
+                'with_snapshot': with_snapshot,
+                'avg_duration': avg_duration,
+                'avg_hits': avg_hits,
+            },
+            'pagination': {
+                'page': page,
+                'page_size': page_size,
+                'total_count': total_count,
+                'total_pages': total_pages,
+                'has_prev': page > 1,
+                'has_next': page < total_pages,
+            },
+            'start_time_str': start_dt.strftime('%Y-%m-%dT%H:%M') if start_dt else '',
+            'end_time_str': end_dt.strftime('%Y-%m-%dT%H:%M') if end_dt else '',
+            'name_to_arabic': name_to_arabic,
+        }
+
+        logger.info(f"[LostTracks] Rendering {len(events)} lost tracks (page {page}/{total_pages}, total={total_count})")
+        return templates.TemplateResponse('lost_tracks_ar.html', context)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f'[LostTracks] Error: {e}', exc_info=True)
+        raise HTTPException(500, str(e))
+
+
 @router.get("/track-events", response_class=HTMLResponse)
 async def track_events_page(
     request: Request,
