@@ -681,20 +681,29 @@ class AnalyticsService:
             return empty_result
 
         # ── Parse timestamps ──
+        # production_timestamps excludes Rejected/Unknown — used for working hours,
+        # avg rate, gap detection, and first/last event anchoring.
+        _IGNORED_TYPES = {'Rejected', 'Unknown'}
         timestamps = []
+        production_timestamps = []
         for ev in ordered_events:
             ts_str = ev.get('timestamp', '')
             try:
                 ts = datetime.fromisoformat(ts_str)
-                timestamps.append(ts)
             except (ValueError, TypeError):
                 continue
+            timestamps.append(ts)
+            if ev.get('bag_type', '') not in _IGNORED_TYPES:
+                production_timestamps.append(ts)
 
         if len(timestamps) < 2:
             return empty_result
 
-        first_ts = timestamps[0]
-        last_ts = timestamps[-1]
+        # Fall back to all timestamps only if there are no production events at all
+        anchor_timestamps = production_timestamps if len(production_timestamps) >= 2 else timestamps
+
+        first_ts = anchor_timestamps[0]
+        last_ts = anchor_timestamps[-1]
         total_seconds = (last_ts - first_ts).total_seconds()
         total_hours = total_seconds / 3600.0
 
@@ -702,14 +711,14 @@ class AnalyticsService:
         minutes_int = int((total_hours - hours_int) * 60)
         total_hours_display = f'{hours_int}:{minutes_int}'
 
-        # ── Per-hour buckets ──
+        # ── Per-hour buckets (production bags only) ──
         hourly_buckets: Dict[str, int] = defaultdict(int)
-        for ts in timestamps:
+        for ts in anchor_timestamps:
             bucket_key = ts.strftime('%H:00')
             hourly_buckets[bucket_key] += 1
 
-        # Average bags per hour
-        avg_bags = round(len(timestamps) / total_hours, 1) if total_hours > 0 else 0.0
+        # Average production bags per hour — from first production bag onward
+        avg_bags = round(len(anchor_timestamps) / total_hours, 1) if total_hours > 0 else 0.0
 
         # Peak and minimum hours
         peak_hour = None
@@ -777,19 +786,19 @@ class AnalyticsService:
                     'end': best_clean.get('end', ''),
                 }
 
-        # ── Idle gaps detection ──
+        # ── Idle gaps detection (production events only) ──
         gap_threshold = timedelta(minutes=self.config.idle_gap_threshold_minutes)
         gaps = []
         total_idle_seconds = 0.0
 
-        for i in range(1, len(timestamps)):
-            delta = timestamps[i] - timestamps[i - 1]
+        for i in range(1, len(anchor_timestamps)):
+            delta = anchor_timestamps[i] - anchor_timestamps[i - 1]
             if delta >= gap_threshold:
                 gap_minutes = round(delta.total_seconds() / 60, 1)
                 total_idle_seconds += delta.total_seconds()
                 gaps.append({
-                    'start': timestamps[i - 1].strftime('%H:%M:%S'),
-                    'end': timestamps[i].strftime('%H:%M:%S'),
+                    'start': anchor_timestamps[i - 1].strftime('%H:%M:%S'),
+                    'end': anchor_timestamps[i].strftime('%H:%M:%S'),
                     'duration_minutes': gap_minutes,
                     'duration_display': self._format_duration_minutes(gap_minutes),
                 })
