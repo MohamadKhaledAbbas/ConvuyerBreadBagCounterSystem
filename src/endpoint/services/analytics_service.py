@@ -166,6 +166,12 @@ class AnalyticsService:
         # Build worker shift report card
         shift_report = self._build_shift_report(start_time, end_time)
 
+        # Build weight breakdown (Bran vs non-Bran)
+        weight_breakdown = self._build_weight_breakdown(classifications)
+
+        # Build working hours & productivity stats
+        working_hours = self._build_working_hours_stats(ordered_events, runs)
+
         data = {
             "meta": {
                 "start": start_time, 
@@ -176,7 +182,9 @@ class AnalyticsService:
                 'total': stats['total'], 
                 'classifications': classifications,
                 'batch_anomalies': batch_anomalies,
-                'shift_report': shift_report
+                'shift_report': shift_report,
+                'weight_breakdown': weight_breakdown,
+                'working_hours': working_hours
             },
             "timeline": {
                 "ordered_events": ordered_events, 
@@ -595,6 +603,241 @@ class AnalyticsService:
             for run in runs_list:
                 run["thumb"] = fix_path(run.get("thumb", ""))
     
+    def _build_weight_breakdown(self, classifications: List[Dict]) -> Dict[str, Any]:
+        """
+        Build weight breakdown separating Bran (طحين نخالة) from other types (طحين سياحي).
+
+        Args:
+            classifications: List of classification dicts with 'name', 'weight', 'count'
+
+        Returns:
+            Dict with tourist_flour_weight, bran_flour_weight, total_weight,
+            tourist_flour_count, bran_flour_count
+        """
+        tourist_weight = 0.0
+        bran_weight = 0.0
+        tourist_count = 0
+        bran_count = 0
+
+        for cls in classifications:
+            item_weight = float(cls.get('weight', 0)) * int(cls.get('count', 0))
+            if cls.get('name', '').lower() == 'bran':
+                bran_weight += item_weight
+                bran_count += int(cls.get('count', 0))
+            else:
+                tourist_weight += item_weight
+                tourist_count += int(cls.get('count', 0))
+
+        return {
+            'tourist_flour_weight': round(tourist_weight, 1),
+            'bran_flour_weight': round(bran_weight, 1),
+            'total_weight': round(tourist_weight + bran_weight, 1),
+            'tourist_flour_count': tourist_count,
+            'bran_flour_count': bran_count,
+        }
+
+    def _build_working_hours_stats(
+        self,
+        ordered_events: List[Dict],
+        runs: List[Dict],
+    ) -> Dict[str, Any]:
+        """
+        Build working hours, productivity, and idle gap analysis for the shift.
+
+        Computes:
+        - Total active hours (first event → last event)
+        - Bags per hour (average, peak, minimum)
+        - Best batch (largest run by count)
+        - Best clean batch (largest run with zero smoothing corrections)
+        - Idle gaps (periods > threshold with no events)
+        - Total idle vs active time
+
+        Args:
+            ordered_events: Time-sorted list of event dicts (must have 'timestamp')
+            runs: Consecutive runs from build_consecutive_runs
+
+        Returns:
+            Dict with all working hours metrics
+        """
+        empty_result = {
+            'total_hours': 0.0,
+            'total_hours_display': '0س 0د',
+            'first_event_time': None,
+            'last_event_time': None,
+            'avg_bags_per_hour': 0.0,
+            'peak_hour': None,
+            'min_hour': None,
+            'best_batch': None,
+            'best_clean_batch': None,
+            'gaps': [],
+            'total_idle_minutes': 0,
+            'total_idle_display': '0 دقيقة',
+            'total_active_minutes': 0,
+            'total_active_display': '0 دقيقة',
+            'active_ratio_pct': 0.0,
+        }
+
+        if not ordered_events:
+            return empty_result
+
+        # ── Parse timestamps ──
+        timestamps = []
+        for ev in ordered_events:
+            ts_str = ev.get('timestamp', '')
+            try:
+                ts = datetime.fromisoformat(ts_str)
+                timestamps.append(ts)
+            except (ValueError, TypeError):
+                continue
+
+        if len(timestamps) < 2:
+            return empty_result
+
+        first_ts = timestamps[0]
+        last_ts = timestamps[-1]
+        total_seconds = (last_ts - first_ts).total_seconds()
+        total_hours = total_seconds / 3600.0
+
+        hours_int = int(total_hours)
+        minutes_int = int((total_hours - hours_int) * 60)
+        total_hours_display = f'{hours_int}:{minutes_int}'
+
+        # ── Per-hour buckets ──
+        hourly_buckets: Dict[str, int] = defaultdict(int)
+        for ts in timestamps:
+            bucket_key = ts.strftime('%H:00')
+            hourly_buckets[bucket_key] += 1
+
+        # Average bags per hour
+        avg_bags = round(len(timestamps) / total_hours, 1) if total_hours > 0 else 0.0
+
+        # Peak and minimum hours
+        peak_hour = None
+        min_hour = None
+        if hourly_buckets:
+            peak_key = max(hourly_buckets, key=hourly_buckets.get)
+            min_key = min(hourly_buckets, key=hourly_buckets.get)
+            peak_hour = {'hour': peak_key, 'count': hourly_buckets[peak_key]}
+            min_hour = {'hour': min_key, 'count': hourly_buckets[min_key]}
+
+        # ── Best batch (largest run by count, excluding NOISE) ──
+        real_runs = [r for r in runs if r.get('bag_type_id') != 'NOISE']
+        best_batch = None
+        if real_runs:
+            best_run = max(real_runs, key=lambda r: r.get('count', 0))
+            best_batch = {
+                'class_name': best_run.get('class_name', ''),
+                'arabic_name': best_run.get('arabic_name', ''),
+                'count': best_run.get('count', 0),
+                'start': best_run.get('start', ''),
+                'end': best_run.get('end', ''),
+            }
+
+        # ── Best clean batch (no smoothing corrections) ──
+        # Build a set of timestamps that were smoothed for fast lookup
+        smoothed_timestamps = set()
+        for ev in ordered_events:
+            meta_raw = ev.get('metadata')
+            if not meta_raw:
+                continue
+            try:
+                meta = json.loads(meta_raw) if isinstance(meta_raw, str) else meta_raw
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if meta.get('smoothed', False):
+                smoothed_timestamps.add(ev.get('timestamp'))
+
+        best_clean_batch = None
+        if real_runs:
+            clean_candidates = []
+            for run in real_runs:
+                run_start = run.get('start', '')
+                run_end = run.get('end', '')
+                # Check if any event in this run's window was smoothed
+                has_smoothed = False
+                for ev in ordered_events:
+                    ts = ev.get('timestamp', '')
+                    if ts < run_start:
+                        continue
+                    if ts > run_end:
+                        break
+                    if ts in smoothed_timestamps:
+                        has_smoothed = True
+                        break
+                if not has_smoothed:
+                    clean_candidates.append(run)
+
+            if clean_candidates:
+                best_clean = max(clean_candidates, key=lambda r: r.get('count', 0))
+                best_clean_batch = {
+                    'class_name': best_clean.get('class_name', ''),
+                    'arabic_name': best_clean.get('arabic_name', ''),
+                    'count': best_clean.get('count', 0),
+                    'start': best_clean.get('start', ''),
+                    'end': best_clean.get('end', ''),
+                }
+
+        # ── Idle gaps detection ──
+        gap_threshold = timedelta(minutes=self.config.idle_gap_threshold_minutes)
+        gaps = []
+        total_idle_seconds = 0.0
+
+        for i in range(1, len(timestamps)):
+            delta = timestamps[i] - timestamps[i - 1]
+            if delta >= gap_threshold:
+                gap_minutes = round(delta.total_seconds() / 60, 1)
+                total_idle_seconds += delta.total_seconds()
+                gaps.append({
+                    'start': timestamps[i - 1].strftime('%H:%M:%S'),
+                    'end': timestamps[i].strftime('%H:%M:%S'),
+                    'duration_minutes': gap_minutes,
+                    'duration_display': self._format_duration_minutes(gap_minutes),
+                })
+
+        total_idle_minutes = round(total_idle_seconds / 60, 1)
+        total_active_minutes = round((total_seconds - total_idle_seconds) / 60, 1)
+        active_ratio = round(
+            (total_seconds - total_idle_seconds) / total_seconds * 100, 1
+        ) if total_seconds > 0 else 0.0
+
+        total_idle_display = self._format_duration_minutes(total_idle_minutes)
+        total_active_display = self._format_duration_minutes(total_active_minutes)
+
+        return {
+            'total_hours': round(total_hours, 2),
+            'total_hours_display': total_hours_display,
+            'first_event_time': first_ts.strftime('%H:%M:%S'),
+            'last_event_time': last_ts.strftime('%H:%M:%S'),
+            'avg_bags_per_hour': avg_bags,
+            'peak_hour': peak_hour,
+            'min_hour': min_hour,
+            'best_batch': best_batch,
+            'best_clean_batch': best_clean_batch,
+            'gaps': gaps,
+            'gap_count': len(gaps),
+            'total_idle_minutes': total_idle_minutes,
+            'total_idle_display': total_idle_display,
+            'total_active_minutes': total_active_minutes,
+            'total_active_display': total_active_display,
+            'active_ratio_pct': active_ratio,
+        }
+
+    @staticmethod
+    def _format_duration_minutes(minutes: float) -> str:
+        """
+        Format duration in minutes to a human-readable string.
+
+        - Under 60 minutes  → "42 دقيقة"   (minutes only)
+        - 60 minutes or more → "HH:mm"      (e.g. "1:05", "2:30")
+        """
+        total_mins = int(minutes)
+        if total_mins < 60:
+            return f'{total_mins} دقيقة'
+        hours = total_mins // 60
+        remaining = total_mins % 60
+        return f'{hours}:{remaining:02d}'
+
+
     def _group_runs_by_type(self, runs: List[Dict]) -> Dict[str, List[Dict]]:
         """
         Pre-group runs by bag_type_id for efficient template rendering.

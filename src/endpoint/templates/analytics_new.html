@@ -656,6 +656,64 @@
             color: var(--text-muted);
             font-weight: 500;
         }
+
+        /* ─── Idle Gaps Section ─── */
+        .gap-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+        .gap-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.75rem 1rem;
+            background: rgba(15, 23, 42, 0.5);
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--glass-border);
+            transition: border-color 0.2s;
+        }
+        .gap-item:hover {
+            border-color: rgba(251, 191, 36, 0.3);
+        }
+        .gap-times {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.9rem;
+        }
+        .gap-time-label {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+        .gap-time {
+            font-family: 'Inter', monospace;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        .gap-arrow {
+            color: var(--text-muted);
+            margin: 0 0.25rem;
+        }
+        .gap-duration {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            font-size: 0.9rem;
+            font-weight: 700;
+            color: var(--accent-warning);
+            background: rgba(251, 191, 36, 0.1);
+            padding: 0.3rem 0.75rem;
+            border-radius: 20px;
+        }
+        .gap-duration i {
+            font-size: 0.75rem;
+        }
+        @media (max-width: 768px) {
+            .gap-item { flex-direction: column; gap: 0.5rem; text-align: center; }
+            .gap-times { flex-wrap: wrap; justify-content: center; }
+        }
     </style>
 </head>
 <body>
@@ -692,7 +750,25 @@
         </div>
         <div class="hero-card">
             <div class="hero-label">الوزن الإجمالي</div>
-            <div class="hero-value">{{ total.weight or 0 }}<span class="hero-unit">كجم</span></div>
+            <div class="hero-value">{{ weight_breakdown.total_weight or total.weight or 0 }}<span class="hero-unit">كجم</span></div>
+            {% if weight_breakdown %}
+            <div class="hero-breakdown" style="flex-direction:column;gap:0.5rem;margin-top:0.75rem;">
+                <div style="display:flex;align-items:center;justify-content:center;gap:0.5rem;">
+                    <span class="tier-badge" style="background:rgba(56,189,248,0.15);color:var(--accent-primary);font-size:0.8rem;">
+                        <i class="fa-solid fa-wheat-awn" style="margin-left:0.3rem;"></i>
+                        طحين سياحي: <span class="num">{{ weight_breakdown.tourist_flour_weight }}</span> كجم
+                        <span style="color:var(--text-muted);font-size:0.7rem;margin-right:0.3rem;">({{ weight_breakdown.tourist_flour_count }} كيس)</span>
+                    </span>
+                </div>
+                <div style="display:flex;align-items:center;justify-content:center;gap:0.5rem;">
+                    <span class="tier-badge" style="background:rgba(167,139,250,0.15);color:var(--accent-purple);font-size:0.8rem;">
+                        <i class="fa-solid fa-seedling" style="margin-left:0.3rem;"></i>
+                        طحين نخالة: <span class="num">{{ weight_breakdown.bran_flour_weight }}</span> كجم
+                        <span style="color:var(--text-muted);font-size:0.7rem;margin-right:0.3rem;">({{ weight_breakdown.bran_flour_count }} كيس)</span>
+                    </span>
+                </div>
+            </div>
+            {% endif %}
         </div>
         <div class="hero-card">
             <div class="hero-label">التصحيحات التلقائية</div>
@@ -703,6 +779,40 @@
                 </span>
             </div>
         </div>
+        {% if working_hours and working_hours.total_hours > 0 %}
+        <div class="hero-card" style="border-color:rgba(45,212,191,0.3);background:linear-gradient(135deg,rgba(45,212,191,0.08),var(--glass-bg));">
+            <div class="hero-label"><i class="fa-solid fa-clock" style="margin-left:0.3rem;"></i> ساعات العمل</div>
+            <div class="hero-value" style="color:var(--accent-success);">{{ working_hours.total_hours_display }}</div>
+            <div style="font-size:0.8rem;color:var(--text-muted);margin-top:0.4rem;">
+                <span class="num">{{ working_hours.first_event_time }}</span>
+                <span style="margin:0 0.3rem;">→</span>
+                <span class="num">{{ working_hours.last_event_time }}</span>
+            </div>
+            <div class="hero-breakdown" style="flex-direction:column;gap:0.4rem;margin-top:0.75rem;">
+                <span class="tier-badge" style="background:rgba(45,212,191,0.15);color:var(--accent-success);">
+                    <i class="fa-solid fa-gauge-high" style="margin-left:0.3rem;"></i>
+                    معدل: <span class="num">{{ working_hours.avg_bags_per_hour }}</span> كيس/ساعة
+                </span>
+                {% if working_hours.gap_count > 0 %}
+                <span class="tier-badge" style="background:rgba(248,113,113,0.15);color:var(--accent-danger);">
+                    <i class="fa-solid" style="margin-left:0.3rem;"></i>
+                    إجمالي فترة التوقف ({{ working_hours.total_idle_display }})
+
+                </span>
+                <span class="tier-badge" style="background:rgba(248,113,113,0.15);color:var(--accent-danger);">
+                    <i class="fa-solid" style="margin-left:0.3rem;"></i>
+                    ({{ working_hours.gap_count }}) عدد فترات التوقف
+
+                </span>
+                {% else %}
+                <span class="tier-badge" style="background:rgba(45,212,191,0.15);color:var(--accent-success);">
+                    <i class="fa-solid fa-check" style="margin-left:0.3rem;"></i>
+                    لا توجد فترات توقف
+                </span>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
     </div>
 
     <!-- Classifications -->
@@ -887,6 +997,115 @@
         </div>
         {% endif %}
     </div>
+    {% endif %}
+
+    {# ─── Working Hours & Productivity ─── #}
+    {% if working_hours and working_hours.total_hours > 0 %}
+    <div class="section-title"><i class="fa-solid fa-chart-bar"></i> ساعات العمل والإنتاجية</div>
+    <div class="discipline-section severity-low">
+        <div class="discipline-grid">
+            <div class="discipline-stat">
+                <div class="discipline-value num" style="color:var(--accent-success);">{{ working_hours.total_hours_display }}</div>
+                <div class="discipline-label">إجمالي ساعات العمل</div>
+            </div>
+            <div class="discipline-stat">
+                <div class="discipline-value num">{{ working_hours.avg_bags_per_hour }}</div>
+                <div class="discipline-label">كيس / ساعة (متوسط)</div>
+            </div>
+            {% if working_hours.peak_hour %}
+            <div class="discipline-stat">
+                <div class="discipline-value num" style="color:var(--accent-primary);">{{ working_hours.peak_hour.count }}</div>
+                <div class="discipline-label">أعلى ساعة <span class="num" style="color:var(--text-muted);">({{ working_hours.peak_hour.hour }})</span></div>
+            </div>
+            {% endif %}
+            {% if working_hours.min_hour %}
+            <div class="discipline-stat">
+                <div class="discipline-value num" style="color:var(--accent-warning);">{{ working_hours.min_hour.count }}</div>
+                <div class="discipline-label">أقل ساعة <span class="num" style="color:var(--text-muted);">({{ working_hours.min_hour.hour }})</span></div>
+            </div>
+            {% endif %}
+            <div class="discipline-stat">
+                <div class="discipline-value num" style="color:var(--accent-success);">{{ working_hours.active_ratio_pct }}%</div>
+                <div class="discipline-label">نسبة العمل الفعلي</div>
+            </div>
+            <div class="discipline-stat">
+                <div class="discipline-value num {% if working_hours.total_idle_minutes > 30 %}warn{% endif %}">{{ working_hours.total_idle_display }}</div>
+                <div class="discipline-label">وقت التوقف</div>
+            </div>
+        </div>
+
+        {# Best batch #}
+        {% if working_hours.best_batch or working_hours.best_clean_batch %}
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem;margin-top:1rem;">
+            {% if working_hours.best_batch %}
+            <div class="detail-section">
+                <div class="detail-title"><i class="fa-solid fa-trophy" style="color:var(--accent-warning);"></i> أفضل دفعة إنتاج</div>
+                <div class="detail-row">
+                    <span class="detail-class">{{ working_hours.best_batch.arabic_name or working_hours.best_batch.class_name }}</span>
+                    <span class="detail-count num">{{ working_hours.best_batch.count }} كيس</span>
+                </div>
+                <div class="detail-row">
+                    <span class="detail-time">
+                        {{ working_hours.best_batch.start[11:16] if working_hours.best_batch.start and (working_hours.best_batch.start|length) >= 16 else 'N/A' }}
+                        →
+                        {{ working_hours.best_batch.end[11:16] if working_hours.best_batch.end and (working_hours.best_batch.end|length) >= 16 else 'N/A' }}
+                    </span>
+                </div>
+            </div>
+            {% endif %}
+            {% if working_hours.best_clean_batch %}
+            <div class="detail-section">
+                <div class="detail-title"><i class="fa-solid fa-star" style="color:var(--accent-success);"></i> أفضل دفعة بدون تصحيحات</div>
+                <div class="detail-row">
+                    <span class="detail-class">{{ working_hours.best_clean_batch.arabic_name or working_hours.best_clean_batch.class_name }}</span>
+                    <span class="detail-count num">{{ working_hours.best_clean_batch.count }} كيس</span>
+                </div>
+                <div class="detail-row">
+                    <span class="detail-time">
+                        {{ working_hours.best_clean_batch.start[11:16] if working_hours.best_clean_batch.start and (working_hours.best_clean_batch.start|length) >= 16 else 'N/A' }}
+                        →
+                        {{ working_hours.best_clean_batch.end[11:16] if working_hours.best_clean_batch.end and (working_hours.best_clean_batch.end|length) >= 16 else 'N/A' }}
+                    </span>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+
+    {# ─── Idle Gaps Section ─── #}
+    {% if working_hours.gaps %}
+    <div class="section-title"><i class="fa-solid fa-pause-circle"></i> فترات التوقف أثناء الوردية</div>
+    <div class="discipline-section {% if working_hours.total_idle_minutes > 60 %}severity-high{% elif working_hours.total_idle_minutes > 30 %}severity-medium{% else %}severity-low{% endif %}">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.75rem;margin-bottom:1rem;">
+            <div style="font-size:0.9rem;color:var(--text-secondary);font-weight:600;">
+                <i class="fa-solid fa-hourglass-half" style="margin-left:0.3rem;color:var(--accent-warning);"></i>
+                    إجمالي التوقف <span class="num">{{ working_hours.total_idle_display }}</span> _ ({{working_hours.gap_count}}) مرات
+            </div>
+            <div style="font-size:0.8rem;color:var(--text-muted);">
+                وقت العمل الفعلي: <span class="num" style="color:var(--accent-success);font-weight:700;">{{ working_hours.total_active_display }}</span>
+                (<span class="num" style="color:var(--accent-success);">{{ working_hours.active_ratio_pct }}%</span>)
+            </div>
+        </div>
+        <div class="gap-list">
+            {% for gap in working_hours.gaps %}
+            <div class="gap-item">
+                <div class="gap-times">
+                    <span class="gap-time-label">من</span>
+                    <span class="gap-time num">{{ gap.start }}</span>
+                    <span class="gap-arrow">→</span>
+                    <span class="gap-time-label">إلى</span>
+                    <span class="gap-time num">{{ gap.end }}</span>
+                </div>
+                <div class="gap-duration">
+                    <i class="fa-solid fa-stopwatch"></i>
+                    <span class="num">{{ gap.duration_display }}</span>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
     {% endif %}
 
     <!-- Timeline -->

@@ -46,6 +46,9 @@ class AppConfig:
     max_events_per_query: int = 10000  # Max events to fetch per analytics query
     confidence_threshold_high: float = 0.8  # Threshold for "high confidence"
 
+    # ==================== Working Hours Configuration ====================
+    idle_gap_threshold_minutes: int = 15  # Min gap between events to count as idle period
+
 
 # ============================================================================
 # Global Configuration Instance
