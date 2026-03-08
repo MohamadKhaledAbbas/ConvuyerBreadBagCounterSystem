@@ -164,7 +164,9 @@ class AnalyticsService:
         batch_anomalies = self._build_batch_anomalies(runs, ordered_events)
 
         # Build worker shift report card
-        shift_report = self._build_shift_report(start_time, end_time)
+        # Pass classifications so rejected count comes from the same events table
+        # that the classifications section uses, ensuring consistency.
+        shift_report = self._build_shift_report(start_time, end_time, classifications)
 
         # Build weight breakdown (Bran vs non-Bran)
         weight_breakdown = self._build_weight_breakdown(classifications)
@@ -268,6 +270,9 @@ class AnalyticsService:
         if name_to_arabic is None:
             name_to_arabic = {}
 
+        # Confidence threshold for sure/not-sure breakdown in corrections
+        SURE_CONF_THRESHOLD = 0.85
+
         insights: Dict[int, Dict] = {}
 
         for ev in ordered_events:
@@ -276,6 +281,8 @@ class AnalyticsService:
                 insights[bid] = {
                     'smoothed_count': 0,
                     '_confusion_map': defaultdict(int),
+                    '_confusion_sure': defaultdict(int),
+                    '_confusion_not_sure': defaultdict(int),
                     '_low_conf_map': defaultdict(int),
                 }
 
@@ -295,6 +302,11 @@ class AnalyticsService:
             if is_smoothed and original_class:
                 insights[bid]['smoothed_count'] += 1
                 insights[bid]['_confusion_map'][original_class] += 1
+                # Track confidence breakdown per confusion pair
+                if confidence >= SURE_CONF_THRESHOLD:
+                    insights[bid]['_confusion_sure'][original_class] += 1
+                else:
+                    insights[bid]['_confusion_not_sure'][original_class] += 1
             elif confidence < 0.8 and original_class and original_class != ev.get('bag_type', ''):
                 # Low confidence but not smoothed — model was uncertain
                 insights[bid]['_low_conf_map'][original_class] += 1
@@ -309,6 +321,8 @@ class AnalyticsService:
                     'class_name': cls,
                     'arabic_name': name_to_arabic.get(cls, cls),
                     'count': cnt,
+                    'sure_count': data['_confusion_sure'].get(cls, 0),
+                    'not_sure_count': data['_confusion_not_sure'].get(cls, 0),
                 }
                 for cls, cnt in confusion_sorted
             ]
@@ -326,6 +340,8 @@ class AnalyticsService:
             ]
 
             del data['_confusion_map']
+            del data['_confusion_sure']
+            del data['_confusion_not_sure']
             del data['_low_conf_map']
 
         return insights
@@ -420,6 +436,7 @@ class AnalyticsService:
         self,
         start_time: datetime,
         end_time: datetime,
+        classifications: List[Dict] = None,
     ) -> Dict[str, Any]:
         """
         Build a shift performance summary for the production supervisor.
@@ -430,6 +447,9 @@ class AnalyticsService:
         - Invalid path tracks count and percentage (bags not placed from bottom)
         - Composite grade (A/B/C/D) with score 0-100
         - Professional advisory notes for the supervisor
+
+        The rejected count is sourced from the classifications list (events table)
+        to stay consistent with the classifications section of the report.
 
         Returns:
             Dict with all metrics, grade, and advisory notes in Arabic
@@ -442,7 +462,33 @@ class AnalyticsService:
         if total == 0:
             return {'total': 0}
 
-        rejected = raw['rejected']
+        # Use the Rejected count from the classifications list (events table)
+        # so the number is consistent with what the classifications section shows.
+        #
+        # True rejected = bags whose FINAL class is Rejected (the Rejected card count)
+        #               + bags originally classified as Rejected but overridden by the
+        #                 smoother to another class (appear as confusion pairs with
+        #                 class_name=='Rejected' on each other classification card).
+        #
+        # This way, if a user manually adds up the Rejected card count plus every
+        # "غير واضحة ← N" correction shown across all other cards, the total matches.
+        if classifications is not None:
+            # Bags that stayed as Rejected (final classification)
+            rejected_card_count = next(
+                (c['count'] for c in classifications if c.get('name') == 'Rejected'),
+                0
+            )
+            # Bags originally Rejected but overridden to other classes
+            overridden_from_rejected = sum(
+                pair['count']
+                for c in classifications
+                if c.get('name') != 'Rejected'
+                for pair in c.get('confusion_pairs', [])
+                if pair.get('class_name') == 'Rejected'
+            )
+            rejected = rejected_card_count + overridden_from_rejected
+        else:
+            rejected = raw['rejected']
         lost = raw['lost_total']
         invalid = raw['invalid']
 
