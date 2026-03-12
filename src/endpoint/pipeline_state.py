@@ -4,7 +4,7 @@ Pipeline State - Cross-process shared state for real-time count visibility.
 The main app (ConveyorCounterApp) writes pipeline state to a JSON file,
 and the FastAPI server reads it to serve real-time count data.
 
-This enables the /api/counts endpoint and SSE stream to show:
+This enables the /api/counts endpoint and WebSocket stream to show:
 - Confirmed counts (persisted to DB after smoothing)
 - Pending counts (in the smoothing window, awaiting batch validation)
 - Just classified counts (tentative, before smoothing)

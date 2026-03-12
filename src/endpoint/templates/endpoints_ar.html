@@ -159,7 +159,7 @@
             <span class="api-type-tag page">صفحة</span> واجهة HTML
         </div>
         <div class="legend-item">
-            <span class="api-type-tag stream">بث</span> بث مباشر SSE
+            <span class="api-type-tag stream">بث</span> بث مباشر WebSocket
         </div>
         <div class="legend-item">
             <span class="api-type-tag image">صورة</span> ملف صورة
@@ -249,12 +249,12 @@
                 <span class="api-type-tag json">JSON</span>
                 <span class="api-desc">بيانات الإحصاء الفوري (مؤكد | قيد المعالجة | مصنّف)</span>
             </a>
-            <a href="/api/counts/stream" class="api-item" target="_blank">
-                <span class="api-method sse">SSE</span>
-                <span class="api-path">/api/counts/stream</span>
+            <div class="api-item">
+                <span class="api-method sse">WS</span>
+                <span class="api-path">/ws/counts/stream</span>
                 <span class="api-type-tag stream">بث</span>
-                <span class="api-desc">بث مباشر للتحديثات عبر Server-Sent Events</span>
-            </a>
+                <span class="api-desc">بث مباشر للتحديثات عبر WebSocket</span>
+            </div>
             <a href="/api/bag-types" class="api-item" target="_blank">
                 <span class="api-method get">GET</span>
                 <span class="api-path">/api/bag-types</span>
