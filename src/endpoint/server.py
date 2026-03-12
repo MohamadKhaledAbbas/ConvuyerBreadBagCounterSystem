@@ -12,6 +12,8 @@ Based on V1 logic with enhanced code quality and maintainability.
 """
 
 import os
+import platform
+import socket
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -193,6 +195,29 @@ async def health() -> Dict[str, Any]:
             "last_classified_type_arabic": last_classified_arabic,
             "smoothing_rate": pipeline.get("smoothing_rate", 0),
         }
+    }
+
+
+@app.get("/whoami")
+async def whoami() -> Dict[str, Any]:
+    """
+    Board identity / reachability probe.
+
+    Lightweight endpoint that always returns HTTP 200 so remote clients
+    can verify network connectivity to this board before issuing heavier
+    API calls.  The response body carries stable identity fields useful
+    for fleet-management dashboards and debugging.
+
+    Used by cloud ``verifyBoard(url)`` to confirm the board is reachable.
+    """
+    hostname = socket.gethostname()
+
+    return {
+        "status": "ok",
+        "hostname": hostname,
+        "platform": platform.platform(),
+        "version": APP_VERSION,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 
