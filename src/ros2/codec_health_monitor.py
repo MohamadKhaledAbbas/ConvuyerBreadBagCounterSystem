@@ -79,6 +79,13 @@ class MonitorConfig:
     # Log level for health checks (reduce noise in production)
     verbose: bool = False
 
+    # Optional command to start/restart codec pipeline when process is missing.
+    # Example: "supervisorctl restart breadcount-ros2"
+    restart_command: str = ""
+
+    # How long to wait for process to come back after restart command
+    process_start_timeout_sec: float = 10.0
+
 
 @dataclass
 class MonitorStats:
@@ -95,6 +102,49 @@ class MonitorStats:
     state: HealthState = HealthState.UNKNOWN
     # Track restart timestamps for rate limiting
     restart_timestamps: List[float] = field(default_factory=list)
+
+
+# Path to persist codec health status for cross-process reading
+CODEC_HEALTH_STATUS_FILE = "/tmp/codec_health_status.json"
+
+
+def read_codec_health_status() -> Optional[dict]:
+    """
+    Read codec health status from shared file.
+
+    This allows other processes (e.g., FastAPI server) to read the
+    health status written by the codec health monitor in main.py.
+
+    Returns:
+        dict with health status or None if not available
+    """
+    import json
+    try:
+        if os.path.exists(CODEC_HEALTH_STATUS_FILE):
+            with open(CODEC_HEALTH_STATUS_FILE, 'r') as f:
+                data = json.load(f)
+                # Check if status is stale (older than 60 seconds)
+                if data.get("timestamp"):
+                    age = time.time() - data["timestamp"]
+                    data["age_seconds"] = round(age, 1)
+                    data["stale"] = age > 60
+                return data
+    except Exception as e:
+        logger.debug(f"[CodecHealthMonitor] Error reading status file: {e}")
+    return None
+
+
+def _write_codec_health_status(stats: dict) -> None:
+    """Write codec health status to shared file for cross-process access."""
+    import json
+    try:
+        stats["timestamp"] = time.time()
+        tmp_path = CODEC_HEALTH_STATUS_FILE + ".tmp"
+        with open(tmp_path, 'w') as f:
+            json.dump(stats, f)
+        os.replace(tmp_path, CODEC_HEALTH_STATUS_FILE)
+    except Exception as e:
+        logger.debug(f"[CodecHealthMonitor] Error writing status file: {e}")
 
 
 class CodecHealthMonitor:
@@ -173,7 +223,8 @@ class CodecHealthMonitor:
     def get_stats(self) -> dict:
         """Get current monitor statistics."""
         with self._lock:
-            return {
+            data = {
+                "enabled": True,
                 "state": self.stats.state.value,
                 "checks_total": self.stats.checks_total,
                 "checks_healthy": self.stats.checks_healthy,
@@ -191,6 +242,14 @@ class CodecHealthMonitor:
                 ),
                 "last_failure_reason": self.stats.last_failure_reason,
             }
+            return data
+
+    def _persist_status(self):
+        """Write current stats to shared file for cross-process access."""
+        try:
+            _write_codec_health_status(self.get_stats())
+        except Exception as e:
+            logger.debug(f"[CodecHealthMonitor] Failed to persist status: {e}")
 
     def is_healthy(self) -> bool:
         """Check if the codec is currently healthy."""
@@ -274,31 +333,48 @@ class CodecHealthMonitor:
         except Exception:
             return None
 
-    def _prune_restart_timestamps(self):
-        """Remove restart timestamps older than 1 hour."""
-        one_hour_ago = time.time() - 3600
-        self.stats.restart_timestamps = [
-            ts for ts in self.stats.restart_timestamps
-            if ts > one_hour_ago
-        ]
-        self.stats.restarts_this_hour = len(self.stats.restart_timestamps)
+    def _wait_for_process(self, timeout_sec: float) -> bool:
+        """Wait until codec process appears."""
+        deadline = time.time() + timeout_sec
+        while time.time() < deadline:
+            info = self._get_codec_process_info()
+            if info and info.get("running"):
+                return True
+            time.sleep(0.5)
+        return False
 
-    def _can_restart(self) -> tuple[bool, str]:
-        """Check if we're allowed to restart (rate limiting)."""
-        self._prune_restart_timestamps()
+    def _run_restart_command(self) -> bool:
+        """Run configured restart command when codec process is absent."""
+        cmd = (self.config.restart_command or "").strip()
+        if not cmd:
+            logger.error("[CodecHealthMonitor] No restart_command configured and codec process is missing")
+            return False
 
-        if not self.config.enable_restart:
-            return False, "restart_disabled"
+        logger.warning(f"[CodecHealthMonitor] Running restart_command: {cmd}")
+        try:
+            result = subprocess.run(
+                cmd,
+                shell=True,
+                executable="/bin/bash",
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode != 0:
+                logger.error(
+                    f"[CodecHealthMonitor] restart_command failed rc={result.returncode}: {result.stderr.strip()}"
+                )
+                return False
 
-        if self.stats.restarts_this_hour >= self.config.max_restarts_per_hour:
-            return False, f"rate_limit_exceeded ({self.stats.restarts_this_hour}/{self.config.max_restarts_per_hour} this hour)"
+            if self._wait_for_process(self.config.process_start_timeout_sec):
+                logger.info("[CodecHealthMonitor] Codec process recovered after restart_command")
+                return True
 
-        if self.stats.last_restart_time:
-            time_since_restart = time.time() - self.stats.last_restart_time
-            if time_since_restart < self.config.restart_cooldown_sec:
-                return False, f"cooldown_active ({time_since_restart:.0f}s < {self.config.restart_cooldown_sec}s)"
-
-        return True, "allowed"
+            logger.error("[CodecHealthMonitor] restart_command ran but codec process did not appear")
+            return False
+        except Exception as e:
+            logger.error(f"[CodecHealthMonitor] restart_command exception: {e}")
+            return False
 
     def _restart_codec(self) -> bool:
         """
@@ -323,8 +399,23 @@ class CodecHealthMonitor:
             logger.info(f"[CodecHealthMonitor] VPU status before restart:\n{vpu_status}")
 
         try:
+            # If process is already absent, killing won't help; try restart command.
+            if proc_info and not proc_info.get("running"):
+                recovered = self._run_restart_command()
+                if recovered:
+                    with self._lock:
+                        self.stats.restarts_total += 1
+                        self.stats.last_restart_time = time.time()
+                        self.stats.restart_timestamps.append(time.time())
+                        self.stats.restarts_this_hour = len(self.stats.restart_timestamps)
+                    logger.info(
+                        f"[CodecHealthMonitor] Recovery initiated | "
+                        f"total_restarts={self.stats.restarts_total} | "
+                        f"restarts_this_hour={self.stats.restarts_this_hour}"
+                    )
+                return recovered
+
             # Kill hobot_codec processes
-            # Using SIGKILL (-9) because the process is likely stuck in VPU wait
             result = subprocess.run(
                 ["pkill", "-9", "-f", self.config.process_pattern],
                 capture_output=True,
@@ -335,27 +426,33 @@ class CodecHealthMonitor:
             if result.returncode == 0:
                 logger.info("[CodecHealthMonitor] Sent SIGKILL to hobot_codec")
             elif result.returncode == 1:
-                # No processes matched — might have already died
                 logger.warning("[CodecHealthMonitor] No hobot_codec process found to kill")
+                # Try explicit restart path when process disappeared between checks.
+                recovered = self._run_restart_command()
+                if recovered:
+                    with self._lock:
+                        self.stats.restarts_total += 1
+                        self.stats.last_restart_time = time.time()
+                        self.stats.restart_timestamps.append(time.time())
+                        self.stats.restarts_this_hour = len(self.stats.restart_timestamps)
+                    logger.info(
+                        f"[CodecHealthMonitor] Recovery initiated | "
+                        f"total_restarts={self.stats.restarts_total} | "
+                        f"restarts_this_hour={self.stats.restarts_this_hour}"
+                    )
+                return recovered
             else:
                 logger.error(f"[CodecHealthMonitor] pkill failed: {result.stderr}")
                 return False
 
-            # Wait for process to actually die
             time.sleep(2)
 
-            # Verify it's dead
-            proc_info_after = self._get_codec_process_info()
-            if proc_info_after and proc_info_after.get("running"):
-                logger.warning(
-                    f"[CodecHealthMonitor] Process still running after SIGKILL: "
-                    f"{proc_info_after}"
-                )
-                # Try harder
-                subprocess.run(["pkill", "-9", "-f", self.config.process_pattern], timeout=5)
-                time.sleep(2)
+            # Ensure process returns; use restart_command if configured.
+            if not self._wait_for_process(self.config.process_start_timeout_sec):
+                logger.warning("[CodecHealthMonitor] Codec process did not auto-respawn")
+                if not self._run_restart_command():
+                    return False
 
-            # Record restart
             with self._lock:
                 self.stats.restarts_total += 1
                 self.stats.last_restart_time = time.time()
@@ -363,12 +460,11 @@ class CodecHealthMonitor:
                 self.stats.restarts_this_hour = len(self.stats.restart_timestamps)
 
             logger.info(
-                f"[CodecHealthMonitor] Restart initiated | "
+                f"[CodecHealthMonitor] Recovery initiated | "
                 f"total_restarts={self.stats.restarts_total} | "
                 f"restarts_this_hour={self.stats.restarts_this_hour}"
             )
 
-            # Call callback if provided
             if self.on_restart_callback:
                 try:
                     self.on_restart_callback()
@@ -471,6 +567,9 @@ class CodecHealthMonitor:
                         f"[CodecHealthMonitor] CRITICAL but cannot restart: {restart_reason}"
                     )
 
+        # Persist status to shared file after every health check
+        self._persist_status()
+
     def force_restart(self) -> bool:
         """
         Manually trigger a codec restart (bypasses rate limiting).
@@ -482,7 +581,9 @@ class CodecHealthMonitor:
             return False
 
         logger.warning("[CodecHealthMonitor] Manual restart requested")
-        return self._restart_codec()
+        ok = self._restart_codec()
+        self._persist_status()
+        return ok
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -501,6 +602,8 @@ def main():
         failure_threshold=int(os.getenv("CODEC_MONITOR_THRESHOLD", "2")),
         restart_cooldown_sec=float(os.getenv("CODEC_MONITOR_COOLDOWN", "30")),
         max_restarts_per_hour=int(os.getenv("CODEC_MONITOR_MAX_RESTARTS", "5")),
+        restart_command=os.getenv("CODEC_RESTART_COMMAND", ""),
+        process_start_timeout_sec=float(os.getenv("CODEC_MONITOR_PROCESS_START_TIMEOUT", "10")),
         enable_restart=os.getenv("CODEC_MONITOR_ENABLE_RESTART", "true").lower() == "true",
         verbose=os.getenv("CODEC_MONITOR_VERBOSE", "false").lower() == "true",
     )

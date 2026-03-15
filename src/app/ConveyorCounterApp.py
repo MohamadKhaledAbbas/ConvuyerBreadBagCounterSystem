@@ -349,6 +349,7 @@ class ConveyorCounterApp:
                 # Start codec health monitor to auto-recover from VPU decoder stalls
                 # This monitors /nv12_images and restarts hobot_codec if it stops publishing
                 if CodecHealthMonitor is not None:
+                    restart_cmd = os.getenv("CODEC_RESTART_COMMAND", "")
                     self._codec_health_monitor = CodecHealthMonitor(
                         config=MonitorConfig(
                             topic="/nv12_images",
@@ -356,19 +357,18 @@ class ConveyorCounterApp:
                             check_interval_sec=15.0,
                             failure_threshold=2,
                             restart_cooldown_sec=30.0,
-                            max_restarts_per_hour=5,
+                            max_restarts_per_hour=12,
+                            restart_command=restart_cmd,
+                            process_start_timeout_sec=12.0,
                             enable_restart=True,
                         )
                     )
+                    if restart_cmd:
+                        logger.info(f"[ConveyorCounterApp] Codec monitor restart_command configured: {restart_cmd}")
+                    else:
+                        logger.warning("[ConveyorCounterApp] CODEC_RESTART_COMMAND is empty; monitor can only kill, not relaunch missing codec")
                     self._codec_health_monitor.start()
                     logger.info("[ConveyorCounterApp] Codec health monitor started")
-
-                    # Register with health API for external monitoring
-                    try:
-                        from src.endpoint.routes.health import set_codec_health_monitor
-                        set_codec_health_monitor(self._codec_health_monitor)
-                    except ImportError:
-                        pass  # Health API not available
             else:
                 # Non-RDK (Windows/Linux): use OpenCV
                 source_type = 'opencv'
