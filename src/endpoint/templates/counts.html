@@ -820,38 +820,22 @@ function updateUI(data) {
     isFirstRender = false;
 }
 
-// ── WebSocket ──
-let _ws = null;
-let _wsRetryDelay = 1000;
-const _WS_MAX_RETRY = 30000;
-
-function connectWS() {
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const url = `${proto}://${location.host}/ws/counts/stream`;
-    _ws = new WebSocket(url);
-
-    _ws.onopen = () => {
-        _wsRetryDelay = 1000;  // reset back-off on success
+// ── SSE ──
+function connectSSE() {
+    const es = new EventSource('/api/counts/stream');
+    es.onopen = () => {
         $id('statusBadge').className = 'status-badge';
         $id('statusText').textContent = 'متصل';
     };
-    _ws.onmessage = (e) => {
-        try {
-            const data = JSON.parse(e.data);
-            // Ignore keep-alive pings and error frames
-            if (data.type === 'ping' || data.type === 'error') return;
-            updateUI(data);
-        } catch(err) { console.warn('WS parse error', err); }
+    es.onmessage = (e) => {
+        try { updateUI(JSON.parse(e.data)); } catch(err) { console.warn('SSE parse error', err); }
     };
-    _ws.onclose = () => {
+    es.onerror = () => {
         $id('statusBadge').className = 'status-badge disconnected';
         $id('statusText').textContent = 'جارٍ إعادة الاتصال…';
-        // Exponential back-off with jitter, capped at _WS_MAX_RETRY ms
-        const jitter = Math.random() * 500;
-        setTimeout(connectWS, Math.min(_wsRetryDelay, _WS_MAX_RETRY) + jitter);
-        _wsRetryDelay = Math.min(_wsRetryDelay * 2, _WS_MAX_RETRY);
+        es.close();
+        setTimeout(connectSSE, 3000);
     };
-    _ws.onerror = () => { /* onclose will fire next – handle reconnect there */ };
 }
 
 // ── Init ──
@@ -877,7 +861,7 @@ async function init() {
         if (resp.ok) updateUI(await resp.json());
     } catch(e) {}
 
-    connectWS();
+    connectSSE();
 }
 init();
 </script>

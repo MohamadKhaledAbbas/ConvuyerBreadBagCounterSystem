@@ -2,18 +2,20 @@
 Counts Routes - Real-time count visibility with three-tier display.
 
 Provides:
-- GET  /api/counts           - JSON endpoint with confirmed/pending/just_classified data
-- WS   /ws/counts/stream     - WebSocket endpoint for real-time updates
-- GET  /api/bag-types        - Bag type metadata (name, thumb path) for UI images
-- GET  /counts               - HTML dashboard with live pipeline visualization
+- GET /api/counts      - JSON endpoint with confirmed/pending/just_classified data
+- GET /api/counts/stream - SSE endpoint for real-time updates
+- GET /api/bag-types   - Bag type metadata (name, thumb path) for UI images
+- GET /counts          - HTML dashboard with live pipeline visualization
 """
 
 import asyncio
+import json
+import time
 from typing import Dict, Any, List
 
-from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 
 from src.endpoint.pipeline_state import read_state
 from src.endpoint.shared import get_db, get_templates
@@ -61,59 +63,61 @@ async def api_bag_types() -> List[Dict[str, Any]]:
     return bag_types
 
 
-@router.websocket("/ws/counts/stream")
-async def ws_counts_stream(websocket: WebSocket):
+@router.get("/api/counts/stream")
+async def api_counts_stream(request: Request) -> StreamingResponse:
     """
-    WebSocket endpoint for real-time count updates.
+    Server-Sent Events (SSE) endpoint for real-time count updates.
 
-    Pushes JSON state updates at ~1-second intervals when data changes.
-    Sends a lightweight ``{"type":"ping"}`` keep-alive every idle cycle so
-    proxies and firewalls do not drop the connection.
+    Pushes state updates at ~1 second intervals when data changes.
+    Stops when the client disconnects so the server thread is freed.
 
-    Clients connect via:
-        const ws = new WebSocket(`ws://${location.host}/ws/counts/stream`);
-        ws.onmessage = (e) => { const data = JSON.parse(e.data); ... };
+    Clients connect via EventSource:
+        const es = new EventSource('/api/counts/stream');
+        es.onmessage = (e) => { const data = JSON.parse(e.data); ... };
     """
-    await websocket.accept()
-    logger.debug("[WS] Client connected to /ws/counts/stream")
+    return StreamingResponse(
+        _sse_generator(request),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
+
+async def _sse_generator(request: Request):
+    """Generate SSE events by polling pipeline state file.
+
+    Stops when the client disconnects (request.is_disconnected()) to avoid
+    leaking background tasks that block other server requests.
+    """
     last_updated_at = 0.0
 
-    try:
-        while True:
-            try:
-                state = read_state()
-                current_updated = state.get("_updated_at", 0)
+    while True:
+        # Stop generating when the client has disconnected
+        if await request.is_disconnected():
+            logger.debug("[SSE] Client disconnected, stopping stream")
+            return
 
-                if current_updated > last_updated_at:
-                    last_updated_at = current_updated
-                    payload = {k: v for k, v in state.items() if not k.startswith("_")}
-                    await websocket.send_json(payload)
-                else:
-                    # Keep-alive so proxies don't time out the idle connection
-                    await websocket.send_json({"type": "ping"})
-
-            except WebSocketDisconnect:
-                raise  # re-raise so the outer handler logs it cleanly
-            except Exception as exc:
-                logger.debug(f"[WS] Error reading state: {exc}")
-                try:
-                    await websocket.send_json({"type": "error", "detail": str(exc)})
-                except Exception:
-                    break  # connection is dead
-
-            await asyncio.sleep(1.0)
-
-    except WebSocketDisconnect:
-        logger.debug("[WS] Client disconnected from /ws/counts/stream")
-    except Exception as exc:
-        logger.debug(f"[WS] Unexpected error: {exc}")
-    finally:
-        # Graceful close – ignore if already closed by the client
         try:
-            await websocket.close()
-        except Exception:
-            pass
+            state = read_state()
+            current_updated = state.get("_updated_at", 0)
+
+            # Only send when state has changed
+            if current_updated > last_updated_at:
+                last_updated_at = current_updated
+                payload = {k: v for k, v in state.items() if not k.startswith("_")}
+                yield f"data: {json.dumps(payload)}\n\n"
+            else:
+                # Send keepalive comment to prevent connection timeout
+                yield ": keepalive\n\n"
+
+        except Exception as e:
+            logger.debug(f"[SSE] Error reading state: {e}")
+            yield ": error\n\n"
+
+        await asyncio.sleep(1.0)
 
 
 @router.get("/counts", response_class=HTMLResponse)
@@ -121,7 +125,7 @@ async def counts_page(request: Request) -> HTMLResponse:
     """
     HTML dashboard for real-time pipeline count visibility.
 
-    Shows three-tier counts with WebSocket-powered live updates:
+    Shows three-tier counts with SSE-powered live updates:
     - Confirmed counts (after smoothing) ✓
     - Pending counts (in smoothing window) ⏳
     - Just classified (tentative) 🔄
