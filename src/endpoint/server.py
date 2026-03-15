@@ -102,6 +102,10 @@ app.include_router(conveyor_roi.router)
 from src.endpoint.routes import guidelines
 app.include_router(guidelines.router)
 
+# Include health status router (codec health, pipeline health)
+from src.endpoint.routes import health
+app.include_router(health.router)
+
 
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):

@@ -1,0 +1,37 @@
+[Unit]
+Description=Codec Health Monitor for hobot_codec VPU Decoder
+Documentation=file:///home/sunrise/ConvuyerBreadCounting/docs/CODEC_HEALTH_MONITOR.md
+After=network.target ros2-daemon.service
+Wants=ros2-daemon.service
+
+[Service]
+Type=simple
+User=sunrise
+Group=sunrise
+WorkingDirectory=/home/sunrise/ConvuyerBreadCounting
+
+# Environment setup for ROS2
+Environment="HOME=/home/sunrise"
+Environment="ROS_DOMAIN_ID=0"
+Environment="RMW_IMPLEMENTATION=rmw_fastrtps_cpp"
+Environment="PYTHONPATH=/home/sunrise/ConvuyerBreadCounting:/opt/tros/humble/lib/python3.10/site-packages"
+
+# Source ROS2 setup before running
+ExecStart=/bin/bash -c 'source /opt/tros/humble/setup.bash && python3 -m src.ros2.codec_health_monitor'
+
+# Restart policy
+Restart=always
+RestartSec=10
+
+# Resource limits
+MemoryMax=128M
+CPUQuota=10%
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=codec-health-monitor
+
+[Install]
+WantedBy=multi-user.target
+
