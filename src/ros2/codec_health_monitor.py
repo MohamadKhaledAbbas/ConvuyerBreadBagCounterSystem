@@ -34,7 +34,7 @@ Production Deployment:
        - See docs/CODEC_HEALTH_MONITOR.md
 """
 
-import glob as _glob_mod
+import glob as glob_module
 import json
 import os
 import signal
@@ -44,7 +44,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Optional, Callable, List
+from typing import Optional, Callable, List, Tuple
 
 from src.utils.AppLogging import logger
 from src.utils.platform import is_rdk_platform
@@ -185,7 +185,7 @@ class MonitorStats:
 # ---------------------------------------------------------------------------
 
 CODEC_HEALTH_STATUS_FILE = "/tmp/codec_health_status.json"
-SPOOL_TMP_GLOB = "/tmp/spool/*.tmp"
+SPOOL_TMP_PATTERN = "/tmp/spool/*.tmp"
 
 
 def read_codec_health_status() -> Optional[dict]:
@@ -254,7 +254,7 @@ def perform_startup_cleanup() -> dict:
             logger.warning(f"[StartupCleanup] Failed to remove {CODEC_HEALTH_STATUS_FILE}: {e}")
 
     # 2. Stale spool tmp files
-    for path in _glob_mod.glob(SPOOL_TMP_GLOB):
+    for path in glob_module.glob(SPOOL_TMP_PATTERN):
         try:
             os.remove(path)
             cleaned["files_removed"].append(path)
@@ -265,7 +265,7 @@ def perform_startup_cleanup() -> dict:
 
     # 3. FastDDS shared memory artifacts
     for pattern in ("/dev/shm/fastrtps_*", "/dev/shm/fast_datasharing_*"):
-        for path in _glob_mod.glob(pattern):
+        for path in glob_module.glob(pattern):
             try:
                 os.remove(path)
                 cleaned["files_removed"].append(path)
@@ -438,7 +438,7 @@ class CodecHealthMonitor:
     # ------------------------------------------------------------------
 
     def _check_topic_alive(self, topic: Optional[str] = None,
-                           timeout: Optional[float] = None) -> tuple[bool, str]:
+                           timeout: Optional[float] = None) -> Tuple[bool, str]:
         """
         Check if a ROS2 topic is receiving messages.
 
@@ -615,7 +615,7 @@ class CodecHealthMonitor:
     # Rate limiting
     # ------------------------------------------------------------------
 
-    def _can_restart(self) -> tuple[bool, str]:
+    def _can_restart(self) -> Tuple[bool, str]:
         """
         Check if a restart is allowed (rate limiting / circuit breaker).
 
@@ -647,19 +647,20 @@ class CodecHealthMonitor:
     # ------------------------------------------------------------------
 
     def _kill_process_gracefully(self, pattern: str,
-                                 timeout: float = 0.0) -> bool:
+                                 timeout: Optional[float] = None) -> bool:
         """
         Terminate a process by name pattern: SIGTERM first, then SIGKILL.
 
         Args:
             pattern: Process name pattern for pgrep.
             timeout: Seconds to wait between SIGTERM and SIGKILL.
-                     0 means use config default.
+                     None means use config default.
 
         Returns:
             True if the process was terminated (or was not running).
         """
-        timeout = timeout or self.config.graceful_kill_timeout_sec
+        if timeout is None:
+            timeout = self.config.graceful_kill_timeout_sec
 
         # Find PIDs first
         try:
@@ -681,7 +682,7 @@ class CodecHealthMonitor:
             try:
                 os.kill(int(pid), signal.SIGTERM)
             except (ProcessLookupError, ValueError):
-                pass
+                logger.debug(f"[CodecHealthMonitor] PID {pid} already gone during SIGTERM")
 
         # Wait for graceful exit
         deadline = time.time() + timeout
@@ -704,7 +705,7 @@ class CodecHealthMonitor:
             try:
                 os.kill(int(pid), signal.SIGKILL)
             except (ProcessLookupError, ValueError):
-                pass
+                logger.debug(f"[CodecHealthMonitor] PID {pid} already gone during SIGKILL")
 
         time.sleep(0.5)
         return True
