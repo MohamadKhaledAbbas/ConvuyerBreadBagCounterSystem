@@ -224,7 +224,10 @@ async def health() -> Dict[str, Any]:
         }
         if not codec_healthy:
             overall_status = "degraded"
-            degraded_reasons.append(f"وحدة فك الترميز: {state}")
+            # Constrain state to known values for safe display
+            safe_state = state if state in ("healthy", "degraded", "critical",
+                                            "recovering", "escalating", "unknown") else "unknown"
+            degraded_reasons.append(f"وحدة فك الترميز: {safe_state}")
 
         # Checkpoints
         checkpoints = codec_data.get("health_checkpoints", {})

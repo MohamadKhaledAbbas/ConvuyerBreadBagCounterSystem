@@ -1019,9 +1019,9 @@ class DatabaseManager:
             cursor.execute("""
                 SELECT
                     COUNT(*) AS total,
-                    SUM(CASE WHEN level = 'WARNING' THEN 1 ELSE 0 END) AS warning_count,
-                    SUM(CASE WHEN level = 'ERROR' THEN 1 ELSE 0 END) AS error_count,
-                    SUM(CASE WHEN level = 'CRITICAL' THEN 1 ELSE 0 END) AS critical_count,
+                    COALESCE(SUM(CASE WHEN level = 'WARNING' THEN 1 ELSE 0 END), 0) AS warning_count,
+                    COALESCE(SUM(CASE WHEN level = 'ERROR' THEN 1 ELSE 0 END), 0) AS error_count,
+                    COALESCE(SUM(CASE WHEN level = 'CRITICAL' THEN 1 ELSE 0 END), 0) AS critical_count,
                     MAX(timestamp) AS latest_timestamp
                 FROM monitoring_logs
                 WHERE timestamp >= datetime('now', '-1 day')

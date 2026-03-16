@@ -320,6 +320,13 @@
 <script>
 const $ = id => document.getElementById(id);
 
+// HTML-escape to prevent XSS when inserting dynamic content
+function esc(str) {
+    const d = document.createElement('div');
+    d.textContent = str;
+    return d.innerHTML;
+}
+
 let countdown = 30;
 let countdownInterval;
 let uptimeSeconds = null;
@@ -356,10 +363,10 @@ function renderComponents(components) {
     let html = '';
     for (const [key, val] of Object.entries(components)) {
         if (key === 'recovery_stage' || key === 'escalation_count') continue;
-        const label = compLabels[key] || key;
+        const label = esc(compLabels[key] || key);
         const healthy = val.healthy;
         const dot = healthy === true ? 'green' : healthy === false ? 'red' : 'yellow';
-        const detail = val.state || val.reason || val.status || '';
+        const detail = esc(val.state || val.reason || val.status || '');
         html += '<div class="comp-card">'
               + '<div class="comp-dot ' + dot + '"></div>'
               + '<div><div class="comp-name">' + label + '</div>'
@@ -375,7 +382,7 @@ function renderDegradedReasons(reasons) {
         el.style.display = 'none';
         return;
     }
-    el.innerHTML = reasons.map(r => '<span class="degraded-pill">' + r + '</span>').join(' ');
+    el.innerHTML = reasons.map(r => '<span class="degraded-pill">' + esc(r) + '</span>').join(' ');
     el.style.display = 'block';
 }
 
@@ -404,11 +411,15 @@ async function fetchLogs() {
         }
         let tbl = '<table class="log-table"><thead><tr><th>الوقت</th><th>المستوى</th><th>الرسالة</th></tr></thead><tbody>';
         for (const log of logs) {
-            const ts = (log.timestamp || '').replace('T', ' ').slice(0, 19);
+            const ts = esc((log.timestamp || '').replace('T', ' ').slice(0, 19));
+            const lvl = esc(log.level || '');
+            const msg = esc(log.message || '');
+            // Level class must be a known safe value
+            const lvlClass = {'WARNING':'WARNING','ERROR':'ERROR','CRITICAL':'CRITICAL'}[log.level] || '';
             tbl += '<tr>'
                 + '<td class="eng-cell" style="white-space:nowrap;">' + ts + '</td>'
-                + '<td><span class="log-level ' + (log.level || '') + '">' + (log.level || '') + '</span></td>'
-                + '<td style="word-break:break-word;max-width:350px;">' + (log.message || '') + '</td>'
+                + '<td><span class="log-level ' + lvlClass + '">' + lvl + '</span></td>'
+                + '<td style="word-break:break-word;max-width:350px;">' + msg + '</td>'
                 + '</tr>';
         }
         tbl += '</tbody></table>';

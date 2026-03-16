@@ -547,6 +547,13 @@
             }
         }, 1000);
 
+        // HTML-escape to prevent XSS when inserting dynamic content
+        function esc(str) {
+            const d = document.createElement('div');
+            d.textContent = str;
+            return d.innerHTML;
+        }
+
         // Check API health with rich status
         async function checkHealth() {
             const banner = document.getElementById('statusBanner');
@@ -581,7 +588,7 @@
                     // Show degraded reasons
                     const reasons = data.degraded_reasons || [];
                     if (reasons.length > 0) {
-                        reasonsEl.innerHTML = reasons.map(r => '<span class="degraded-reason">' + r + '</span>').join(' ');
+                        reasonsEl.innerHTML = reasons.map(r => '<span class="degraded-reason">' + esc(r) + '</span>').join(' ');
                         reasonsEl.style.display = 'block';
                     } else {
                         reasonsEl.style.display = 'none';
