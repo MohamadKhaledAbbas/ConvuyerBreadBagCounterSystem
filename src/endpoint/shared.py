@@ -6,6 +6,7 @@ from fastapi.templating import Jinja2Templates
 
 from src.config.config_manager import get_config
 from src.logging.Database import DatabaseManager
+from src.logging.db_log_handler import attach_db_log_handler
 from src.utils.AppLogging import logger
 
 _db_instance: Optional[DatabaseManager] = None
@@ -19,8 +20,14 @@ def init_shared_resources():
     try:
         _db_instance.purge_old_events(retention_days=7)
         _db_instance.purge_old_track_events(retention_days=3)
+        _db_instance.purge_old_monitoring_logs(retention_days=7)
     except Exception as e:
         logger.error(f"[Shared] Retention cleanup failed: {e}")
+    # Attach DB-backed log handler so WARNING+ logs are queryable via API
+    try:
+        attach_db_log_handler(_db_instance)
+    except Exception as e:
+        logger.error(f"[Shared] Failed to attach DB log handler: {e}")
     template_dir = Path(__file__).parent / "templates"
     template_dir.mkdir(exist_ok=True)
     _templates_instance = Jinja2Templates(directory=str(template_dir))

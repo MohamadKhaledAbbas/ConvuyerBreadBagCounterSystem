@@ -196,6 +196,28 @@ CREATE TABLE IF NOT EXISTS config (
 CREATE INDEX IF NOT EXISTS idx_config_key ON config(key);
 
 -- ============================================================================
+-- Table: monitoring_logs
+-- ============================================================================
+-- Stores WARNING and ERROR level log entries for operational monitoring.
+-- Provides a queryable log history via the /api/health/logs endpoint.
+-- 7-day retention, purged on startup and periodically.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS monitoring_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL DEFAULT (datetime('now', 'utc')),  -- ISO 8601 UTC
+    level TEXT NOT NULL,                   -- 'WARNING', 'ERROR', 'CRITICAL'
+    source TEXT NOT NULL DEFAULT '',       -- Logger name / module (e.g. 'CodecHealthMonitor')
+    message TEXT NOT NULL,                 -- Log message text
+    details TEXT                           -- Optional extra context (JSON or traceback)
+);
+
+-- Indexes for efficient log queries
+CREATE INDEX IF NOT EXISTS idx_monitoring_logs_timestamp ON monitoring_logs(timestamp);
+CREATE INDEX IF NOT EXISTS idx_monitoring_logs_level ON monitoring_logs(level);
+CREATE INDEX IF NOT EXISTS idx_monitoring_logs_level_ts ON monitoring_logs(level, timestamp);
+
+-- ============================================================================
 -- Initial Data: Default Bag Types
 -- ============================================================================
 -- Pre-populated bag types required for the analytics endpoint.

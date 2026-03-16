@@ -2,13 +2,17 @@
 Health status endpoints for system diagnostics.
 
 Provides API endpoints for checking the health of various system components
-including the codec health monitor, frame processing, and ROS2 pipeline.
+including the codec health monitor, frame processing, ROS2 pipeline, and
+monitoring logs.
 
 Architecture Note:
     main.py and the FastAPI server (run_endpoint.py) run as SEPARATE processes.
     The codec health monitor runs inside main.py and writes its status to a
     shared file (/tmp/codec_health_status.json). This endpoint reads that file
     so both processes can communicate without shared memory.
+
+    WARNING/ERROR/CRITICAL log messages are captured by a DB-backed handler
+    and stored in the monitoring_logs table with 7-day retention.
 """
 
 import json
@@ -17,10 +21,11 @@ import subprocess
 import time
 from typing import Dict, Any, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from src.endpoint.shared import get_db
 from src.utils.AppLogging import logger
 from src.utils.platform import is_rdk_platform
 
@@ -298,4 +303,53 @@ async def trigger_pipeline_recovery(body: RecoverRequest) -> JSONResponse:
         return JSONResponse(
             content={"success": False, "stage": stage, "error": str(e)},
             status_code=500
+        )
+
+
+@router.get("/logs")
+async def get_monitoring_logs(
+    level: Optional[str] = Query(None, description="Filter by level: WARNING, ERROR, CRITICAL"),
+    limit: int = Query(100, ge=1, le=500, description="Max rows to return"),
+    since_minutes: Optional[int] = Query(None, ge=1, description="Only logs from last N minutes"),
+) -> JSONResponse:
+    """
+    Query monitoring log entries stored in the database.
+
+    WARNING, ERROR, and CRITICAL log messages are automatically captured
+    and stored with 7-day retention.  Use this endpoint to inspect recent
+    issues without SSH-ing into the machine.
+
+    Query params:
+        level: Optional level filter (WARNING / ERROR / CRITICAL)
+        limit: Max rows (default 100, max 500)
+        since_minutes: Only return logs from last N minutes
+
+    Returns:
+        JSON with log entries and a summary.
+    """
+    try:
+        db = get_db()
+        logs = db.get_monitoring_logs(
+            level=level,
+            limit=limit,
+            since_minutes=since_minutes,
+        )
+        summary = db.get_monitoring_log_summary()
+        return JSONResponse(
+            content={
+                "logs": logs,
+                "summary": summary,
+                "filters": {
+                    "level": level,
+                    "limit": limit,
+                    "since_minutes": since_minutes,
+                },
+            },
+            status_code=200,
+        )
+    except Exception as e:
+        logger.error(f"[HealthAPI] Error querying monitoring logs: {e}")
+        return JSONResponse(
+            content={"error": str(e), "logs": []},
+            status_code=500,
         )

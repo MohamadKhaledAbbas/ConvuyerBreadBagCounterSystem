@@ -141,6 +141,76 @@
             margin-bottom: 1rem; display: flex; align-items: center; gap: .5rem;
         }
 
+        /* Component status badges */
+        .comp-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: .8rem;
+            margin-bottom: 2rem;
+        }
+        .comp-card {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-sm);
+            padding: .8rem 1rem;
+            display: flex; align-items: center; gap: .6rem;
+        }
+        .comp-dot {
+            width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+        }
+        .comp-dot.green { background: var(--accent-success); box-shadow: 0 0 8px rgba(45,212,191,.4); }
+        .comp-dot.red { background: var(--accent-danger); box-shadow: 0 0 8px rgba(248,113,113,.4); }
+        .comp-dot.yellow { background: var(--accent-warning); box-shadow: 0 0 8px rgba(251,191,36,.4); }
+        .comp-dot.gray { background: var(--text-muted); }
+        .comp-name { font-size: .85rem; font-weight: 600; }
+        .comp-detail { font-size: .7rem; color: var(--text-muted); }
+
+        /* Degraded reason pills */
+        .degraded-pills { text-align: center; margin-bottom: 1.5rem; }
+        .degraded-pill {
+            display: inline-block;
+            margin: .15rem .2rem;
+            padding: .15rem .65rem;
+            background: rgba(251, 191, 36, 0.1);
+            border: 1px solid rgba(251, 191, 36, 0.25);
+            border-radius: 20px;
+            font-size: .75rem;
+            color: var(--accent-warning);
+        }
+
+        /* Log entries */
+        .log-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 1rem;
+            font-size: .8rem;
+        }
+        .log-table th {
+            text-align: right;
+            padding: .5rem .6rem;
+            color: var(--text-muted);
+            font-weight: 600;
+            border-bottom: 1px solid var(--glass-border);
+        }
+        .log-table td {
+            padding: .45rem .6rem;
+            border-bottom: 1px solid rgba(255,255,255,.03);
+            vertical-align: top;
+        }
+        .log-table .eng-cell { font-family: 'Inter', monospace; direction: ltr; text-align: left; font-size: .75rem; }
+        .log-level {
+            display: inline-block;
+            padding: .1rem .4rem;
+            border-radius: 4px;
+            font-size: .7rem;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+        .log-level.WARNING { background: rgba(251,191,36,.15); color: var(--accent-warning); }
+        .log-level.ERROR { background: rgba(248,113,113,.15); color: var(--accent-danger); }
+        .log-level.CRITICAL { background: rgba(248,113,113,.25); color: var(--accent-danger); }
+        .log-empty { text-align: center; color: var(--text-muted); padding: 1.5rem; font-size: .9rem; }
+
         /* Last check */
         .last-check {
             text-align: center; color: var(--text-muted); font-size: .8rem;
@@ -157,6 +227,7 @@
         @media (max-width: 600px) {
             .info-grid { grid-template-columns: 1fr 1fr; }
             .hero-title { font-size: 1.3rem; }
+            .comp-grid { grid-template-columns: 1fr 1fr; }
         }
     </style>
 </head>
@@ -217,6 +288,24 @@
         </div>
     </div>
 
+    <!-- Degraded reasons -->
+    <div class="degraded-pills" id="degradedReasons" style="display:none;"></div>
+
+    <!-- Pipeline components health -->
+    <div class="section-title"><i class="fa-solid fa-cubes"></i> مكونات خط الإنتاج</div>
+    <div class="comp-grid" id="compGrid">
+        <div class="comp-card"><div class="comp-dot gray"></div><div><div class="comp-name">جارٍ التحميل...</div></div></div>
+    </div>
+
+    <!-- Monitoring logs -->
+    <div class="section-title"><i class="fa-solid fa-list-check"></i> سجل التنبيهات <small style="color:var(--text-muted);font-weight:400;font-size:.75rem;">(آخر ٢٤ ساعة)</small></div>
+    <div style="background:var(--glass-bg);border:1px solid var(--glass-border);border-radius:var(--radius-md);padding:1rem;backdrop-filter:blur(10px);margin-bottom:2rem;">
+        <div id="logSummary" style="display:flex;gap:1.5rem;margin-bottom:.8rem;font-size:.8rem;color:var(--text-muted);flex-wrap:wrap;"></div>
+        <div id="logContainer">
+            <p class="log-empty"><i class="fa-solid fa-circle-check" style="color:var(--accent-success);"></i> لا توجد تنبيهات</p>
+        </div>
+    </div>
+
     <div class="last-check">
         <i class="fa-solid fa-rotate"></i>
         آخر فحص: <span class="eng" id="lastCheck">—</span>
@@ -250,6 +339,85 @@ setInterval(() => {
     }
 }, 1000);
 
+// ── Component names map ──
+const compLabels = {
+    database: 'قاعدة البيانات',
+    codec: 'وحدة فك الترميز',
+    spool: 'مدخل التسجيل',
+    rtsp: 'بث الكاميرا',
+};
+
+function renderComponents(components) {
+    const grid = $('compGrid');
+    if (!components || Object.keys(components).length === 0) {
+        grid.innerHTML = '<div class="comp-card"><div class="comp-dot gray"></div><div><div class="comp-name">لا تتوفر بيانات</div></div></div>';
+        return;
+    }
+    let html = '';
+    for (const [key, val] of Object.entries(components)) {
+        if (key === 'recovery_stage' || key === 'escalation_count') continue;
+        const label = compLabels[key] || key;
+        const healthy = val.healthy;
+        const dot = healthy === true ? 'green' : healthy === false ? 'red' : 'yellow';
+        const detail = val.state || val.reason || val.status || '';
+        html += '<div class="comp-card">'
+              + '<div class="comp-dot ' + dot + '"></div>'
+              + '<div><div class="comp-name">' + label + '</div>'
+              + (detail ? '<div class="comp-detail eng-cell">' + detail + '</div>' : '')
+              + '</div></div>';
+    }
+    grid.innerHTML = html || '<div class="comp-card"><div class="comp-dot gray"></div><div><div class="comp-name">لا تتوفر بيانات</div></div></div>';
+}
+
+function renderDegradedReasons(reasons) {
+    const el = $('degradedReasons');
+    if (!reasons || reasons.length === 0) {
+        el.style.display = 'none';
+        return;
+    }
+    el.innerHTML = reasons.map(r => '<span class="degraded-pill">' + r + '</span>').join(' ');
+    el.style.display = 'block';
+}
+
+async function fetchLogs() {
+    try {
+        const res = await fetch('/api/health/logs?limit=20&since_minutes=1440');
+        const data = await res.json();
+        const logs = data.logs || [];
+        const summary = data.summary || {};
+
+        // Summary
+        const sumEl = $('logSummary');
+        const wc = summary.warning_count || 0;
+        const ec = summary.error_count || 0;
+        const cc = summary.critical_count || 0;
+        sumEl.innerHTML =
+            '<span><i class="fa-solid fa-triangle-exclamation" style="color:var(--accent-warning)"></i> تحذيرات: <b class="eng">' + wc + '</b></span>' +
+            '<span><i class="fa-solid fa-circle-xmark" style="color:var(--accent-danger)"></i> أخطاء: <b class="eng">' + ec + '</b></span>' +
+            (cc > 0 ? '<span><i class="fa-solid fa-skull-crossbones" style="color:var(--accent-danger)"></i> حرجة: <b class="eng">' + cc + '</b></span>' : '');
+
+        // Table
+        const container = $('logContainer');
+        if (logs.length === 0) {
+            container.innerHTML = '<p class="log-empty"><i class="fa-solid fa-circle-check" style="color:var(--accent-success);"></i> لا توجد تنبيهات</p>';
+            return;
+        }
+        let tbl = '<table class="log-table"><thead><tr><th>الوقت</th><th>المستوى</th><th>الرسالة</th></tr></thead><tbody>';
+        for (const log of logs) {
+            const ts = (log.timestamp || '').replace('T', ' ').slice(0, 19);
+            tbl += '<tr>'
+                + '<td class="eng-cell" style="white-space:nowrap;">' + ts + '</td>'
+                + '<td><span class="log-level ' + (log.level || '') + '">' + (log.level || '') + '</span></td>'
+                + '<td style="word-break:break-word;max-width:350px;">' + (log.message || '') + '</td>'
+                + '</tr>';
+        }
+        tbl += '</tbody></table>';
+        container.innerHTML = tbl;
+    } catch (e) {
+        $('logContainer').innerHTML = '<p class="log-empty" style="color:var(--accent-danger);">تعذر تحميل السجلات</p>';
+    }
+}
+
 async function checkHealth() {
     const heroEl = $('heroStatus');
     const iconEl = $('heroIconEl');
@@ -262,43 +430,59 @@ async function checkHealth() {
         const latency = Math.round(performance.now() - t0);
         const data = await res.json();
 
-        if (data.status === 'healthy') {
+        const isHealthy = data.status === 'healthy';
+        const isDegraded = data.status === 'degraded';
+
+        if (isHealthy) {
             heroEl.className = 'hero-status ok';
             iconEl.className = 'fa-solid fa-circle-check';
             titleEl.textContent = 'المنظومة تعمل بكفاءة';
             subEl.textContent = 'جميع الخدمات متصلة — زمن الاستجابة ' + latency + 'ms';
-
-            // Uptime — sync from server, local ticker will keep it going
-            uptimeSeconds = Math.floor(data.uptime_seconds || 0);
-            $('uptime').textContent = formatUptime(uptimeSeconds);
-
-            // DB
-            const dbOk = data.database === 'connected';
-            $('dbStatus').textContent = dbOk ? 'متصلة' : 'منقطعة';
-            $('dbStatus').className = 'value ' + (dbOk ? 'success' : 'danger');
-
-            // Version
-            $('appVersion').textContent = data.version || '—';
-
-            // Pipeline details
-            const p = data.pipeline || {};
-            $('confirmedTotal').textContent = (p.confirmed_total || 0).toLocaleString('en');
-            $('pendingTotal').textContent = (p.pending_total || 0).toLocaleString('en');
-            $('batchType').textContent = p.current_batch_type_arabic || p.current_batch_type || '—';
-            $('smoothingRate').textContent = p.smoothing_rate != null ? (p.smoothing_rate * 100).toFixed(1) + '%' : '—';
-
+        } else if (isDegraded) {
+            heroEl.className = 'hero-status fail';
+            iconEl.className = 'fa-solid fa-triangle-exclamation';
+            titleEl.textContent = 'أداء منخفض';
+            subEl.textContent = 'بعض المكونات لا تعمل بشكل طبيعي';
         } else {
             heroEl.className = 'hero-status fail';
             iconEl.className = 'fa-solid fa-triangle-exclamation';
             titleEl.textContent = 'حالة غير معروفة';
             subEl.textContent = 'الخادم استجاب لكن الحالة غير واضحة';
         }
+
+        // Uptime
+        uptimeSeconds = Math.floor(data.uptime_seconds || 0);
+        $('uptime').textContent = formatUptime(uptimeSeconds);
+
+        // DB
+        const dbOk = data.database === 'connected';
+        $('dbStatus').textContent = dbOk ? 'متصلة' : 'منقطعة';
+        $('dbStatus').className = 'value ' + (dbOk ? 'success' : 'danger');
+
+        // Version
+        $('appVersion').textContent = data.version || '—';
+
+        // Pipeline details
+        const p = data.pipeline || {};
+        $('confirmedTotal').textContent = (p.confirmed_total || 0).toLocaleString('en');
+        $('pendingTotal').textContent = (p.pending_total || 0).toLocaleString('en');
+        $('batchType').textContent = p.current_batch_type_arabic || p.current_batch_type || '—';
+        $('smoothingRate').textContent = p.smoothing_rate != null ? (p.smoothing_rate * 100).toFixed(1) + '%' : '—';
+
+        // Components
+        renderComponents(data.components || {});
+
+        // Degraded reasons
+        renderDegradedReasons(data.degraded_reasons || []);
+
     } catch (err) {
         heroEl.className = 'hero-status fail';
         iconEl.className = 'fa-solid fa-plug-circle-xmark';
         titleEl.textContent = 'الاتصال منقطع';
         subEl.textContent = 'تعذر الوصول إلى الخادم — تحقق من الشبكة';
         $('dbStatus').textContent = '—';
+        renderComponents({});
+        renderDegradedReasons([]);
     }
 
     // Update last check time
@@ -314,19 +498,16 @@ async function checkHealth() {
     }, 1000);
 }
 
-// Initial check
+// Initial load
 checkHealth();
+fetchLogs();
 
 // Auto-refresh every 30 seconds
 setInterval(checkHealth, 30000);
+setInterval(fetchLogs, 30000);
 </script>
 </body>
 </html>
-
-
-
-
-
 
 
 
