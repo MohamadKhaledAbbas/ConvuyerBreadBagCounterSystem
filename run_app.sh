@@ -27,6 +27,14 @@ fi
 
 echo "[INFO] is_development=$IS_DEVELOPMENT, show_ui_screen=$SHOW_UI_SCREEN, accuracy_mode=$ACCURACY_MODE"
 
+# --- Clean up stale artifacts from previous runs / unclean shutdown ---
+echo "[INFO] Cleaning up stale artifacts from previous runs..."
+rm -f /tmp/codec_health_status.json
+rm -f /tmp/spool/*.tmp 2>/dev/null
+# Clean FastDDS shared memory artifacts that can cause issues after power loss
+rm -f /dev/shm/fastrtps_* /dev/shm/fast_datasharing_* 2>/dev/null
+echo "[INFO] Stale artifact cleanup complete"
+
 # --- Stop all services first for a clean restart/selection ---
 echo "[INFO] Stopping all breadcount services for controlled startup..."
 sudo supervisorctl stop breadcount-ros2 breadcount-main breadcount-uvicorn breadcount-spool-recorder breadcount-spool-processor > /dev/null 2>&1

@@ -15,10 +15,11 @@ import json
 import os
 import subprocess
 import time
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
 from src.utils.AppLogging import logger
 from src.utils.platform import is_rdk_platform
@@ -29,7 +30,12 @@ router = APIRouter(prefix="/api/health", tags=["health"])
 CODEC_HEALTH_STATUS_FILE = "/tmp/codec_health_status.json"
 
 
-def _read_status_file() -> dict | None:
+class RecoverRequest(BaseModel):
+    """Request body for manual pipeline recovery."""
+    stage: int = Field(..., ge=1, le=4, description="Recovery stage (1-4)")
+
+
+def _read_status_file() -> Optional[dict]:
     """Read codec health status from the shared file written by main.py."""
     try:
         if os.path.exists(CODEC_HEALTH_STATUS_FILE):
@@ -53,18 +59,21 @@ async def get_codec_health() -> JSONResponse:
     Get the health status of the codec (hobot_codec VPU decoder).
 
     Reads from a shared status file written by the codec health monitor
-    running inside main.py.
+    running inside main.py.  Includes recovery_events and health_checkpoints
+    when available.
 
     Returns:
         JSON with health status, statistics, and diagnostic information.
     """
-    # Try reading from shared status file (cross-process communication)
     status = _read_status_file()
 
     if status is not None:
-        return JSONResponse(content=status, status_code=200)
+        # Surface recovery events and health checkpoints at top level
+        response = dict(status)
+        response.setdefault("recovery_events", [])
+        response.setdefault("health_checkpoints", {})
+        return JSONResponse(content=response, status_code=200)
 
-    # No status file — monitor hasn't started or not on RDK
     if not is_rdk_platform():
         return JSONResponse(
             content={
@@ -146,7 +155,9 @@ async def get_pipeline_health() -> JSONResponse:
 
     Checks:
     - Codec health (reads shared status file)
-    - Whether main.py is actively processing
+    - Spool health (from health checkpoints)
+    - RTSP health (from health checkpoints)
+    - Recovery stage
 
     Returns:
         JSON with overall health status.
@@ -156,7 +167,6 @@ async def get_pipeline_health() -> JSONResponse:
         "components": {}
     }
 
-    # Check codec health from shared file
     codec_status = _read_status_file()
     if codec_status is not None:
         state = codec_status.get("state", "unknown")
@@ -172,6 +182,29 @@ async def get_pipeline_health() -> JSONResponse:
         }
         if not codec_healthy:
             health["status"] = "degraded"
+
+        # Spool health from checkpoints
+        checkpoints = codec_status.get("health_checkpoints", {})
+        spool_cp = checkpoints.get("spool_input", {})
+        health["components"]["spool"] = {
+            "healthy": spool_cp.get("alive", False) if spool_cp else None,
+            "reason": spool_cp.get("reason") if spool_cp else "no_data",
+        }
+        if spool_cp and not spool_cp.get("alive", False):
+            health["status"] = "degraded"
+
+        # RTSP health from checkpoints
+        rtsp_cp = checkpoints.get("rtsp_ingest", {})
+        health["components"]["rtsp"] = {
+            "healthy": rtsp_cp.get("alive", False) if rtsp_cp else None,
+            "reason": rtsp_cp.get("reason") if rtsp_cp else "no_data",
+        }
+        if rtsp_cp and not rtsp_cp.get("alive", False):
+            health["status"] = "degraded"
+
+        # Recovery stage
+        health["recovery_stage"] = codec_status.get("current_recovery_stage", 1)
+        health["escalation_count"] = codec_status.get("escalation_count", 0)
     else:
         if is_rdk_platform():
             health["components"]["codec"] = {
@@ -179,6 +212,8 @@ async def get_pipeline_health() -> JSONResponse:
                 "state": "unknown",
                 "reason": "Status file not found — main.py may not be running"
             }
+            health["components"]["spool"] = {"healthy": None, "reason": "no_data"}
+            health["components"]["rtsp"] = {"healthy": None, "reason": "no_data"}
             health["status"] = "degraded"
         else:
             health["components"]["codec"] = {
@@ -188,3 +223,79 @@ async def get_pipeline_health() -> JSONResponse:
 
     status_code = 200 if health["status"] == "healthy" else 503
     return JSONResponse(content=health, status_code=status_code)
+
+
+@router.post("/pipeline/recover")
+async def trigger_pipeline_recovery(body: RecoverRequest) -> JSONResponse:
+    """
+    Manually trigger pipeline recovery at a specified stage (1-4).
+
+    Stages:
+        1 - Restart hobot_codec only
+        2 - Restart spool_processor + ros2
+        3 - Restart full media stack (ros2 + spool-processor + spool-recorder)
+        4 - Restart all services except uvicorn
+
+    Returns:
+        JSON with recovery result.
+    """
+    if not is_rdk_platform():
+        return JSONResponse(
+            content={"success": False, "reason": "Not on RDK platform"},
+            status_code=400
+        )
+
+    stage = body.stage
+    stage_commands = {
+        1: None,  # handled specially below
+        2: "sudo supervisorctl restart breadcount-ros2 breadcount-spool-processor",
+        3: "sudo supervisorctl restart breadcount-ros2 breadcount-spool-processor breadcount-spool-recorder",
+        4: "sudo supervisorctl restart breadcount-ros2 breadcount-spool-processor breadcount-spool-recorder breadcount-main",
+    }
+
+    try:
+        if stage == 1:
+            # Stage 1: kill hobot_codec, let ROS2 respawn it
+            result = subprocess.run(
+                ["pkill", "-f", "hobot_codec"],
+                capture_output=True, text=True, timeout=10
+            )
+            logger.warning(f"[HealthAPI] Manual recovery stage 1: pkill hobot_codec rc={result.returncode}")
+            return JSONResponse(
+                content={
+                    "success": True,
+                    "stage": stage,
+                    "message": "Stage 1: hobot_codec killed, awaiting respawn."
+                },
+                status_code=200
+            )
+
+        cmd = stage_commands[stage]
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            executable="/bin/bash",
+            capture_output=True, text=True, timeout=30
+        )
+
+        ok = result.returncode == 0
+        logger.warning(
+            f"[HealthAPI] Manual recovery stage {stage}: rc={result.returncode} "
+            f"stdout={result.stdout.strip()} stderr={result.stderr.strip()}"
+        )
+        return JSONResponse(
+            content={
+                "success": ok,
+                "stage": stage,
+                "message": f"Stage {stage} recovery {'succeeded' if ok else 'failed'}.",
+                "details": result.stderr.strip() if not ok else "",
+            },
+            status_code=200 if ok else 500
+        )
+
+    except Exception as e:
+        logger.error(f"[HealthAPI] Recovery stage {stage} error: {e}")
+        return JSONResponse(
+            content={"success": False, "stage": stage, "error": str(e)},
+            status_code=500
+        )
