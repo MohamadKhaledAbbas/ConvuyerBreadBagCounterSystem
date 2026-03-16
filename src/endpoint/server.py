@@ -141,7 +141,8 @@ async def health() -> Dict[str, Any]:
     """
     Enhanced health check endpoint with system diagnostics.
 
-    Returns version, uptime, DB connectivity, and live pipeline metrics
+    Returns version, uptime, DB connectivity, live pipeline metrics,
+    per-component pipeline health, and a 24-hour monitoring log summary
     so the UI and external monitors get a complete picture.
     """
     now = time.time()
@@ -154,6 +155,7 @@ async def health() -> Dict[str, Any]:
 
     # Check DB connectivity
     db_ok = False
+    db = None
     try:
         db = get_db()
         if db is not None:
@@ -182,8 +184,97 @@ async def health() -> Dict[str, Any]:
     except Exception:
         pass
 
+    # ── Pipeline component health (from codec health monitor status file) ──
+    overall_status = "healthy"
+    components: Dict[str, Any] = {}
+    degraded_reasons: list = []
+
+    # Database component
+    components["database"] = {
+        "healthy": db_ok,
+        "status": "connected" if db_ok else "disconnected",
+    }
+    if not db_ok:
+        overall_status = "degraded"
+        degraded_reasons.append("قاعدة البيانات غير متصلة")
+
+    # Codec / spool / RTSP from shared status file
+    codec_status_file = "/tmp/codec_health_status.json"
+    codec_data = None
+    try:
+        if os.path.exists(codec_status_file):
+            import json
+            with open(codec_status_file, 'r') as _f:
+                codec_data = json.load(_f)
+    except Exception:
+        pass
+
+    if codec_data is not None:
+        state = codec_data.get("state", "unknown")
+        ts = codec_data.get("timestamp", 0)
+        age = (time.time() - ts) if ts else None
+        is_stale = (age is not None and age > 60)
+
+        codec_healthy = (state == "healthy") and not is_stale
+        components["codec"] = {
+            "healthy": codec_healthy,
+            "state": state,
+            "stale": is_stale,
+            "restarts_total": codec_data.get("restarts_total", 0),
+        }
+        if not codec_healthy:
+            overall_status = "degraded"
+            # Constrain state to known values for safe display
+            safe_state = state if state in ("healthy", "degraded", "critical",
+                                            "recovering", "escalating", "unknown") else "unknown"
+            degraded_reasons.append(f"وحدة فك الترميز: {safe_state}")
+
+        # Checkpoints
+        checkpoints = codec_data.get("health_checkpoints", {})
+        spool_cp = checkpoints.get("spool_input", {})
+        if spool_cp:
+            spool_alive = spool_cp.get("alive", False)
+            components["spool"] = {
+                "healthy": spool_alive,
+                "reason": spool_cp.get("reason", ""),
+            }
+            if not spool_alive:
+                overall_status = "degraded"
+                degraded_reasons.append("مدخل التسجيل متوقف")
+
+        rtsp_cp = checkpoints.get("rtsp_ingest", {})
+        if rtsp_cp:
+            rtsp_alive = rtsp_cp.get("alive", False)
+            components["rtsp"] = {
+                "healthy": rtsp_alive,
+                "reason": rtsp_cp.get("reason", ""),
+            }
+            if not rtsp_alive:
+                overall_status = "degraded"
+                degraded_reasons.append("بث الكاميرا متوقف")
+
+        components["recovery_stage"] = codec_data.get("current_recovery_stage", 1)
+        components["escalation_count"] = codec_data.get("escalation_count", 0)
+    else:
+        from src.utils.platform import is_rdk_platform
+        if is_rdk_platform():
+            components["codec"] = {
+                "healthy": False, "state": "unknown",
+                "reason": "ملف الحالة غير موجود — main.py قد لا يعمل"
+            }
+            overall_status = "degraded"
+            degraded_reasons.append("مراقب فك الترميز غير متصل")
+
+    # ── Monitoring log summary (24h) ──
+    log_summary: Dict[str, Any] = {}
+    try:
+        if db_ok and db is not None:
+            log_summary = db.get_monitoring_log_summary()
+    except Exception:
+        pass
+
     return {
-        "status": "healthy",
+        "status": overall_status,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "version": APP_VERSION,
         "uptime_seconds": round(uptime_seconds, 1),
@@ -198,7 +289,10 @@ async def health() -> Dict[str, Any]:
             "last_classified_type": last_classified,
             "last_classified_type_arabic": last_classified_arabic,
             "smoothing_rate": pipeline.get("smoothing_rate", 0),
-        }
+        },
+        "components": components,
+        "degraded_reasons": degraded_reasons,
+        "monitoring_log_summary": log_summary,
     }
 
 

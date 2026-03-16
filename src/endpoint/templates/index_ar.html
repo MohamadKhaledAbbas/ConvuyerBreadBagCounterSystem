@@ -125,7 +125,22 @@
             border-color: rgba(248, 113, 113, 0.35);
             box-shadow: 0 0 30px rgba(248, 113, 113, 0.06);
         }
+        .status-banner.degraded {
+            border-color: rgba(251, 191, 36, 0.35);
+            box-shadow: 0 0 30px rgba(251, 191, 36, 0.06);
+        }
         .status-banner.checking { border-color: rgba(251, 191, 36, 0.2); }
+
+        .degraded-reason {
+            display: inline-block;
+            margin: 0.15rem 0.25rem;
+            padding: 0.15rem 0.6rem;
+            background: rgba(251, 191, 36, 0.1);
+            border: 1px solid rgba(251, 191, 36, 0.25);
+            border-radius: 20px;
+            font-size: 0.75rem;
+            color: var(--accent-warning);
+        }
 
         .status-row {
             display: flex;
@@ -393,6 +408,7 @@
                 <i class="fa-solid fa-rotate"></i> فحص تلقائي كل ٣٠ ثانية &nbsp;•&nbsp;
                 <a href="/health/view">صفحة الحالة التفصيلية</a>
             </div>
+            <div id="degradedReasons" style="text-align:center;margin-top:0.5rem;display:none;"></div>
         </div>
 
         <!-- Navigation Grid -->
@@ -531,12 +547,20 @@
             }
         }, 1000);
 
+        // HTML-escape to prevent XSS when inserting dynamic content
+        function esc(str) {
+            const d = document.createElement('div');
+            d.textContent = str;
+            return d.innerHTML;
+        }
+
         // Check API health with rich status
         async function checkHealth() {
             const banner = document.getElementById('statusBanner');
             const sysIcon = document.getElementById('sysIcon');
             const sysIconEl = document.getElementById('sysIconEl');
             const sysStatus = document.getElementById('sysStatus');
+            const reasonsEl = document.getElementById('degradedReasons');
 
             try {
                 const res = await fetch('/health');
@@ -548,8 +572,28 @@
                     sysIconEl.className = 'fa-solid fa-circle-check';
                     sysStatus.textContent = 'تعمل بكفاءة';
                     sysStatus.className = 'ok';
+                    reasonsEl.style.display = 'none';
+                    reasonsEl.innerHTML = '';
 
                     // Sync uptime from server
+                    _uptimeSeconds = Math.floor(data.uptime_seconds || 0);
+                    document.getElementById('uptime').textContent = formatUptime(_uptimeSeconds);
+                } else if (data.status === 'degraded') {
+                    banner.className = 'status-banner degraded';
+                    sysIcon.className = 'status-icon wait';
+                    sysIconEl.className = 'fa-solid fa-triangle-exclamation';
+                    sysStatus.textContent = 'أداء منخفض';
+                    sysStatus.className = 'warn';
+
+                    // Show degraded reasons
+                    const reasons = data.degraded_reasons || [];
+                    if (reasons.length > 0) {
+                        reasonsEl.innerHTML = reasons.map(r => '<span class="degraded-reason">' + esc(r) + '</span>').join(' ');
+                        reasonsEl.style.display = 'block';
+                    } else {
+                        reasonsEl.style.display = 'none';
+                    }
+
                     _uptimeSeconds = Math.floor(data.uptime_seconds || 0);
                     document.getElementById('uptime').textContent = formatUptime(_uptimeSeconds);
                 } else {
@@ -558,6 +602,7 @@
                     sysIconEl.className = 'fa-solid fa-triangle-exclamation';
                     sysStatus.textContent = 'حالة غير معروفة';
                     sysStatus.className = 'warn';
+                    reasonsEl.style.display = 'none';
                 }
             } catch (err) {
                 banner.className = 'status-banner error';
@@ -567,6 +612,7 @@
                 sysStatus.className = 'err';
                 _uptimeSeconds = null;
                 document.getElementById('uptime').textContent = '—';
+                reasonsEl.style.display = 'none';
             }
         }
         checkHealth();

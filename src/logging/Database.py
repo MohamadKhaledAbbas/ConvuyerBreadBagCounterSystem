@@ -916,6 +916,124 @@ class DatabaseManager:
             f"{events_deleted} events, {details_deleted} details (retention={retention_days}d)"
         )
         return events_deleted
+
+    # ─── Monitoring Logs ──────────────────────────────────────────────
+
+    def insert_monitoring_log(
+        self,
+        level: str,
+        source: str,
+        message: str,
+        details: Optional[str] = None,
+    ) -> None:
+        """
+        Insert a monitoring log entry via the async write queue.
+
+        This is designed to be called from a logging handler on the hot path,
+        so it must be non-blocking.  Entries are written in background batches.
+
+        Args:
+            level: Log level name ('WARNING', 'ERROR', 'CRITICAL')
+            source: Logger/module name
+            message: Log message text
+            details: Optional extra context (JSON string or traceback)
+        """
+        self.enqueue_write(
+            "INSERT INTO monitoring_logs (timestamp, level, source, message, details) "
+            "VALUES (datetime('now', 'utc'), ?, ?, ?, ?)",
+            (level, source, message, details),
+        )
+
+    def get_monitoring_logs(
+        self,
+        level: Optional[str] = None,
+        limit: int = 100,
+        since_minutes: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Query recent monitoring log entries.
+
+        Args:
+            level: Optional filter by level ('WARNING', 'ERROR', 'CRITICAL').
+                   None returns all levels.
+            limit: Maximum rows to return (default 100, max 500).
+            since_minutes: If set, only return logs from the last N minutes.
+
+        Returns:
+            List of log dicts ordered newest-first.
+        """
+        limit = min(max(1, limit), 500)
+        clauses = []
+        params: list = []
+
+        if level:
+            clauses.append("level = ?")
+            params.append(level.upper())
+
+        if since_minutes and since_minutes > 0:
+            clauses.append("timestamp >= datetime('now', '-' || ? || ' minutes')")
+            params.append(since_minutes)
+
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.append(limit)
+
+        with self._cursor() as cursor:
+            cursor.execute(
+                f"SELECT id, timestamp, level, source, message, details "
+                f"FROM monitoring_logs{where} ORDER BY id DESC LIMIT ?",
+                tuple(params),
+            )
+            return [dict(r) for r in cursor.fetchall()]
+
+    def purge_old_monitoring_logs(self, retention_days: int = 7) -> int:
+        """
+        Delete monitoring log entries older than *retention_days*.
+
+        Args:
+            retention_days: Days to keep (default: 7)
+
+        Returns:
+            Number of rows deleted.
+        """
+        with self._cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM monitoring_logs WHERE timestamp < datetime('now', '-' || ? || ' days')",
+                (retention_days,),
+            )
+            deleted = cursor.rowcount
+        if deleted:
+            logger.info(
+                f"[DatabaseManager] Purged old monitoring logs: "
+                f"{deleted} rows (retention={retention_days}d)"
+            )
+        return deleted
+
+    def get_monitoring_log_summary(self) -> Dict[str, Any]:
+        """
+        Return aggregated counts of monitoring logs for the last 24 hours.
+
+        Returns:
+            Dict with total, warning_count, error_count, critical_count, latest_timestamp.
+        """
+        with self._cursor() as cursor:
+            cursor.execute("""
+                SELECT
+                    COUNT(*) AS total,
+                    COALESCE(SUM(CASE WHEN level = 'WARNING' THEN 1 ELSE 0 END), 0) AS warning_count,
+                    COALESCE(SUM(CASE WHEN level = 'ERROR' THEN 1 ELSE 0 END), 0) AS error_count,
+                    COALESCE(SUM(CASE WHEN level = 'CRITICAL' THEN 1 ELSE 0 END), 0) AS critical_count,
+                    MAX(timestamp) AS latest_timestamp
+                FROM monitoring_logs
+                WHERE timestamp >= datetime('now', '-1 day')
+            """)
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+            return {"total": 0, "warning_count": 0, "error_count": 0,
+                    "critical_count": 0, "latest_timestamp": None}
+
+    # ─── Lifecycle ────────────────────────────────────────────────────
+
     def close(self):
         # Stop the write queue thread first
         if self._write_thread and self._write_thread.is_alive():
