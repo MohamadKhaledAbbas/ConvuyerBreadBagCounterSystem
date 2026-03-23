@@ -77,7 +77,7 @@ def _apply_idle_reset_and_work_info(state: Dict[str, Any]) -> Dict[str, Any]:
         elapsed = now - work_started_ts
         hours = int(elapsed // 3600)
         minutes = int((elapsed % 3600) // 60)
-        state["work_started_ago"] = f" {hours}:ساعة{minutes} دقيقة" if hours > 0 else f" {minutes} دقيقة"
+        state["work_started_ago"] = f" {hours} ساعة {minutes} دقيقة " if hours > 0 else f" {minutes} دقيقة"
         state["work_started_display"] = datetime.fromtimestamp(work_started_ts).strftime("%H:%M")
         # Format work-started datetime as "yyyy/mm/dd - HH:MM"
         state["work_started_datetime_formatted"] = datetime.fromtimestamp(work_started_ts).strftime("%Y/%m/%d - %H:%M")
