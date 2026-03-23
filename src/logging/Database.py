@@ -417,7 +417,8 @@ class DatabaseManager:
         Args:
             start_date: Optional start date filter (ISO 8601)
             end_date: Optional end date filter (ISO 8601)
-            limit: Maximum number of events to return
+            limit: Maximum number of events to return. 0 means no limit
+                   (use the time window as the natural boundary).
 
         Returns:
             List of event dictionaries with bag_type metadata
@@ -437,8 +438,10 @@ class DatabaseManager:
             params.append(end_date)
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
-        query += " ORDER BY e.timestamp ASC LIMIT ?"
-        params.append(limit)
+        query += " ORDER BY e.timestamp ASC"
+        if limit > 0:
+            query += " LIMIT ?"
+            params.append(limit)
         with self._cursor() as cursor:
             cursor.execute(query, params)
             return [dict(row) for row in cursor.fetchall()]
@@ -916,6 +919,66 @@ class DatabaseManager:
             f"{events_deleted} events, {details_deleted} details (retention={retention_days}d)"
         )
         return events_deleted
+
+    # ─── Event Boundary Queries ────────────────────────────────────────
+
+    def get_event_time_boundaries(
+        self,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        exclude_types: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Get the first and last event timestamps in a time range.
+
+        Uses MIN/MAX aggregation directly in SQL — O(1) via index scan,
+        independent of how many events exist in the range.  This avoids
+        the 10K-row LIMIT that previously capped working-hours calculations.
+
+        Args:
+            start_date: Optional ISO 8601 start filter
+            end_date: Optional ISO 8601 end filter
+            exclude_types: Optional list of bag_type names to exclude
+                           (e.g. ['Rejected', 'Unknown'])
+
+        Returns:
+            Dict with 'first_timestamp', 'last_timestamp', 'event_count'.
+            All values are None / 0 when no events match.
+        """
+        query = """
+            SELECT MIN(e.timestamp) AS first_timestamp,
+                   MAX(e.timestamp) AS last_timestamp,
+                   COUNT(*)         AS event_count
+            FROM events e
+            JOIN bag_types bt ON e.bag_type_id = bt.id
+        """
+        params: list = []
+        conditions: list = []
+
+        if start_date:
+            conditions.append("e.timestamp >= ?")
+            params.append(start_date)
+        if end_date:
+            conditions.append("e.timestamp <= ?")
+            params.append(end_date)
+        if exclude_types:
+            placeholders = ", ".join("?" for _ in exclude_types)
+            conditions.append(f"bt.name NOT IN ({placeholders})")
+            params.extend(exclude_types)
+
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+
+        with self._cursor() as cursor:
+            cursor.execute(query, params)
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+            return {
+                "first_timestamp": None,
+                "last_timestamp": None,
+                "event_count": 0,
+            }
 
     # ─── Monitoring Logs ──────────────────────────────────────────────
 

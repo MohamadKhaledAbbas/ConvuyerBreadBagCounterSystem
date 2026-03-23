@@ -825,12 +825,25 @@
         </div>
         {% if working_hours and working_hours.total_hours > 0 %}
         <div class="hero-card" style="border-color:rgba(45,212,191,0.3);background:linear-gradient(135deg,rgba(45,212,191,0.08),var(--glass-bg));">
-            <div class="hero-label"><i class="fa-solid fa-clock" style="margin-left:0.3rem;"></i> ساعات العمل</div>
-            <div class="hero-value" style="color:var(--accent-success);">{{ working_hours.total_hours_display }}</div>
+            <div class="hero-label"><i class="fa-solid fa-clock" style="margin-left:0.3rem;"></i> ساعات العمل الفعلية</div>
+            <div class="hero-value" style="color:var(--accent-success);">{{ working_hours.active_hours_display }}</div>
+            {% if working_hours.is_multi_day %}
+            <div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.3rem;display:flex;align-items:center;gap:0.3rem;flex-wrap:wrap;">
+                <i class="fa-solid fa-calendar-days" style="color:var(--accent-primary);"></i>
+                <span class="num">{{ working_hours.working_period_formatted }}</span>
+            </div>
+            {% else %}
             <div style="font-size:0.8rem;color:var(--text-muted);margin-top:0.4rem;">
                 <span class="num">{{ working_hours.first_event_time }}</span>
                 <span style="margin:0 0.3rem;">→</span>
                 <span class="num">{{ working_hours.last_event_time }}</span>
+            </div>
+            {% endif %}
+            <div style="font-size:0.75rem;color:var(--text-muted);margin-top:0.4rem;font-weight:500;">
+                <span style="color:var(--accent-success);">{{ working_hours.active_ratio_pct }}%</span> من الإجمالي
+                {% if working_hours.total_hours != working_hours.active_hours %}
+                <span style="margin-inline-start:0.5rem;">(من {{ working_hours.total_hours_display }})</span>
+                {% endif %}
             </div>
             <div class="hero-breakdown" style="flex-direction:column;gap:0.4rem;margin-top:0.75rem;">
                 <span class="tier-badge" style="background:rgba(45,212,191,0.15);color:var(--accent-success);">
@@ -839,14 +852,12 @@
                 </span>
                 {% if working_hours.gap_count > 0 %}
                 <span class="tier-badge" style="background:rgba(248,113,113,0.15);color:var(--accent-danger);">
-                    <i class="fa-solid" style="margin-left:0.3rem;"></i>
-                    إجمالي فترة التوقف ({{ working_hours.total_idle_display }})
-
+                    <i class="fa-solid fa-pause-circle" style="margin-left:0.3rem;"></i>
+                    وقت التوقف: <span class="num">{{ working_hours.total_idle_display }}</span>
                 </span>
                 <span class="tier-badge" style="background:rgba(248,113,113,0.15);color:var(--accent-danger);">
-                    <i class="fa-solid" style="margin-left:0.3rem;"></i>
-                    ({{ working_hours.gap_count }}) عدد فترات التوقف
-
+                    <i class="fa-solid fa-hourglass-end" style="margin-left:0.3rem;"></i>
+                    <span class="num">{{ working_hours.gap_count }}</span> فترات توقف
                 </span>
                 {% else %}
                 <span class="tier-badge" style="background:rgba(45,212,191,0.15);color:var(--accent-success);">
@@ -1151,13 +1162,39 @@
         </div>
         <div class="gap-list">
             {% for gap in working_hours.gaps %}
-            <div class="gap-item">
+            <div class="gap-item" {% if gap.spans_days %}style="border-color:rgba(248,113,113,0.5);"{% endif %}>
                 <div class="gap-times">
-                    <span class="gap-time-label">من</span>
-                    <span class="gap-time num">{{ gap.start }}</span>
+                    {# ── start side ── #}
+                    <div style="display:flex;flex-direction:column;align-items:center;gap:2px;">
+                        <span style="font-size:0.7rem;color:var(--text-muted);font-weight:500;letter-spacing:.02em;">
+                            <i class="fa-regular fa-calendar" style="font-size:0.65rem;margin-left:2px;"></i>{{ gap.start_date }}
+                        </span>
+                        <span class="gap-time-label">من</span>
+                        <span class="gap-time num">{{ gap.start_time }}</span>
+                    </div>
+
                     <span class="gap-arrow">→</span>
-                    <span class="gap-time-label">إلى</span>
-                    <span class="gap-time num">{{ gap.end }}</span>
+
+                    {# ── end side ── #}
+                    <div style="display:flex;flex-direction:column;align-items:center;gap:2px;">
+                        {% if gap.spans_days %}
+                        <span style="font-size:0.7rem;color:var(--accent-warning);font-weight:600;letter-spacing:.02em;">
+                            <i class="fa-regular fa-calendar" style="font-size:0.65rem;margin-left:2px;"></i>{{ gap.end_date }}
+                        </span>
+                        {% else %}
+                        <span style="font-size:0.7rem;color:var(--text-muted);font-weight:500;letter-spacing:.02em;">
+                            <i class="fa-regular fa-calendar" style="font-size:0.65rem;margin-left:2px;"></i>{{ gap.end_date }}
+                        </span>
+                        {% endif %}
+                        <span class="gap-time-label">إلى</span>
+                        <span class="gap-time num">{{ gap.end_time }}</span>
+                    </div>
+
+                    {% if gap.spans_days %}
+                    <span style="margin-inline-start:0.5rem;display:inline-flex;align-items:center;gap:0.3rem;font-size:0.72rem;color:var(--accent-warning);font-weight:600;background:rgba(251,191,36,0.1);padding:2px 7px;border-radius:4px;white-space:nowrap;align-self:center;">
+                        <i class="fa-solid fa-calendar-days" style="font-size:0.65rem;"></i> متعدد الأيام
+                    </span>
+                    {% endif %}
                 </div>
                 <div class="gap-duration">
                     <i class="fa-solid fa-stopwatch"></i>
@@ -1185,11 +1222,33 @@
                 </div>
                 <div class="timeline-info">
                     <div class="timeline-name">{{ run.arabic_name or run.class_name }}</div>
+                    {# run.start / run.end are ISO strings: "YYYY-MM-DD HH:MM:SS" or "YYYY-MM-DDTHH:MM:SS" #}
+                    {% set r_start_date = run.start[0:10]  if run.start and (run.start|length) >= 10 else '' %}
+                    {% set r_end_date   = run.end[0:10]    if run.end   and (run.end|length)   >= 10 else '' %}
+                    {% set r_start_time = run.start[11:16] if run.start and (run.start|length) >= 16 else 'N/A' %}
+                    {% set r_end_time   = run.end[11:16]   if run.end   and (run.end|length)   >= 16 else 'N/A' %}
                     <div class="timeline-time">
-                        <i class="fa-regular fa-clock"></i>
-                        {{ run.start[11:16] if run.start and (run.start|length) >= 16 else 'N/A' }}
-                        →
-                        {{ run.end[11:16] if run.end and (run.end|length) >= 16 else 'N/A' }}
+                        {# date row — show both if they differ, else just once #}
+                        {% if r_start_date == r_end_date %}
+                        <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:2px;display:flex;align-items:center;gap:3px;">
+                            <i class="fa-regular fa-calendar" style="font-size:0.62rem;"></i>
+                            <span class="num">{{ r_start_date }}</span>
+                        </div>
+                        {% else %}
+                        <div style="font-size:0.7rem;color:var(--text-muted);margin-bottom:2px;display:flex;align-items:center;gap:3px;flex-wrap:wrap;">
+                            <i class="fa-regular fa-calendar" style="font-size:0.62rem;"></i>
+                            <span class="num">{{ r_start_date }}</span>
+                            <span style="color:var(--accent-warning);">→</span>
+                            <span class="num" style="color:var(--accent-warning);">{{ r_end_date }}</span>
+                        </div>
+                        {% endif %}
+                        {# time row #}
+                        <div style="display:flex;align-items:center;gap:4px;">
+                            <i class="fa-regular fa-clock"></i>
+                            <span class="num">{{ r_start_time }}</span>
+                            <span>→</span>
+                            <span class="num">{{ r_end_time }}</span>
+                        </div>
                     </div>
                 </div>
                 <div class="timeline-stats">

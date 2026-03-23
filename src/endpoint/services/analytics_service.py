@@ -81,6 +81,8 @@ class AnalyticsService:
         stats = repo_data['stats']
         events = repo_data['events']
         per_class_windows = repo_data['per_class_windows']
+        boundaries = repo_data.get('boundaries', {})
+        production_boundaries = repo_data.get('production_boundaries', {})
 
         # Get ALL bag types from database (including those with zero events)
         all_bag_types = self.repo.get_all_bag_types()
@@ -172,7 +174,11 @@ class AnalyticsService:
         weight_breakdown = self._build_weight_breakdown(classifications)
 
         # Build working hours & productivity stats
-        working_hours = self._build_working_hours_stats(ordered_events, runs)
+        working_hours = self._build_working_hours_stats(
+            ordered_events, runs,
+            boundaries=boundaries,
+            production_boundaries=production_boundaries,
+        )
 
         data = {
             "meta": {
@@ -686,6 +692,8 @@ class AnalyticsService:
         self,
         ordered_events: List[Dict],
         runs: List[Dict],
+        boundaries: Optional[Dict[str, Any]] = None,
+        production_boundaries: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Build working hours, productivity, and idle gap analysis for the shift.
@@ -698,9 +706,16 @@ class AnalyticsService:
         - Idle gaps (periods > threshold with no events)
         - Total idle vs active time
 
+        Uses SQL-level MIN/MAX boundaries (from ``boundaries`` /
+        ``production_boundaries``) for the total-hours calculation so that
+        shifts with > 10 000 events are no longer capped by the event LIMIT.
+
         Args:
             ordered_events: Time-sorted list of event dicts (must have 'timestamp')
             runs: Consecutive runs from build_consecutive_runs
+            boundaries: Dict with first_timestamp / last_timestamp / event_count
+                        for ALL events in the window (from SQL).
+            production_boundaries: Same but excluding Rejected/Unknown.
 
         Returns:
             Dict with all working hours metrics
@@ -708,8 +723,14 @@ class AnalyticsService:
         empty_result = {
             'total_hours': 0.0,
             'total_hours_display': '0س 0د',
+            'active_hours': 0.0,
+            'active_hours_display': '0:00',
             'first_event_time': None,
             'last_event_time': None,
+            'first_event_date': None,
+            'last_event_date': None,
+            'working_period_formatted': None,
+            'is_multi_day': False,
             'avg_bags_per_hour': 0.0,
             'peak_hour': None,
             'min_hour': None,
@@ -748,14 +769,43 @@ class AnalyticsService:
         # Fall back to all timestamps only if there are no production events at all
         anchor_timestamps = production_timestamps if len(production_timestamps) >= 2 else timestamps
 
-        first_ts = anchor_timestamps[0]
-        last_ts = anchor_timestamps[-1]
+        # ── Determine authoritative first/last timestamps ──
+        # Prefer SQL-level boundaries (accurate even with >10K events).
+        # Fall back to the events list only when boundaries are not provided.
+        prod_b = production_boundaries or {}
+        all_b = boundaries or {}
+
+        sql_prod_first = prod_b.get('first_timestamp')
+        sql_prod_last = prod_b.get('last_timestamp')
+        sql_all_first = all_b.get('first_timestamp')
+        sql_all_last = all_b.get('last_timestamp')
+
+        # Use production boundaries when available, else all boundaries
+        if sql_prod_first and sql_prod_last:
+            try:
+                first_ts = datetime.fromisoformat(sql_prod_first)
+                last_ts = datetime.fromisoformat(sql_prod_last)
+            except (ValueError, TypeError):
+                first_ts = anchor_timestamps[0]
+                last_ts = anchor_timestamps[-1]
+        elif sql_all_first and sql_all_last:
+            try:
+                first_ts = datetime.fromisoformat(sql_all_first)
+                last_ts = datetime.fromisoformat(sql_all_last)
+            except (ValueError, TypeError):
+                first_ts = anchor_timestamps[0]
+                last_ts = anchor_timestamps[-1]
+        else:
+            # Fallback to events-list boundaries
+            first_ts = anchor_timestamps[0]
+            last_ts = anchor_timestamps[-1]
+
         total_seconds = (last_ts - first_ts).total_seconds()
         total_hours = total_seconds / 3600.0
 
         hours_int = int(total_hours)
         minutes_int = int((total_hours - hours_int) * 60)
-        total_hours_display = f'{hours_int}:{minutes_int}'
+        total_hours_display = f'{hours_int}:{minutes_int:02d}'
 
         # ── Per-hour buckets (production bags only) ──
         hourly_buckets: Dict[str, int] = defaultdict(int)
@@ -763,8 +813,10 @@ class AnalyticsService:
             bucket_key = ts.strftime('%H:00')
             hourly_buckets[bucket_key] += 1
 
-        # Average production bags per hour — from first production bag onward
-        avg_bags = round(len(anchor_timestamps) / total_hours, 1) if total_hours > 0 else 0.0
+        # Average production bags per hour — use SQL event count when available
+        # (accurate even when events list is capped at 10K)
+        prod_event_count = prod_b.get('event_count') or len(anchor_timestamps)
+        avg_bags = round(prod_event_count / total_hours, 1) if total_hours > 0 else 0.0
 
         # Peak and minimum hours
         peak_hour = None
@@ -842,11 +894,30 @@ class AnalyticsService:
             if delta >= gap_threshold:
                 gap_minutes = round(delta.total_seconds() / 60, 1)
                 total_idle_seconds += delta.total_seconds()
+
+                # Check if gap spans multiple days
+                start_ts = anchor_timestamps[i - 1]
+                end_ts = anchor_timestamps[i]
+                gap_spans_days = start_ts.date() != end_ts.date()
+
+                # Format with dates if multi-day gap
+                if gap_spans_days:
+                    start_display = start_ts.strftime('%Y-%m-%d %H:%M:%S')
+                    end_display = end_ts.strftime('%Y-%m-%d %H:%M:%S')
+                else:
+                    start_display = start_ts.strftime('%H:%M:%S')
+                    end_display = end_ts.strftime('%H:%M:%S')
+
                 gaps.append({
-                    'start': anchor_timestamps[i - 1].strftime('%H:%M:%S'),
-                    'end': anchor_timestamps[i].strftime('%H:%M:%S'),
+                    'start': start_display,
+                    'end': end_display,
+                    'start_date': start_ts.strftime('%Y-%m-%d'),
+                    'end_date': end_ts.strftime('%Y-%m-%d'),
+                    'start_time': start_ts.strftime('%H:%M'),
+                    'end_time': end_ts.strftime('%H:%M'),
                     'duration_minutes': gap_minutes,
                     'duration_display': self._format_duration_minutes(gap_minutes),
+                    'spans_days': gap_spans_days,
                 })
 
         total_idle_minutes = round(total_idle_seconds / 60, 1)
@@ -858,11 +929,27 @@ class AnalyticsService:
         total_idle_display = self._format_duration_minutes(total_idle_minutes)
         total_active_display = self._format_duration_minutes(total_active_minutes)
 
+        # Calculate active hours (excluding gaps)
+        active_seconds = total_seconds - total_idle_seconds
+        active_hours = active_seconds / 3600.0
+        active_hours_int = int(active_hours)
+        active_hours_minutes_int = int((active_hours - active_hours_int) * 60)
+        active_hours_display = f'{active_hours_int}:{active_hours_minutes_int:02d}'
+
+        # Format working period with dates for multi-day windows
+        working_period_formatted, is_multi_day = self._format_working_period(first_ts, last_ts)
+
         return {
             'total_hours': round(total_hours, 2),
             'total_hours_display': total_hours_display,
+            'active_hours': round(active_hours, 2),
+            'active_hours_display': active_hours_display,
             'first_event_time': first_ts.strftime('%H:%M:%S'),
             'last_event_time': last_ts.strftime('%H:%M:%S'),
+            'first_event_date': first_ts.strftime('%Y-%m-%d'),
+            'last_event_date': last_ts.strftime('%Y-%m-%d'),
+            'working_period_formatted': working_period_formatted,
+            'is_multi_day': is_multi_day,
             'avg_bags_per_hour': avg_bags,
             'peak_hour': peak_hour,
             'min_hour': min_hour,
@@ -891,6 +978,27 @@ class AnalyticsService:
         hours = total_mins // 60
         remaining = total_mins % 60
         return f'{hours}:{remaining:02d}'
+
+    @staticmethod
+    def _format_working_period(first_ts: datetime, last_ts: datetime) -> tuple:
+        """
+        Format working period display intelligently based on whether it spans multiple days.
+
+        Returns:
+            Tuple of (formatted_string, is_multi_day)
+            - Single day: "HH:MM → HH:MM"
+            - Multi-day: "yyyy-mm-dd HH:MM → yyyy-mm-dd HH:MM"
+        """
+        first_date = first_ts.date()
+        last_date = last_ts.date()
+        is_multi_day = first_date != last_date
+
+        if is_multi_day:
+            formatted = f"{first_ts.strftime('%Y-%m-%d %H:%M')} → {last_ts.strftime('%Y-%m-%d %H:%M')}"
+        else:
+            formatted = f"{first_ts.strftime('%H:%M')} → {last_ts.strftime('%H:%M')}"
+
+        return formatted, is_multi_day
 
 
     def _group_runs_by_type(self, runs: List[Dict]) -> Dict[str, List[Dict]]:

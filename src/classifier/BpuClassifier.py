@@ -13,6 +13,7 @@ from typing import List, Tuple, Dict, Optional
 
 from src.classifier.BaseClassifier import BaseClassifier, ClassificationResult
 from src.utils.AppLogging import logger
+from src.logging.alert_service import alert_service
 
 # Import BPU Library safely
 try:
@@ -236,6 +237,10 @@ class BpuClassifier(BaseClassifier):
         """
         if self.model is None:
             logger.error("[BpuClassifier] Model not loaded!")
+            alert_service.record(
+                "BpuClassifier", "critical",
+                "BPU model not loaded — classification unavailable",
+            )
             return ClassificationResult(class_id=-1, class_name="Unknown", confidence=0.0)
 
         # Comprehensive input validation (prevents NV12 conversion of invalid images)
@@ -267,6 +272,11 @@ class BpuClassifier(BaseClassifier):
             logger.error(f"[BpuClassifier] Classification error: {e}")
             import traceback
             logger.error(traceback.format_exc())
+            alert_service.record(
+                "BpuClassifier", "error",
+                "BPU classification inference error",
+                details=str(e),
+            )
             return ClassificationResult(class_id=-1, class_name="Unknown", confidence=0.0)
 
     def classify_with_probs(self, roi: np.ndarray) -> Tuple[ClassificationResult, Dict[str, float]]:

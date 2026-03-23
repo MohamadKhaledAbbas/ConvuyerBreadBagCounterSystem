@@ -25,6 +25,7 @@ import numpy as np
 from src.classifier.BaseClassifier import BaseClassifier, ClassificationResult
 from src.classifier.IClassificationComponents import IClassificationWorker
 from src.utils.AppLogging import logger
+from src.logging.alert_service import alert_service
 
 
 @dataclass
@@ -179,6 +180,11 @@ class ClassificationWorker(IClassificationWorker):
 
             except Exception as e:
                 logger.error(f"[{self.name}] Error in worker loop: {e}", exc_info=True)
+                alert_service.record(
+                    "ClassificationWorker", "error",
+                    "Worker loop error — classification may be stalled",
+                    details=str(e),
+                )
 
         # Process remaining jobs before exit
         remaining = self.job_queue.qsize()
@@ -320,6 +326,11 @@ class ClassificationWorker(IClassificationWorker):
             logger.error(
                 f"[{self.name}] Classification error for track {job.track_id}: {e}",
                 exc_info=True
+            )
+            alert_service.record(
+                "ClassificationWorker", "error",
+                "Classification failed for track",
+                details=f"track_id={job.track_id} error={e}",
             )
 
     def get_queue_size(self) -> int:

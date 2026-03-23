@@ -55,6 +55,7 @@ from src.frame_source.FrameSource import FrameSource
 from src.frame_source.FrameSourceFactory import FrameSourceFactory
 from src.logging.Database import DatabaseManager
 from src.endpoint.pipeline_state import write_state as write_pipeline_state
+from src.logging.alert_service import alert_service
 from src.tracking.BidirectionalSmoother import BidirectionalSmoother, ClassificationRecord
 from src.tracking.RunLengthStateMachine import RunLengthStateMachine
 from src.tracking.ConveyorTracker import ConveyorTracker
@@ -85,6 +86,7 @@ class CounterState:
     fps: float = 0.0
     processing_time_ms: float = 0.0
     last_count_time: float = 0.0
+    first_count_time: float = 0.0  # Timestamp of first confirmed count in session
 
     # Debug state for visualization
     pending_classifications: int = 0  # Tracks waiting for classification
@@ -131,7 +133,10 @@ class CounterState:
             if class_name not in self.counts_by_class:
                 self.counts_by_class[class_name] = 0
             self.counts_by_class[class_name] += 1
-            self.last_count_time = time.time()
+            now = time.time()
+            if self.first_count_time == 0.0:
+                self.first_count_time = now
+            self.last_count_time = now
             return self.total_counted
 
     def add_event(self, event: str):
@@ -884,6 +889,11 @@ class ConveyorCounterApp:
                     )
             except Exception as e:
                 logger.error(f"[ConveyorCounterApp] Failed to log event to database: {e}")
+                alert_service.record(
+                    "ConveyorCounterApp", "error",
+                    "Failed to log event to database",
+                    details=str(e),
+                )
 
         # Callback
         if self._on_count_callback is not None:
@@ -961,6 +971,8 @@ class ConveyorCounterApp:
                 "last_classified_type": self._last_classified_type,
                 "state_machine": state_machine,
                 "transition_history": transition_history,
+                "last_count_timestamp": self.state.last_count_time,
+                "work_started_timestamp": self.state.first_count_time,
             }
             write_pipeline_state(state)
         except Exception as e:

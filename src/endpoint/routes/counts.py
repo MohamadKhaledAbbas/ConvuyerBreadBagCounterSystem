@@ -11,6 +11,7 @@ Provides:
 import asyncio
 import json
 import time
+from datetime import datetime
 from typing import Dict, Any, List
 
 from fastapi import APIRouter, Request
@@ -22,6 +23,70 @@ from src.endpoint.shared import get_db, get_templates
 from src.utils.AppLogging import logger
 
 router = APIRouter(tags=["counts"])
+
+# 2-hour idle threshold in seconds
+_IDLE_RESET_SECONDS = 2 * 60 * 60
+
+
+def _apply_idle_reset_and_work_info(state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Post-process pipeline state for the counts API:
+
+    1. **2-hour idle reset** – If the last counted bag was more than 2 hours
+       ago, zero out confirmed / pending / just_classified counts in the
+       response so the UI shows a clean slate.  The underlying pipeline state
+       file is NOT modified (cosmetic reset only).
+
+    2. **Work-started info** – Adds ``work_started_ago`` (human-readable
+       "Xh Ym") and ``work_started_display`` (HH:MM) so the UI can show
+       when the current work session began.
+
+    3. **Enhanced idle display** – Formats idle time in HH:MM format with
+       work-started datetime in "yyyy/mm/dd - HH:MM" format for UX clarity.
+    """
+    now = time.time()
+
+    last_count_ts = state.get("last_count_timestamp", 0) or 0
+    work_started_ts = state.get("work_started_timestamp", 0) or 0
+
+    # ── 2-hour idle reset ──
+    idle_seconds = (now - last_count_ts) if last_count_ts > 0 else 0
+    is_idle_reset = last_count_ts > 0 and idle_seconds >= _IDLE_RESET_SECONDS
+
+    if is_idle_reset:
+        state["confirmed"] = {}
+        state["pending"] = {}
+        state["just_classified"] = {}
+        state["confirmed_total"] = 0
+        state["pending_total"] = 0
+        state["just_classified_total"] = 0
+        state["idle_reset"] = True
+        state["idle_minutes"] = round(idle_seconds / 60)
+
+        # Format idle time in HH:MM format
+        idle_hours = int(state["idle_minutes"] // 60)
+        idle_mins = int(state["idle_minutes"] % 60)
+        state["idle_time_formatted"] = f"{idle_hours:02d}:{idle_mins:02d}"
+    else:
+        state["idle_reset"] = False
+        state["idle_minutes"] = round(idle_seconds / 60) if last_count_ts > 0 else 0
+        state["idle_time_formatted"] = None
+
+    # ── Work-started info ──
+    if work_started_ts > 0 and not is_idle_reset:
+        elapsed = now - work_started_ts
+        hours = int(elapsed // 3600)
+        minutes = int((elapsed % 3600) // 60)
+        state["work_started_ago"] = f" {hours}:ساعة{minutes} دقيقة" if hours > 0 else f" {minutes} دقيقة"
+        state["work_started_display"] = datetime.fromtimestamp(work_started_ts).strftime("%H:%M")
+        # Format work-started datetime as "yyyy/mm/dd - HH:MM"
+        state["work_started_datetime_formatted"] = datetime.fromtimestamp(work_started_ts).strftime("%Y/%m/%d - %H:%M")
+    else:
+        state["work_started_ago"] = None
+        state["work_started_display"] = None
+        state["work_started_datetime_formatted"] = None
+
+    return state
 
 
 @router.get("/api/counts")
@@ -36,11 +101,18 @@ async def api_counts() -> Dict[str, Any]:
     - smoothing_rate: Fraction of items that were corrected by smoothing
     - window_status: Smoothing window fill state
     - recent_events: Last 10 pipeline events for live feed
+    - idle_reset: True if counts were zeroed due to 2-hour inactivity
+    - work_started_ago: Human-readable elapsed time since work started
+    - work_started_display: HH:MM when work started
     """
     state = read_state()
 
     # Remove internal fields
     result = {k: v for k, v in state.items() if not k.startswith("_")}
+
+    # Apply idle reset and work-started calculations
+    result = _apply_idle_reset_and_work_info(result)
+
     return result
 
 
@@ -108,6 +180,7 @@ async def _sse_generator(request: Request):
             if current_updated > last_updated_at:
                 last_updated_at = current_updated
                 payload = {k: v for k, v in state.items() if not k.startswith("_")}
+                payload = _apply_idle_reset_and_work_info(payload)
                 yield f"data: {json.dumps(payload)}\n\n"
             else:
                 # Send keepalive comment to prevent connection timeout

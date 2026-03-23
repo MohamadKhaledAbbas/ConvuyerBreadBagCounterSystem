@@ -297,6 +297,39 @@
         <div class="comp-card"><div class="comp-dot gray"></div><div><div class="comp-name">جارٍ التحميل...</div></div></div>
     </div>
 
+    <!-- System Info -->
+    <div class="section-title"><i class="fa-solid fa-microchip"></i> معلومات النظام</div>
+    <div class="info-grid" id="sysInfoGrid">
+        <div class="info-card">
+            <div class="label"><i class="fa-solid fa-temperature-half"></i> حرارة المعالج</div>
+            <div class="value eng" id="cpuTemp">—</div>
+        </div>
+        <div class="info-card">
+            <div class="label"><i class="fa-solid fa-fire"></i> حرارة BPU</div>
+            <div class="value eng" id="bpuTemp">—</div>
+        </div>
+        <div class="info-card">
+            <div class="label"><i class="fa-solid fa-memory"></i> حرارة DDR</div>
+            <div class="value eng" id="ddrTemp">—</div>
+        </div>
+        <div class="info-card">
+            <div class="label"><i class="fa-solid fa-gauge"></i> حمل المعالج</div>
+            <div class="value eng" id="cpuLoad">—</div>
+        </div>
+        <div class="info-card">
+            <div class="label"><i class="fa-solid fa-server"></i> استخدام الذاكرة</div>
+            <div class="value eng" id="ramUsage">—</div>
+        </div>
+        <div class="info-card">
+            <div class="label"><i class="fa-solid fa-database"></i> حجم قاعدة البيانات</div>
+            <div class="value eng" id="dbSize">—</div>
+        </div>
+        <div class="info-card">
+            <div class="label"><i class="fa-solid fa-hard-drive"></i> المساحة المتبقية</div>
+            <div class="value eng" id="diskFree">—</div>
+        </div>
+    </div>
+
     <!-- Monitoring logs -->
     <div class="section-title"><i class="fa-solid fa-list-check"></i> سجل التنبيهات <small style="color:var(--text-muted);font-weight:400;font-size:.75rem;">(آخر ٢٤ ساعة)</small></div>
     <div style="background:var(--glass-bg);border:1px solid var(--glass-border);border-radius:var(--radius-md);padding:1rem;backdrop-filter:blur(10px);margin-bottom:2rem;">
@@ -384,6 +417,72 @@ function renderDegradedReasons(reasons) {
     }
     el.innerHTML = reasons.map(r => '<span class="degraded-pill">' + esc(r) + '</span>').join(' ');
     el.style.display = 'block';
+}
+
+function tempColor(val) {
+    if (val == null) return 'muted';
+    if (val >= 80) return 'danger';
+    if (val >= 65) return 'warning';
+    return 'success';
+}
+
+function renderSystemInfo(si) {
+    const temps = si.temperatures || {};
+    const cpuLoad = si.cpu_load || {};
+    const ram = si.ram || {};
+    const dbSize = si.db_size || {};
+    const disk = si.disk || {};
+
+    // Temperatures
+    const cpuT = temps.cpu_temp;
+    $('cpuTemp').textContent = cpuT != null ? cpuT + '°C' : '—';
+    $('cpuTemp').className = 'value eng ' + tempColor(cpuT);
+
+    const bpuT = temps.bpu_temp;
+    $('bpuTemp').textContent = bpuT != null ? bpuT + '°C' : '—';
+    $('bpuTemp').className = 'value eng ' + tempColor(bpuT);
+
+    const ddrT = temps.ddr_temp;
+    $('ddrTemp').textContent = ddrT != null ? ddrT + '°C' : '—';
+    $('ddrTemp').className = 'value eng ' + tempColor(ddrT);
+
+    // CPU load
+    const loadPct = cpuLoad.load_percent;
+    const load1 = cpuLoad.load_1m;
+    if (loadPct != null) {
+        let loadStr = loadPct + '%';
+        if (load1 != null) loadStr += ' (' + load1.toFixed(2) + ')';
+        $('cpuLoad').textContent = loadStr;
+        $('cpuLoad').className = 'value eng ' + (loadPct >= 90 ? 'danger' : loadPct >= 70 ? 'warning' : 'success');
+    } else {
+        $('cpuLoad').textContent = '—';
+        $('cpuLoad').className = 'value eng muted';
+    }
+
+    // RAM usage
+    const ramEl = $('ramUsage');
+    const ramPct = ram.usage_percent;
+    if (ramPct != null && ram.used_display && ram.total_display) {
+        ramEl.textContent = ram.used_display + ' / ' + ram.total_display + ' (' + ramPct.toFixed(0) + '%)';
+        ramEl.className = 'value eng ' + (ramPct >= 90 ? 'danger' : ramPct >= 75 ? 'warning' : 'success');
+    } else {
+        ramEl.textContent = '—';
+        ramEl.className = 'value eng muted';
+    }
+
+    // DB size
+    $('dbSize').textContent = dbSize.display || '—';
+    $('dbSize').className = 'value eng primary';
+
+    // Disk free
+    const diskFreeEl = $('diskFree');
+    if (disk.free_display && disk.usage_percent != null) {
+        diskFreeEl.textContent = disk.free_display + ' (' + (100 - disk.usage_percent).toFixed(0) + '% حر)';
+        diskFreeEl.className = 'value eng ' + (disk.usage_percent >= 90 ? 'danger' : disk.usage_percent >= 75 ? 'warning' : 'success');
+    } else {
+        diskFreeEl.textContent = '—';
+        diskFreeEl.className = 'value eng muted';
+    }
 }
 
 async function fetchLogs() {
@@ -485,6 +584,9 @@ async function checkHealth() {
 
         // Degraded reasons
         renderDegradedReasons(data.degraded_reasons || []);
+
+        // System info
+        renderSystemInfo(data.system_info || {});
 
     } catch (err) {
         heroEl.className = 'hero-status fail';

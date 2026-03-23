@@ -334,6 +334,9 @@
                 <div class="hero-sub" style="color:var(--text-muted)">لم يتم التأكيد بعد</div>
             </div>
         </div>
+        <!-- Work-started / idle-reset info bar -->
+        <div id="workInfoBar" style="display:none; margin-top:1rem; text-align:center; font-size:.85rem; padding:.6rem 1rem; border-radius:var(--radius-sm); backdrop-filter:blur(10px);">
+        </div>
     </section>
 
     <!-- Recent batches — current + previous -->
@@ -798,6 +801,30 @@ function updateUI(data) {
     if (heroBatch.textContent !== String(batchTotal)) { heroBatch.textContent = batchTotal; if (!isFirstRender) bump(heroBatch); }
     if (heroConfirmed.textContent !== String(ct)) { heroConfirmed.textContent = ct; if (!isFirstRender) bump(heroConfirmed); }
     if (heroPending.textContent !== String(pt)) { heroPending.textContent = pt; if (!isFirstRender) bump(heroPending); }
+
+    // Work info bar (work started / idle reset)
+    const infoBar = $id('workInfoBar');
+    if (data.idle_reset) {
+        const idleFormatted = data.idle_time_formatted || '00:00';
+        const workStartedFormatted = data.work_started_datetime_formatted || 'تاريخ غير متوفر';
+        infoBar.innerHTML = '<i class="fa-solid fa-moon" style="color:var(--accent-warning);margin-left:6px;"></i> '
+            + 'العمل متوقف منذ <span class="eng" style="font-weight:700;color:var(--accent-warning);">' + escHtml(idleFormatted) + '</span> '
+            + '<span style="color:var(--text-muted);">— بدأ من ' + escHtml(workStartedFormatted) + ' (<span class="eng" style="font-weight:700;">' + escHtml(idleFormatted) + '</span>)</span>';
+        infoBar.style.display = '';
+        infoBar.style.background = 'rgba(251,191,36,.08)';
+        infoBar.style.border = '1px solid rgba(251,191,36,.2)';
+        infoBar.style.color = 'var(--text-secondary)';
+    } else if (data.work_started_ago && data.work_started_datetime_formatted) {
+        infoBar.innerHTML = '<i class="fa-solid fa-play-circle" style="color:var(--accent-success);margin-left:6px;"></i> '
+            + 'العمل مستمر منذ <span class="eng" style="font-weight:700;color:var(--accent-success);">' + escHtml(data.work_started_ago) + '</span>'
+            + ' <span style="color:var(--text-muted);">من <span class="eng">' + escHtml(data.work_started_datetime_formatted) + '</span></span>';
+        infoBar.style.display = '';
+        infoBar.style.background = 'rgba(45,212,191,.06)';
+        infoBar.style.border = '1px solid rgba(45,212,191,.15)';
+        infoBar.style.color = 'var(--text-secondary)';
+    } else {
+        infoBar.style.display = 'none';
+    }
 
     // Per-class pending counts from smoother (authoritative source)
     const allPending = {};

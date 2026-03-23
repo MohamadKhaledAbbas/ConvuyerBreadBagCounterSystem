@@ -23,6 +23,7 @@ from src.config.tracking_config import TrackingConfig
 from src.detection.BaseDetection import BaseDetector, Detection
 from src.tracking.ITracker import ITracker, TrackedObject, TrackEvent
 from src.utils.AppLogging import logger
+from src.logging.alert_service import alert_service
 
 
 class PipelineCore:
@@ -335,6 +336,11 @@ class PipelineCore:
 
         if not submitted:
             logger.error(f"[PipelineCore] Failed to submit track {track_id} (queue full)")
+            alert_service.record(
+                "PipelineCore", "error",
+                "Classification queue full — track dropped",
+                details=f"track_id={track_id}",
+            )
 
         # Clean up
         self.roi_collector.remove_track(track_id)
@@ -722,6 +728,11 @@ class PipelineCore:
 
             except Exception as e:
                 logger.error(f"[PipelineCore] Error in purge loop: {e}", exc_info=True)
+                alert_service.record(
+                    "PipelineCore", "warning",
+                    "File purge loop error",
+                    details=str(e),
+                )
 
         logger.info("[PipelineCore] File purge thread stopped")
 

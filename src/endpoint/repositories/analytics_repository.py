@@ -69,8 +69,18 @@ class AnalyticsRepository:
         # Get aggregated statistics with high/low confidence breakdown
         stats = self.db.get_aggregated_stats(start_iso, end_iso)
 
-        # Get all events with joined bag_type metadata
-        events = self.db.get_events_with_bag_types(start_iso, end_iso, limit=10000)
+        # Get all events with joined bag_type metadata.
+        # No artificial LIMIT — the time window (start/end) is the natural
+        # boundary.  With 7-day retention a worst-case full-week query returns
+        # ~20-35K rows (~7 MB), well within SQLite/Python capacity.
+        events = self.db.get_events_with_bag_types(start_iso, end_iso, limit=0)
+
+        # Get true time boundaries from SQL (not limited by the 10K event cap)
+        # This fixes the working-hours calculation for long shifts with >10K events.
+        boundaries = self.db.get_event_time_boundaries(start_iso, end_iso)
+        production_boundaries = self.db.get_event_time_boundaries(
+            start_iso, end_iso, exclude_types=['Rejected', 'Unknown']
+        )
 
         # Build per-class time windows
         per_class = self._build_per_class_windows(events)
@@ -83,7 +93,9 @@ class AnalyticsRepository:
         return {
             'stats': stats,
             'events': events,
-            'per_class_windows': per_class
+            'per_class_windows': per_class,
+            'boundaries': boundaries,
+            'production_boundaries': production_boundaries,
         }
 
     def _build_per_class_windows(self, events: List[Dict]) -> Dict[str, Any]:

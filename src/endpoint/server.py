@@ -33,6 +33,7 @@ from src.endpoint.routes import counts
 from src.endpoint.shared import init_shared_resources, cleanup_shared_resources, get_templates, get_db
 from src.endpoint.pipeline_state import read_state
 from src.utils.AppLogging import logger
+from src.utils.system_info import get_system_info
 
 from src.config.settings import AppConfig
 
@@ -273,6 +274,14 @@ async def health() -> Dict[str, Any]:
     except Exception:
         pass
 
+    # ── System info (temperatures, CPU load, DB size, disk space) ──
+    system_info: Dict[str, Any] = {}
+    try:
+        db_path = db.db_path if db_ok and db is not None else None
+        system_info = get_system_info(db_path=db_path)
+    except Exception:
+        pass
+
     return {
         "status": overall_status,
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -293,6 +302,7 @@ async def health() -> Dict[str, Any]:
         "components": components,
         "degraded_reasons": degraded_reasons,
         "monitoring_log_summary": log_summary,
+        "system_info": system_info,
     }
 
 

@@ -121,5 +121,7 @@ def _empty_state() -> Dict[str, Any]:
             "last_decision": None,
         },
         "transition_history": [],
+        "last_count_timestamp": 0,
+        "work_started_timestamp": 0,
         "_updated_at": 0
     }
