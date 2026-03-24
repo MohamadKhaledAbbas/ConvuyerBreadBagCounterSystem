@@ -493,7 +493,9 @@ class TrackingConfig:
     # ==========================================================================
     # When the production line is idle (no detections for a period), the system
     # degrades to processing every Nth frame to save CPU and extend hardware
-    # lifespan.  Full processing resumes IMMEDIATELY when any detection occurs.
+    # lifespan.  Uses a two-signal design:
+    #   Signal A (report_detection)  — fast wake from any detection, no timer reset
+    #   Signal B (report_activity)   — confirmed/ghost tracks reset idle timer
 
     frame_throttle_enabled: bool = _parse_bool_env("FRAME_THROTTLE_ENABLED", True)
     """
@@ -505,8 +507,10 @@ class TrackingConfig:
 
     frame_throttle_idle_timeout_s: float = _parse_float_env("FRAME_THROTTLE_IDLE_TIMEOUT_S", 900.0)
     """
-    Seconds of zero detections before switching to degraded (power-saving) mode.
-    Default: 1800 (30 minutes) — aligned with the smoother inactivity flush timeout.
+    Seconds of zero confirmed-track activity (Signal B) before switching
+    to degraded (power-saving) mode.
+    Default: 900 (15 minutes).  Raw detections alone (Signal A) do NOT
+    reset this timer — only confirmed tracks (hits >= 5) or ghost tracks do.
     """
 
     frame_throttle_skip_n: int = _parse_int_env("FRAME_THROTTLE_SKIP_N", 5)

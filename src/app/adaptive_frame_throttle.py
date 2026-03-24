@@ -1,14 +1,25 @@
 """
 Adaptive Frame Throttle — power-saving idle detection for the conveyor pipeline.
 
-When the production line is idle (no detections for a configurable timeout,
-default 30 minutes), the system degrades to processing every Nth frame
+When the production line is idle (no confirmed tracks for a configurable timeout,
+default 15 minutes), the system degrades to processing every Nth frame
 (default N=5).  This reduces CPU load by ~80 % and extends hardware lifespan
 without affecting counting reliability.
 
-As soon as ANY detection is found in a processed frame, the throttle
-immediately wakes back to full processing rate.  A configurable hysteresis
-window (default 60 s) prevents rapid oscillation between modes.
+Two-Signal Architecture:
+    Signal A — ``report_detection()``  (fast-path wake)
+        ANY raw detection in a processed frame immediately wakes the system
+        from DEGRADED to FULL mode.  Does NOT reset the idle timer.
+        This guarantees zero bag skips — worst-case latency to first detection
+        in DEGRADED mode is (skip_n - 1) frames (~235 ms at 17 FPS, skip_n=5).
+
+    Signal B — ``report_activity()``  (noise-filtered stay-alive)
+        Called ONLY when confirmed tracks (hits >= min_track_duration_frames)
+        or ghost tracks exist.  Resets the idle timer.  Also wakes from
+        DEGRADED if still in that mode (belt-and-suspenders).
+
+This separation prevents environmental noise (reflections, vibrations) from
+resetting the idle timer while ensuring real bags wake the system instantly.
 
 Usage (integrated into ConveyorCounterApp):
 
@@ -23,7 +34,14 @@ Usage (integrated into ConveyorCounterApp):
 
         detections, tracks, rois = pipeline.process_frame(frame)
 
+        # Signal A: fast-path wake on any detection
         if detections:
+            throttle.report_detection()
+
+        # Signal B: noise-filtered timer reset on confirmed/ghost tracks
+        confirmed = tracker.get_confirmed_tracks()
+        ghosts_active = len(tracker.ghost_tracks) > 0
+        if confirmed or ghosts_active:
             throttle.report_activity()
 
 Thread-safety:
@@ -47,10 +65,15 @@ class AdaptiveFrameThrottle:
 
     State machine::
 
-        FULL ── (idle_timeout_s with no activity) ──→ DEGRADED
+        FULL ── (idle_timeout_s with no Signal B) ──→ DEGRADED
           ↑                                               │
-          └──── (detection in processed frame) ───────────┘
+          └──── (Signal A: detection in any frame) ───────┘
+          └──── (Signal B: confirmed/ghost tracks)  ──────┘
                  (stays FULL for at least hysteresis_s)
+
+    Two-signal design:
+        Signal A (report_detection) — FAST wake, does NOT reset idle timer
+        Signal B (report_activity)  — Noise-filtered, DOES reset idle timer
     """
 
     # Mode constants
@@ -60,7 +83,7 @@ class AdaptiveFrameThrottle:
     def __init__(
         self,
         enabled: bool = True,
-        idle_timeout_s: float = 1800.0,
+        idle_timeout_s: float = 900.0,
         skip_n: int = 5,
         hysteresis_s: float = 60.0,
     ):
@@ -68,8 +91,8 @@ class AdaptiveFrameThrottle:
         Args:
             enabled:        Master switch.  When False the throttle is a no-op
                             (always returns True from should_process).
-            idle_timeout_s: Seconds of zero detections before switching to
-                            degraded mode.  Default 1800 (30 minutes).
+            idle_timeout_s: Seconds of zero confirmed-track activity before
+                            switching to degraded mode.  Default 900 (15 min).
             skip_n:         In degraded mode, process every Nth frame.
                             Default 5 (process 1 out of every 5 frames → ~80 %
                             reduction in processing load).
@@ -97,13 +120,20 @@ class AdaptiveFrameThrottle:
         self._degraded_transitions: int = 0
         self._wake_transitions: int = 0
 
+        # Track which signal caused the last wake for diagnostics
+        self._last_wake_signal: str = ""
+
+        # Detection-only wakes (Signal A without Signal B follow-up)
+        # These indicate spurious noise detections.
+        self._detection_only_wakes: int = 0
+
         # Logging throttle — avoid spamming logs during degraded mode
         self._last_degraded_log_time: float = 0.0
         self._degraded_log_interval: float = 300.0  # log every 5 min in degraded
 
         if enabled:
             logger.info(
-                f"[FrameThrottle] Initialized: idle_timeout={idle_timeout_s}s, "
+                f"[FrameThrottle] Initialized (two-signal): idle_timeout={idle_timeout_s}s, "
                 f"skip_n={skip_n}, hysteresis={hysteresis_s}s"
             )
         else:
@@ -143,12 +173,52 @@ class AdaptiveFrameThrottle:
             self._frames_skipped += 1
             return False
 
+    def report_detection(self):
+        """
+        Signal A — Fast-path wake signal.
+
+        Called when ANY raw detection is found in a processed frame.
+        If in DEGRADED mode, immediately wakes to FULL mode.
+        Does NOT reset the idle timer (``_last_activity_time``).
+
+        This is the fast-path guard that guarantees zero bag skips.
+        Spurious detections cause at most a 60-second FULL wake (hysteresis)
+        before re-degrading, because the idle timer is not touched.
+        """
+        if not self._enabled:
+            return
+
+        with self._lock:
+            if self._mode == self.MODE_DEGRADED:
+                now = time.monotonic()
+                self._mode = self.MODE_FULL
+                self._last_wake_time = now
+                self._wake_transitions += 1
+                self._last_wake_signal = "detection"
+                self._detection_only_wakes += 1
+                idle_min = (now - self._last_activity_time) / 60.0
+                logger.info(
+                    f"[FrameThrottle] WAKE → FULL (Signal A: detection) | "
+                    f"Resuming full-rate processing | "
+                    f"idle_timer NOT reset (was {idle_min:.1f} min) | "
+                    f"skipped {self._frames_skipped} frames during idle period"
+                )
+
     def report_activity(self):
         """
-        Called when the pipeline finds detections (i.e. the conveyor is active).
+        Signal B — Noise-filtered stay-alive signal.
 
-        Resets the idle timer and, if in degraded mode, wakes back to full
-        processing rate immediately.
+        Called ONLY when confirmed tracks (hits >= min_track_duration_frames)
+        or ghost tracks exist — i.e. real, multi-frame validated objects
+        are present on the conveyor.
+
+        Effects:
+          1. Always resets ``_last_activity_time`` (keeps FULL mode alive)
+          2. If in DEGRADED mode, also wakes to FULL (belt-and-suspenders)
+
+        Because confirmed tracks require 5+ consecutive detector matches,
+        environmental noise (reflections, vibrations) cannot trigger this
+        signal.  This makes the idle timer highly resistant to false resets.
         """
         if not self._enabled:
             return
@@ -161,11 +231,19 @@ class AdaptiveFrameThrottle:
                 self._mode = self.MODE_FULL
                 self._last_wake_time = now
                 self._wake_transitions += 1
+                self._last_wake_signal = "confirmed_track"
                 logger.info(
-                    f"[FrameThrottle] WAKE → FULL | Detection found in degraded mode, "
-                    f"resuming full-rate processing (skipped {self._frames_skipped} frames "
-                    f"during idle period)"
+                    f"[FrameThrottle] WAKE → FULL (Signal B: confirmed track) | "
+                    f"Resuming full-rate processing + timer reset | "
+                    f"skipped {self._frames_skipped} frames during idle period"
                 )
+            else:
+                # Already FULL — if the last wake was detection-only (Signal A),
+                # the follow-up Signal B confirms it was a real bag.
+                # Decrement detection_only_wakes since it's now validated.
+                if self._last_wake_signal == "detection" and self._detection_only_wakes > 0:
+                    self._detection_only_wakes -= 1
+                    self._last_wake_signal = "confirmed_track"
 
     def check_timeout(self):
         """
@@ -194,7 +272,7 @@ class AdaptiveFrameThrottle:
                 idle_min = idle_seconds / 60.0
                 logger.info(
                     f"[FrameThrottle] DEGRADE → processing every {self._skip_n}th frame | "
-                    f"No detections for {idle_min:.1f} min "
+                    f"No confirmed tracks for {idle_min:.1f} min "
                     f"(threshold={self._idle_timeout_s / 60:.0f} min). "
                     f"CPU load reduced ~{(1 - 1 / self._skip_n) * 100:.0f}%"
                 )
@@ -203,7 +281,7 @@ class AdaptiveFrameThrottle:
     def get_state(self) -> Dict[str, Any]:
         """
         Return a snapshot of the throttle state for the pipeline state file
-        (consumed by the FastAPI /counts endpoint).
+        (consumed by the FastAPI /counts and /health endpoints).
 
         Thread-safe.
         """
@@ -221,6 +299,8 @@ class AdaptiveFrameThrottle:
                 "total_frames_seen": self._total_frames_seen,
                 "degraded_transitions": self._degraded_transitions,
                 "wake_transitions": self._wake_transitions,
+                "last_wake_signal": self._last_wake_signal,
+                "detection_only_wakes": self._detection_only_wakes,
             }
 
     @property
@@ -256,6 +336,4 @@ class AdaptiveFrameThrottle:
                 f"processing every {self._skip_n}th frame"
             )
             self._last_degraded_log_time = now
-
-
 

@@ -401,9 +401,16 @@ function renderComponents(components, frameThrottle) {
     const allComps = Object.assign({}, components);
     if (frameThrottle && frameThrottle.enabled !== undefined) {
         const isDegraded = frameThrottle.mode === 'degraded';
+        const lastSignal = frameThrottle.last_wake_signal || '';
+        const signalLabel = lastSignal === 'detection' ? ' (كشف مبدئي)'
+                          : lastSignal === 'confirmed_track' ? ' (مسار مؤكد)' : '';
+        const noiseCount = frameThrottle.detection_only_wakes || 0;
+        let statusText = isDegraded ? 'توفير الطاقة' : 'معالجة كاملة';
+        if (!isDegraded && signalLabel) statusText += signalLabel;
+        if (noiseCount > 0) statusText += ' · ضوضاء: ' + noiseCount;
         allComps['frame_throttle'] = {
             healthy: true,   // throttle itself is always healthy — it's informational
-            status:  isDegraded ? 'توفير الطاقة' : 'معالجة كاملة',
+            status:  statusText,
             _isDegraded: isDegraded,
         };
     }
@@ -673,18 +680,28 @@ async function checkHealth() {
             throttleDetailEl.innerHTML =
                 'إطار كل <b class="eng">' + esc(String(ft.skip_n || 5)) + '</b>'
                 + ' · توقف منذ <b class="eng">' + esc(idleFmt) + '</b>'
-                + ' · تجاوز <b class="eng">' + esc(String((ft.frames_skipped || 0).toLocaleString('en'))) + '</b> إطار';
+                + ' · تجاوز <b class="eng">' + esc(String((ft.frames_skipped || 0).toLocaleString('en'))) + '</b> إطار'
+                + ' · استيقاظ <b class="eng">' + esc(String(ft.wake_transitions || 0)) + '</b>'
+                + (ft.detection_only_wakes ? ' · ضوضاء <b class="eng">' + esc(String(ft.detection_only_wakes)) + '</b>' : '');
             throttleCard.style.borderColor = 'rgba(251,191,36,0.35)';
         } else {
             // full mode
             const idleSec = ft.idle_seconds || 0;
-            const timeoutSec = ft.idle_timeout_s || 1800;
+            const timeoutSec = ft.idle_timeout_s || 900;
             const remainMin  = Math.max(0, Math.floor((timeoutSec - idleSec) / 60));
+            const lastWake = ft.last_wake_signal || '';
+            const wakeLabel = lastWake === 'detection' ? 'كشف مبدئي'
+                            : lastWake === 'confirmed_track' ? 'مسار مؤكد' : '';
             throttleModeEl.innerHTML = '<span style="color:var(--accent-success);font-weight:700;">✓ معالجة كاملة</span>';
             throttleModeEl.className = 'value success';
-            throttleDetailEl.textContent = ft.mode === 'full' && idleSec > 0
-                ? 'التوفير يبدأ خلال ' + remainMin + ' دقيقة بدون نشاط'
-                : 'الخط نشط';
+            let detailText = '';
+            if (ft.mode === 'full' && idleSec > 0 && remainMin > 0) {
+                detailText = 'التوفير يبدأ خلال ' + remainMin + ' دقيقة بدون نشاط';
+            } else {
+                detailText = 'الخط نشط';
+            }
+            if (wakeLabel) detailText += ' · آخر تنبيه: ' + wakeLabel;
+            throttleDetailEl.textContent = detailText;
             throttleCard.style.borderColor = 'rgba(45,212,191,0.2)';
         }
 

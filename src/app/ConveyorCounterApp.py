@@ -525,11 +525,27 @@ class ConveyorCounterApp:
             frame, nv12_data=nv12_data, frame_size=frame_size
         )
 
-        # ── Adaptive Frame Throttle: report activity ─────────────────
-        # Any detection means the conveyor is running; if the throttle was
-        # in degraded mode it will wake back to full-rate immediately.
-        if (detections or active_tracks) and self._throttle is not None:
-            self._throttle.report_activity()
+        # ── Adaptive Frame Throttle: two-signal design ────────────────
+        #
+        # Signal A (report_detection) — FAST wake, does NOT reset idle timer.
+        # Any raw detection wakes the system from DEGRADED immediately.
+        # Worst-case latency: (skip_n - 1) frames (~235 ms at 17 FPS).
+        #
+        # Signal B (report_activity) — Noise-filtered, DOES reset idle timer.
+        # Only confirmed tracks (hits >= 5) or ghost tracks can keep the
+        # system in FULL mode.  This prevents environmental noise (reflections,
+        # vibrations) from endlessly postponing power-saving degradation.
+        if self._throttle is not None:
+            # Signal A: any detection → immediate wake from degraded
+            if detections:
+                self._throttle.report_detection()
+
+            # Signal B: confirmed or ghost tracks → reset idle timer
+            tracker = self._pipeline_core.tracker
+            confirmed_tracks = tracker.get_confirmed_tracks()
+            ghosts_active = len(tracker.ghost_tracks) > 0
+            if confirmed_tracks or ghosts_active:
+                self._throttle.report_activity()
 
         # Update state
         self.state.active_tracks = len(active_tracks)

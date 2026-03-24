@@ -137,9 +137,15 @@ def _get_rdk_temperatures() -> Dict[str, Any]:
                 elif result["ddr_temp"] is None and re.search(r'\bddr\b', ll):
                     result["ddr_temp"] = round(val, 1)
 
-        # Fallback: try reading from sysfs thermal zones
-        if result["cpu_temp"] is None:
-            result.update(_read_thermal_zones())
+        # Fallback: try reading from sysfs thermal zones for any missing temps
+        if None in (result["cpu_temp"], result["bpu_temp"], result["ddr_temp"]):
+            sysfs_temps = _read_thermal_zones()
+            # Only fill in values that are still missing
+            for key in ("cpu_temp", "bpu_temp", "ddr_temp"):
+                if result[key] is None and key in sysfs_temps:
+                    result[key] = sysfs_temps[key]
+            if any(v is not None for v in sysfs_temps.values()):
+                result["source"] = "hrut_somstatus+sysfs"
 
     except FileNotFoundError:
         logger.debug("[SystemInfo] hrut_somstatus not found, trying sysfs")
