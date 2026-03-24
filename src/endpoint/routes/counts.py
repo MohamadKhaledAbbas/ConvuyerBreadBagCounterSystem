@@ -26,6 +26,8 @@ router = APIRouter(tags=["counts"])
 
 # 2-hour idle threshold in seconds
 _IDLE_RESET_SECONDS = 2 * 60 * 60
+# Work "active" threshold – last bag within this window means the line is still running
+_WORK_ACTIVE_THRESHOLD = 5 * 60  # 5 minutes
 
 
 def _apply_idle_reset_and_work_info(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -39,10 +41,13 @@ def _apply_idle_reset_and_work_info(state: Dict[str, Any]) -> Dict[str, Any]:
 
     2. **Work-started info** – Adds ``work_started_ago`` (human-readable
        "Xh Ym") and ``work_started_display`` (HH:MM) so the UI can show
-       when the current work session began.
+       when the current work session began.  When the line has stopped (last
+       bag > 5 min ago), ``work_started_ago`` reflects the *actual* work
+       duration (start → last bag), not the ever-growing time-since-start.
 
-    3. **Enhanced idle display** – Formats idle time in HH:MM format with
-       work-started datetime in "yyyy/mm/dd - HH:MM" format for UX clarity.
+    3. **Enhanced idle display** – Formats idle time in HH:MM format and
+       exposes ``last_count_datetime_formatted`` (the datetime of the last
+       counted bag) so the UI can show precisely when the line went quiet.
     """
     now = time.time()
 
@@ -72,19 +77,37 @@ def _apply_idle_reset_and_work_info(state: Dict[str, Any]) -> Dict[str, Any]:
         state["idle_minutes"] = round(idle_seconds / 60) if last_count_ts > 0 else 0
         state["idle_time_formatted"] = None
 
+    # ── Last-bag datetime (always available when at least one bag has been counted) ──
+    if last_count_ts > 0:
+        state["last_count_datetime_formatted"] = datetime.fromtimestamp(last_count_ts).strftime("%Y/%m/%d - %H:%M")
+    else:
+        state["last_count_datetime_formatted"] = None
+
     # ── Work-started info ──
+    # Determine whether the line is still actively running (last bag < 5 min ago).
+    # When stopped, show the *actual* work duration (start → last bag) instead of
+    # the ever-growing (start → now), which was misleading after the line had stopped.
+    work_is_active = last_count_ts > 0 and idle_seconds < _WORK_ACTIVE_THRESHOLD
+
     if work_started_ts > 0 and not is_idle_reset:
-        elapsed = now - work_started_ts
+        if work_is_active:
+            # Line running: show live elapsed time from session start to NOW
+            elapsed = now - work_started_ts
+        else:
+            # Line stopped: show fixed duration = session start → last bag counted
+            elapsed = max(0.0, last_count_ts - work_started_ts) if last_count_ts > 0 else (now - work_started_ts)
+
         hours = int(elapsed // 3600)
         minutes = int((elapsed % 3600) // 60)
         state["work_started_ago"] = f" {hours} ساعة {minutes} دقيقة " if hours > 0 else f" {minutes} دقيقة"
         state["work_started_display"] = datetime.fromtimestamp(work_started_ts).strftime("%H:%M")
-        # Format work-started datetime as "yyyy/mm/dd - HH:MM"
         state["work_started_datetime_formatted"] = datetime.fromtimestamp(work_started_ts).strftime("%Y/%m/%d - %H:%M")
+        state["work_is_active"] = work_is_active
     else:
         state["work_started_ago"] = None
         state["work_started_display"] = None
         state["work_started_datetime_formatted"] = None
+        state["work_is_active"] = False
 
     return state
 

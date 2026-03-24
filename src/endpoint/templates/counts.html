@@ -805,23 +805,35 @@ function updateUI(data) {
     // Work info bar (work started / idle reset)
     const infoBar = $id('workInfoBar');
     if (data.idle_reset) {
-        const idleFormatted = data.idle_time_formatted || '00:00';
-        const workStartedFormatted = data.work_started_datetime_formatted || 'تاريخ غير متوفر';
+        // Line has been idle for 2+ hours — show how long it's been quiet and WHEN the last bag was counted
+        const idleFormatted   = data.idle_time_formatted || '00:00';
+        const lastCountDt     = data.last_count_datetime_formatted || '—';
         infoBar.innerHTML = '<i class="fa-solid fa-moon" style="color:var(--accent-warning);margin-left:6px;"></i> '
-            + 'العمل متوقف منذ <span class="eng" style="font-weight:700;color:var(--accent-warning);">' + escHtml(idleFormatted) + '</span> '
-            + '<span style="color:var(--text-muted);">— بدأ من ' + escHtml(workStartedFormatted) + ' (<span class="eng" style="font-weight:700;">' + escHtml(idleFormatted) + '</span>)</span>';
-        infoBar.style.display = '';
+            + 'خط الإنتاج متوقف منذ <span class="eng" style="font-weight:700;color:var(--accent-warning);">' + escHtml(idleFormatted) + '</span>'
+            + ' <span style="color:var(--text-muted);">— آخر كيس عُدَّ: <span class="eng">' + escHtml(lastCountDt) + '</span></span>';
+        infoBar.style.display    = '';
         infoBar.style.background = 'rgba(251,191,36,.08)';
-        infoBar.style.border = '1px solid rgba(251,191,36,.2)';
-        infoBar.style.color = 'var(--text-secondary)';
+        infoBar.style.border     = '1px solid rgba(251,191,36,.2)';
+        infoBar.style.color      = 'var(--text-secondary)';
     } else if (data.work_started_ago && data.work_started_datetime_formatted) {
-        infoBar.innerHTML = '<i class="fa-solid fa-play-circle" style="color:var(--accent-success);margin-left:6px;"></i> '
-            + 'العمل مستمر منذ <span class="eng" style="font-weight:700;color:var(--accent-success);">' + escHtml(data.work_started_ago) + '</span>'
-            + ' <span style="color:var(--text-muted);">من <span class="eng">' + escHtml(data.work_started_datetime_formatted) + '</span></span>';
+        const lastCountDt = data.last_count_datetime_formatted || '—';
+        if (data.work_is_active) {
+            // Line actively running — show live elapsed time from session start to NOW
+            infoBar.innerHTML = '<i class="fa-solid fa-play-circle" style="color:var(--accent-success);margin-left:6px;"></i> '
+                + 'العمل مستمر منذ <span class="eng" style="font-weight:700;color:var(--accent-success);">' + escHtml(data.work_started_ago) + '</span>'
+                + ' <span style="color:var(--text-muted);">من <span class="eng">' + escHtml(data.work_started_datetime_formatted) + '</span></span>';
+            infoBar.style.background = 'rgba(45,212,191,.06)';
+            infoBar.style.border     = '1px solid rgba(45,212,191,.15)';
+        } else {
+            // Line stopped (< 2 hr idle) — show ACTUAL work duration (start → last bag), not time-since-start
+            infoBar.innerHTML = '<i class="fa-solid fa-pause-circle" style="color:var(--accent-warning);margin-left:6px;"></i> '
+                + 'توقف العمل — مدة الدوام <span class="eng" style="font-weight:700;color:var(--accent-warning);">' + escHtml(data.work_started_ago) + '</span>'
+                + ' <span style="color:var(--text-muted);">— آخر كيس: <span class="eng">' + escHtml(lastCountDt) + '</span></span>';
+            infoBar.style.background = 'rgba(251,191,36,.05)';
+            infoBar.style.border     = '1px solid rgba(251,191,36,.15)';
+        }
         infoBar.style.display = '';
-        infoBar.style.background = 'rgba(45,212,191,.06)';
-        infoBar.style.border = '1px solid rgba(45,212,191,.15)';
-        infoBar.style.color = 'var(--text-secondary)';
+        infoBar.style.color   = 'var(--text-secondary)';
     } else {
         infoBar.style.display = 'none';
     }

@@ -269,6 +269,8 @@
 
     <!-- Pipeline details -->
     <div class="section-title"><i class="fa-solid fa-industry"></i> تفاصيل خط الإنتاج</div>
+    <!-- Line status banner – shown when the line is idle or stopped -->
+    <div id="lineStatusBanner" style="display:none; margin-bottom:1rem; padding:.6rem 1.2rem; border-radius:var(--radius-sm); font-size:.85rem; backdrop-filter:blur(6px);"></div>
     <div class="info-grid">
         <div class="info-card">
             <div class="label"><i class="fa-solid fa-check-double"></i> الإجمالي المؤكد</div>
@@ -573,10 +575,59 @@ async function checkHealth() {
         $('appVersion').textContent = data.version || '—';
 
         // Pipeline details
-        const p = data.pipeline || {};
-        $('confirmedTotal').textContent = (p.confirmed_total || 0).toLocaleString('en');
+        const p           = data.pipeline || {};
+        const lineStopped = p.line_stopped  || false;
+        const workActive  = p.work_active   || false;
+        const lineStatus  = p.line_status   || 'unknown';
+        const lastCntDt   = p.last_count_datetime || null;
+        const idleMins    = p.idle_minutes  || 0;
+
+        // ── Line status banner ──
+        const bannerEl = $('lineStatusBanner');
+        if (lineStopped) {
+            const idleH = Math.floor(idleMins / 60);
+            const idleM = idleMins % 60;
+            const idleFmt = String(idleH).padStart(2,'0') + ':' + String(idleM).padStart(2,'0');
+            let bHtml = '<i class="fa-solid fa-circle-pause" style="color:var(--accent-warning);margin-left:6px;"></i>'
+                + ' <span style="color:var(--accent-warning);font-weight:600;">خط الإنتاج متوقف</span>'
+                + ' <span class="eng" style="color:var(--accent-warning);font-weight:700;">' + esc(idleFmt) + ' بدون نشاط</span>';
+            if (lastCntDt) bHtml += ' <span style="color:var(--text-muted);">— آخر كيس: <span class="eng">' + esc(lastCntDt) + '</span></span>';
+            bannerEl.innerHTML  = bHtml;
+            bannerEl.style.background = 'rgba(251,191,36,.08)';
+            bannerEl.style.border     = '1px solid rgba(251,191,36,.25)';
+            bannerEl.style.color      = 'var(--text-secondary)';
+            bannerEl.style.display    = 'block';
+        } else if (lineStatus === 'idle' && idleMins >= 5) {
+            bannerEl.innerHTML  = '<i class="fa-solid fa-pause" style="color:var(--text-muted);margin-left:6px;"></i>'
+                + ' <span style="color:var(--text-muted);">الخط في انتظار — لا توجد أكياس جديدة منذ <span class="eng">' + esc(String(idleMins)) + '</span> دقيقة</span>';
+            bannerEl.style.background = 'rgba(100,116,139,.06)';
+            bannerEl.style.border     = '1px solid rgba(100,116,139,.15)';
+            bannerEl.style.color      = 'var(--text-secondary)';
+            bannerEl.style.display    = 'block';
+        } else {
+            bannerEl.style.display = 'none';
+        }
+
+        // ── Confirmed total – dim when line is stopped ──
+        const ctEl = $('confirmedTotal');
+        ctEl.textContent = (p.confirmed_total || 0).toLocaleString('en');
+        ctEl.className   = 'value eng ' + (lineStopped ? 'warning' : workActive ? 'primary' : '');
+
+        // ── Pending total ──
         $('pendingTotal').textContent = (p.pending_total || 0).toLocaleString('en');
-        $('batchType').textContent = p.current_batch_type_arabic || p.current_batch_type || '—';
+
+        // ── Batch type — show "⏸ متوقف" when stopped ──
+        const batchEl = $('batchType');
+        if (lineStopped) {
+            batchEl.innerHTML = '<span style="color:var(--accent-warning);font-weight:700;">⏸ متوقف</span>'
+                + (lastCntDt ? '<div style="font-size:.7rem;color:var(--text-muted);margin-top:3px;font-family:\'Inter\',sans-serif;direction:ltr;">' + esc(lastCntDt) + '</div>' : '');
+            batchEl.className = 'value';
+        } else {
+            batchEl.textContent = p.current_batch_type_arabic || p.current_batch_type || '—';
+            batchEl.className   = 'value' + (!workActive && lineStatus === 'idle' ? ' muted' : '');
+        }
+
+        // ── Smoothing rate ──
         $('smoothingRate').textContent = p.smoothing_rate != null ? (p.smoothing_rate * 100).toFixed(1) + '%' : '—';
 
         // Components

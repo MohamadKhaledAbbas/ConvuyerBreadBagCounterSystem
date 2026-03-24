@@ -169,6 +169,27 @@ async def health() -> Dict[str, Any]:
     pipeline_active = bool(pipeline.get("confirmed_total", 0) > 0 or pipeline.get("pending_total", 0) > 0
                            or pipeline.get("current_batch_type"))
 
+    # ── Production line status ──
+    _IDLE_RESET_SECS   = 2 * 60 * 60   # 2 hours  – mirrors counts.py
+    _WORK_ACTIVE_SECS  = 5 * 60         # 5 minutes – mirrors counts.py
+    _last_count_ts     = pipeline.get("last_count_timestamp", 0) or 0
+    _line_idle_secs    = (now - _last_count_ts) if _last_count_ts > 0 else 0
+    line_stopped       = _last_count_ts > 0 and _line_idle_secs >= _IDLE_RESET_SECS
+    work_active        = _last_count_ts > 0 and _line_idle_secs < _WORK_ACTIVE_SECS
+    if line_stopped:
+        line_status = "stopped"
+    elif work_active:
+        line_status = "active"
+    elif _last_count_ts > 0:
+        line_status = "idle"
+    else:
+        line_status = "unknown"
+    last_count_dt = (
+        datetime.fromtimestamp(_last_count_ts).strftime("%Y/%m/%d - %H:%M")
+        if _last_count_ts > 0 else None
+    )
+    line_idle_minutes  = round(_line_idle_secs / 60) if _last_count_ts > 0 else 0
+
     # Resolve arabic names for batch types from bag_types table
     current_batch = pipeline.get("current_batch_type")
     last_classified = pipeline.get("last_classified_type")
@@ -298,6 +319,12 @@ async def health() -> Dict[str, Any]:
             "last_classified_type": last_classified,
             "last_classified_type_arabic": last_classified_arabic,
             "smoothing_rate": pipeline.get("smoothing_rate", 0),
+            # Line activity fields
+            "line_status": line_status,           # "active" | "idle" | "stopped" | "unknown"
+            "line_stopped": line_stopped,         # True when idle > 2 hours (mirrors counts idle-reset)
+            "work_active": work_active,           # True when last bag < 5 minutes ago
+            "last_count_datetime": last_count_dt, # "yyyy/mm/dd - HH:MM" of the last counted bag
+            "idle_minutes": line_idle_minutes,    # minutes since last bag was counted
         },
         "components": components,
         "degraded_reasons": degraded_reasons,
