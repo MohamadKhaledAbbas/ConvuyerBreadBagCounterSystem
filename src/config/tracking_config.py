@@ -489,6 +489,43 @@ class TrackingConfig:
     """
 
     # ==========================================================================
+    # Adaptive Frame Throttle (Idle Power-Saving)
+    # ==========================================================================
+    # When the production line is idle (no detections for a period), the system
+    # degrades to processing every Nth frame to save CPU and extend hardware
+    # lifespan.  Full processing resumes IMMEDIATELY when any detection occurs.
+
+    frame_throttle_enabled: bool = _parse_bool_env("FRAME_THROTTLE_ENABLED", True)
+    """
+    Master switch for the adaptive frame throttle.
+    When True, the system will degrade to processing every Nth frame after
+    the conveyor has been idle for `frame_throttle_idle_timeout_s` seconds.
+    When False, every frame is always processed regardless of activity.
+    """
+
+    frame_throttle_idle_timeout_s: float = _parse_float_env("FRAME_THROTTLE_IDLE_TIMEOUT_S", 900.0)
+    """
+    Seconds of zero detections before switching to degraded (power-saving) mode.
+    Default: 1800 (30 minutes) — aligned with the smoother inactivity flush timeout.
+    """
+
+    frame_throttle_skip_n: int = _parse_int_env("FRAME_THROTTLE_SKIP_N", 5)
+    """
+    In degraded mode, process every Nth frame (skip the rest).
+    Default: 5 → process 1 out of every 5 frames (~80% CPU reduction).
+    At 17 FPS from camera this means ~3.4 effective FPS during idle, which
+    is more than enough to detect a bag arriving on the conveyor.
+    """
+
+    frame_throttle_hysteresis_s: float = _parse_float_env("FRAME_THROTTLE_HYSTERESIS_S", 60.0)
+    """
+    After waking from degraded mode back to full processing, stay in full
+    mode for at least this many seconds before allowing degradation again.
+    Prevents rapid oscillation from single spurious detections.
+    Default: 60 seconds.
+    """
+
+    # ==========================================================================
     # Bidirectional Smoothing Parameters (legacy — used when smoothing_algorithm='window')
     # ==========================================================================
     

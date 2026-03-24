@@ -288,6 +288,11 @@
             <div class="label"><i class="fa-solid fa-percent"></i> نسبة التنعيم</div>
             <div class="value eng" id="smoothingRate">—</div>
         </div>
+        <div class="info-card" id="throttleCard">
+            <div class="label"><i class="fa-solid fa-bolt"></i> وضع المعالجة</div>
+            <div class="value" id="throttleMode">—</div>
+            <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px;" id="throttleDetail"></div>
+        </div>
     </div>
 
     <!-- Degraded reasons -->
@@ -383,24 +388,42 @@ setInterval(() => {
 
 // ── Component names map ──
 const compLabels = {
-    database: 'قاعدة البيانات',
-    codec: 'وحدة فك الترميز',
-    spool: 'مدخل التسجيل',
-    rtsp: 'بث الكاميرا',
+    database:        'قاعدة البيانات',
+    codec:           'وحدة فك الترميز',
+    spool:           'مدخل التسجيل',
+    rtsp:            'بث الكاميرا',
+    frame_throttle:  'وضع المعالجة',
 };
 
-function renderComponents(components) {
+function renderComponents(components, frameThrottle) {
     const grid = $('compGrid');
-    if (!components || Object.keys(components).length === 0) {
+    // Build a merged dict: real components + synthetic throttle entry
+    const allComps = Object.assign({}, components);
+    if (frameThrottle && frameThrottle.enabled !== undefined) {
+        const isDegraded = frameThrottle.mode === 'degraded';
+        allComps['frame_throttle'] = {
+            healthy: true,   // throttle itself is always healthy — it's informational
+            status:  isDegraded ? 'توفير الطاقة' : 'معالجة كاملة',
+            _isDegraded: isDegraded,
+        };
+    }
+
+    if (!allComps || Object.keys(allComps).length === 0) {
         grid.innerHTML = '<div class="comp-card"><div class="comp-dot gray"></div><div><div class="comp-name">لا تتوفر بيانات</div></div></div>';
         return;
     }
     let html = '';
-    for (const [key, val] of Object.entries(components)) {
+    for (const [key, val] of Object.entries(allComps)) {
         if (key === 'recovery_stage' || key === 'escalation_count') continue;
         const label = esc(compLabels[key] || key);
         const healthy = val.healthy;
-        const dot = healthy === true ? 'green' : healthy === false ? 'red' : 'yellow';
+        // Throttle: yellow dot when degraded (informational, not an error)
+        let dot;
+        if (key === 'frame_throttle') {
+            dot = val._isDegraded ? 'yellow' : 'green';
+        } else {
+            dot = healthy === true ? 'green' : healthy === false ? 'red' : 'yellow';
+        }
         const detail = esc(val.state || val.reason || val.status || '');
         html += '<div class="comp-card">'
               + '<div class="comp-dot ' + dot + '"></div>'
@@ -630,8 +653,43 @@ async function checkHealth() {
         // ── Smoothing rate ──
         $('smoothingRate').textContent = p.smoothing_rate != null ? (p.smoothing_rate * 100).toFixed(1) + '%' : '—';
 
+        // ── Frame Throttle / Processing mode ──
+        const ft = p.frame_throttle || {};
+        const throttleModeEl  = $('throttleMode');
+        const throttleDetailEl = $('throttleDetail');
+        const throttleCard    = $('throttleCard');
+        if (!ft.enabled) {
+            throttleModeEl.textContent = 'دائماً كامل';
+            throttleModeEl.className   = 'value success';
+            throttleDetailEl.textContent = 'وضع توفير الطاقة معطّل';
+            throttleCard.style.borderColor = '';
+        } else if (ft.mode === 'degraded') {
+            const idleMin = ft.idle_seconds != null ? Math.floor(ft.idle_seconds / 60) : 0;
+            const idleH   = Math.floor(idleMin / 60);
+            const idleM   = idleMin % 60;
+            const idleFmt = String(idleH).padStart(2,'0') + ':' + String(idleM).padStart(2,'0');
+            throttleModeEl.innerHTML = '<span style="color:var(--accent-warning);font-weight:700;">⚡ توفير الطاقة</span>';
+            throttleModeEl.className = 'value warning';
+            throttleDetailEl.innerHTML =
+                'إطار كل <b class="eng">' + esc(String(ft.skip_n || 5)) + '</b>'
+                + ' · توقف منذ <b class="eng">' + esc(idleFmt) + '</b>'
+                + ' · تجاوز <b class="eng">' + esc(String((ft.frames_skipped || 0).toLocaleString('en'))) + '</b> إطار';
+            throttleCard.style.borderColor = 'rgba(251,191,36,0.35)';
+        } else {
+            // full mode
+            const idleSec = ft.idle_seconds || 0;
+            const timeoutSec = ft.idle_timeout_s || 1800;
+            const remainMin  = Math.max(0, Math.floor((timeoutSec - idleSec) / 60));
+            throttleModeEl.innerHTML = '<span style="color:var(--accent-success);font-weight:700;">✓ معالجة كاملة</span>';
+            throttleModeEl.className = 'value success';
+            throttleDetailEl.textContent = ft.mode === 'full' && idleSec > 0
+                ? 'التوفير يبدأ خلال ' + remainMin + ' دقيقة بدون نشاط'
+                : 'الخط نشط';
+            throttleCard.style.borderColor = 'rgba(45,212,191,0.2)';
+        }
+
         // Components
-        renderComponents(data.components || {});
+        renderComponents(data.components || {}, p.frame_throttle || {});
 
         // Degraded reasons
         renderDegradedReasons(data.degraded_reasons || []);
@@ -645,7 +703,7 @@ async function checkHealth() {
         titleEl.textContent = 'الاتصال منقطع';
         subEl.textContent = 'تعذر الوصول إلى الخادم — تحقق من الشبكة';
         $('dbStatus').textContent = '—';
-        renderComponents({});
+        renderComponents({}, {});
         renderDegradedReasons([]);
     }
 

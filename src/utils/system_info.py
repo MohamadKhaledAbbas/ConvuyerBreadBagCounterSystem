@@ -81,18 +81,61 @@ def _get_rdk_temperatures() -> Dict[str, Any]:
         )
         output = proc.stdout + proc.stderr
 
-        # Parse temperature lines (flexible pattern)
-        for line in output.splitlines():
-            line_lower = line.lower()
-            temp_match = re.search(r'([\d.]+)\s*°?[cC]', line)
-            if temp_match:
-                temp_val = float(temp_match.group(1))
-                if 'cpu' in line_lower and 'temp' in line_lower:
-                    result["cpu_temp"] = temp_val
-                elif 'bpu' in line_lower and 'temp' in line_lower:
-                    result["bpu_temp"] = temp_val
-                elif 'ddr' in line_lower and 'temp' in line_lower:
-                    result["ddr_temp"] = temp_val
+        # Parse temperature lines (flexible two-pass pattern).
+        #
+        # hrut_somstatus output varies by firmware version:
+        #   v1 (strict):  "CPU Temperature: 65.3°C"  → both 'cpu' AND 'temp' on same line
+        #   v2 (compact): "cpu  :  65.3°C"            → only hardware name, no 'temp' word
+        #   v3 (numeric): "bpu0 :  62.1"              → numeric only, no °C symbol
+        #
+        # Strategy:
+        #   Pass 1 — strict: require both hardware name AND 'temp' keyword (least ambiguous)
+        #   Pass 2 — loose : require only hardware name if pass 1 left any field as None
+        #   This prevents accidental assignment of unrelated numbers in verbose output.
+
+        lines = output.splitlines()
+
+        # temperature value pattern: digits optionally followed by °C / °c / C / c
+        _TEMP_RE = re.compile(r'([\d.]+)\s*°?[cC]?\b')
+
+        def _extract_temp(line: str) -> Optional[float]:
+            """Return the first plausible temperature value on a line, or None."""
+            m = _TEMP_RE.search(line)
+            if m:
+                val = float(m.group(1))
+                # Reject values outside a plausible hardware temperature range
+                if 20.0 <= val <= 120.0:
+                    return val
+            return None
+
+        # Pass 1: strict (hardware name + 'temp' keyword on same line)
+        for line in lines:
+            ll = line.lower()
+            if 'temp' not in ll:
+                continue
+            val = _extract_temp(line)
+            if val is None:
+                continue
+            if result["cpu_temp"] is None and 'cpu' in ll:
+                result["cpu_temp"] = round(val, 1)
+            elif result["bpu_temp"] is None and 'bpu' in ll:
+                result["bpu_temp"] = round(val, 1)
+            elif result["ddr_temp"] is None and 'ddr' in ll:
+                result["ddr_temp"] = round(val, 1)
+
+        # Pass 2: loose (hardware name alone — catches compact "BPU0: 62.1°C" style)
+        if None in (result["cpu_temp"], result["bpu_temp"], result["ddr_temp"]):
+            for line in lines:
+                ll = line.lower()
+                val = _extract_temp(line)
+                if val is None:
+                    continue
+                if result["cpu_temp"] is None and re.search(r'\bcpu\b', ll):
+                    result["cpu_temp"] = round(val, 1)
+                elif result["bpu_temp"] is None and re.search(r'\bbpu\d*\b', ll):
+                    result["bpu_temp"] = round(val, 1)
+                elif result["ddr_temp"] is None and re.search(r'\bddr\b', ll):
+                    result["ddr_temp"] = round(val, 1)
 
         # Fallback: try reading from sysfs thermal zones
         if result["cpu_temp"] is None:
@@ -130,7 +173,7 @@ def _read_thermal_zones() -> Dict[str, Any]:
                             zone_type = f.read().strip().lower()
                     if "cpu" in zone_type and temps.get("cpu_temp") is None:
                         temps["cpu_temp"] = round(temp_c, 1)
-                    elif "bpu" in zone_type and temps.get("bpu_temp") is None:
+                    elif re.search(r'bpu\d*', zone_type) and temps.get("bpu_temp") is None:
                         temps["bpu_temp"] = round(temp_c, 1)
                     elif "ddr" in zone_type and temps.get("ddr_temp") is None:
                         temps["ddr_temp"] = round(temp_c, 1)

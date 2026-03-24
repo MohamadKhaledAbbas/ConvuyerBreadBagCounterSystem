@@ -72,6 +72,21 @@ def _apply_idle_reset_and_work_info(state: Dict[str, Any]) -> Dict[str, Any]:
         idle_hours = int(state["idle_minutes"] // 60)
         idle_mins = int(state["idle_minutes"] % 60)
         state["idle_time_formatted"] = f"{idle_hours:02d}:{idle_mins:02d}"
+
+        # Clear batch/SM display fields so the batch timeline and state-machine
+        # panel reset on screen (counts were zeroed above but type names were not,
+        # causing the previous batch name to persist until the next production run).
+        state["current_batch_type"] = None
+        state["previous_batch_type"] = None
+        state["last_classified_type"] = None
+        if "state_machine" in state and isinstance(state["state_machine"], dict):
+            state["state_machine"] = {
+                **state["state_machine"],
+                "confirmed_batch_class": None,
+                "current_run_class": None,
+                "current_run_length": 0,
+                "last_decision": None,
+            }
     else:
         state["idle_reset"] = False
         state["idle_minutes"] = round(idle_seconds / 60) if last_count_ts > 0 else 0

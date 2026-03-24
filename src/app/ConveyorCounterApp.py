@@ -39,6 +39,7 @@ except ImportError:
     HAS_PSUTIL = False
 
 # Import modular pipeline components
+from src.app.adaptive_frame_throttle import AdaptiveFrameThrottle
 from src.app.pipeline_core import PipelineCore
 from src.app.pipeline_visualizer import PipelineVisualizer
 from src.classifier.BaseClassifier import BaseClassifier
@@ -232,6 +233,9 @@ class ConveyorCounterApp:
 
         # Codec health monitor (RDK only) - auto-recovers from VPU decoder stalls
         self._codec_health_monitor = None
+
+        # Adaptive frame throttle (idle power-saving)
+        self._throttle: Optional[AdaptiveFrameThrottle] = None
 
         # ROI cache for saving by class (track_id -> best_roi)
         self._roi_cache: Dict[int, np.ndarray] = {}
@@ -484,6 +488,14 @@ class ConveyorCounterApp:
 
         logger.info("[ConveyorCounterApp] Components initialized with modular architecture")
 
+        # Adaptive Frame Throttle (idle power-saving)
+        self._throttle = AdaptiveFrameThrottle(
+            enabled=self.tracking_config.frame_throttle_enabled,
+            idle_timeout_s=self.tracking_config.frame_throttle_idle_timeout_s,
+            skip_n=self.tracking_config.frame_throttle_skip_n,
+            hysteresis_s=self.tracking_config.frame_throttle_hysteresis_s,
+        )
+
     def _process_frame(self, frame: np.ndarray) -> np.ndarray:
         """
         Process a single frame through the modular pipeline.
@@ -513,6 +525,12 @@ class ConveyorCounterApp:
             frame, nv12_data=nv12_data, frame_size=frame_size
         )
 
+        # ── Adaptive Frame Throttle: report activity ─────────────────
+        # Any detection means the conveyor is running; if the throttle was
+        # in degraded mode it will wake back to full-rate immediately.
+        if (detections or active_tracks) and self._throttle is not None:
+            self._throttle.report_activity()
+
         # Update state
         self.state.active_tracks = len(active_tracks)
         total_time = (time.perf_counter() - frame_start) * 1000
@@ -538,7 +556,8 @@ class ConveyorCounterApp:
             'processing_ms': self.state.processing_time_ms,
             'tentative_total': self.state.tentative_total,
             'tentative_counts': self.state.get_tentative_snapshot(),
-            'lost_track_count': self.state.lost_track_count
+            'lost_track_count': self.state.lost_track_count,
+            'throttle_mode': self._throttle.mode if self._throttle else 'full',
         }
 
         # Add tracker statistics if available
@@ -973,6 +992,7 @@ class ConveyorCounterApp:
                 "transition_history": transition_history,
                 "last_count_timestamp": self.state.last_count_time,
                 "work_started_timestamp": self.state.first_count_time,
+                "frame_throttle": self._throttle.get_state() if self._throttle else {},
             }
             write_pipeline_state(state)
         except Exception as e:
@@ -1105,6 +1125,7 @@ class ConveyorCounterApp:
                 "last_decision": None,
             },
             "transition_history": [],
+            "frame_throttle": self._throttle.get_state() if self._throttle else {},
         }
         write_pipeline_state(initial_state)
         logger.info("[ConveyorCounterApp] Pipeline state reset - counts page will show today's data only")
@@ -1125,6 +1146,20 @@ class ConveyorCounterApp:
                     break
                 
                 self._frame_count += 1
+
+                # ── Adaptive Frame Throttle ──────────────────────────────
+                # Check whether the idle timeout has elapsed (FULL → DEGRADED).
+                # In DEGRADED mode only every Nth frame is processed; the rest
+                # are skipped but still drained from the source queue to prevent
+                # buffer overflows and keep the camera feed alive.
+                self._throttle.check_timeout()
+
+                if not self._throttle.should_process(self._frame_count):
+                    # NOTE: Skipped frames do NOT enter the evidence ring buffer
+                    # or trigger snapshot capture.  This is acceptable because
+                    # there are no active tracks during idle.  Snapshots can
+                    # still be triggered on the next processed frame.
+                    continue
                 
                 # Process frame through modular pipeline
                 annotated = self._process_frame(frame)
@@ -1225,6 +1260,15 @@ class ConveyorCounterApp:
         if self._smoother is not None:
             stats = self._smoother.get_statistics()
             logger.info(f"  Smoothing rate: {stats['smoothing_rate']:.1%}")
+
+        if self._throttle is not None:
+            ts = self._throttle.get_state()
+            logger.info(
+                f"  Frame throttle: mode={ts['mode']}, "
+                f"skipped={ts['frames_skipped']}/{ts['total_frames_seen']} frames, "
+                f"degraded_transitions={ts['degraded_transitions']}, "
+                f"wake_transitions={ts['wake_transitions']}"
+            )
         
         logger.info("=" * 50)
     

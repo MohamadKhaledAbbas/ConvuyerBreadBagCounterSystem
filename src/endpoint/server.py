@@ -325,6 +325,8 @@ async def health() -> Dict[str, Any]:
             "work_active": work_active,           # True when last bag < 5 minutes ago
             "last_count_datetime": last_count_dt, # "yyyy/mm/dd - HH:MM" of the last counted bag
             "idle_minutes": line_idle_minutes,    # minutes since last bag was counted
+            # Adaptive frame throttle (power-saving idle mode)
+            "frame_throttle": pipeline.get("frame_throttle", {}),
         },
         "components": components,
         "degraded_reasons": degraded_reasons,
