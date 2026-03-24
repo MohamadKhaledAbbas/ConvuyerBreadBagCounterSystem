@@ -291,6 +291,16 @@
         <div class="info-card" id="throttleCard">
             <div class="label"><i class="fa-solid fa-bolt"></i> وضع المعالجة</div>
             <div class="value" id="throttleMode">—</div>
+            <!-- idle / degraded-since progress bar -->
+            <div id="throttleTimerBar" style="margin-top:6px;display:none;">
+                <div style="position:relative;height:4px;border-radius:2px;background:rgba(255,255,255,.08);overflow:hidden;">
+                    <div id="throttleTimerFill" style="height:100%;border-radius:2px;width:0%;transition:width .5s;"></div>
+                </div>
+                <div style="display:flex;justify-content:space-between;margin-top:3px;font-size:.65rem;color:var(--text-muted);font-family:'Inter',monospace;direction:ltr;">
+                    <span id="throttleTimerLeft"></span>
+                    <span id="throttleTimerRight"></span>
+                </div>
+            </div>
             <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px;" id="throttleDetail"></div>
         </div>
     </div>
@@ -662,44 +672,83 @@ async function checkHealth() {
 
         // ── Frame Throttle / Processing mode ──
         const ft = p.frame_throttle || {};
-        const throttleModeEl  = $('throttleMode');
+        const throttleModeEl   = $('throttleMode');
         const throttleDetailEl = $('throttleDetail');
-        const throttleCard    = $('throttleCard');
+        const throttleCard     = $('throttleCard');
+        const timerBar         = $('throttleTimerBar');
+        const timerFill        = $('throttleTimerFill');
+        const timerLeft        = $('throttleTimerLeft');
+        const timerRight       = $('throttleTimerRight');
+
+        // Helper: format seconds → HH:MM:SS or MM:SS
+        function fmtSec(s) {
+            if (s == null) return '—';
+            s = Math.max(0, Math.round(s));
+            const h = Math.floor(s / 3600);
+            const m = Math.floor((s % 3600) / 60);
+            const sec = s % 60;
+            const mm = String(m).padStart(2, '0');
+            const ss = String(sec).padStart(2, '0');
+            return h > 0 ? String(h).padStart(2,'0') + ':' + mm + ':' + ss : mm + ':' + ss;
+        }
+
         if (!ft.enabled) {
             throttleModeEl.textContent = 'دائماً كامل';
             throttleModeEl.className   = 'value success';
             throttleDetailEl.textContent = 'وضع توفير الطاقة معطّل';
             throttleCard.style.borderColor = '';
+            timerBar.style.display = 'none';
         } else if (ft.mode === 'degraded') {
-            const idleMin = ft.idle_seconds != null ? Math.floor(ft.idle_seconds / 60) : 0;
-            const idleH   = Math.floor(idleMin / 60);
-            const idleM   = idleMin % 60;
-            const idleFmt = String(idleH).padStart(2,'0') + ':' + String(idleM).padStart(2,'0');
+            const skipN      = ft.skip_n || 5;
+            const degradedS  = ft.degraded_since_seconds;
+            const idleS      = ft.idle_seconds || 0;
+            const framesSkip = (ft.frames_skipped || 0).toLocaleString('en');
+            const wakes      = ft.wake_transitions || 0;
+            const noise      = ft.detection_only_wakes || 0;
+
             throttleModeEl.innerHTML = '<span style="color:var(--accent-warning);font-weight:700;">⚡ توفير الطاقة</span>';
             throttleModeEl.className = 'value warning';
-            throttleDetailEl.innerHTML =
-                'إطار كل <b class="eng">' + esc(String(ft.skip_n || 5)) + '</b>'
-                + ' · توقف منذ <b class="eng">' + esc(idleFmt) + '</b>'
-                + ' · تجاوز <b class="eng">' + esc(String((ft.frames_skipped || 0).toLocaleString('en'))) + '</b> إطار'
-                + ' · استيقاظ <b class="eng">' + esc(String(ft.wake_transitions || 0)) + '</b>'
-                + (ft.detection_only_wakes ? ' · ضوضاء <b class="eng">' + esc(String(ft.detection_only_wakes)) + '</b>' : '');
             throttleCard.style.borderColor = 'rgba(251,191,36,0.35)';
+
+            // Progress bar: idle ratio (filled = time spent idle / threshold)
+            const pct = Math.min(100, (idleS / (ft.idle_timeout_s || 900)) * 100);
+            timerFill.style.width = pct.toFixed(1) + '%';
+            timerFill.style.background = 'var(--accent-warning)';
+            timerLeft.textContent  = 'في وضع التوفير: ' + fmtSec(degradedS);
+            timerRight.textContent = 'غير نشط منذ: ' + fmtSec(idleS);
+            timerBar.style.display = 'block';
+
+            throttleDetailEl.innerHTML =
+                'إطار كل <b class="eng">' + esc(String(skipN)) + '</b>'
+                + ' · تجاوز <b class="eng">' + esc(framesSkip) + '</b> إطار'
+                + ' · استيقاظ <b class="eng">' + esc(String(wakes)) + '</b>'
+                + (noise ? ' · ضوضاء <b class="eng">' + esc(String(noise)) + '</b>' : '');
         } else {
-            // full mode
-            const idleSec = ft.idle_seconds || 0;
+            // FULL mode
+            const idleSec    = ft.idle_seconds || 0;
             const timeoutSec = ft.idle_timeout_s || 900;
-            const remainMin  = Math.max(0, Math.floor((timeoutSec - idleSec) / 60));
-            const lastWake = ft.last_wake_signal || '';
-            const wakeLabel = lastWake === 'detection' ? 'كشف مبدئي'
-                            : lastWake === 'confirmed_track' ? 'مسار مؤكد' : '';
+            const untilSec   = ft.time_until_degrade_s;   // from backend
+            const idlePct    = ft.idle_percent || 0;
+            const lastWake   = ft.last_wake_signal || '';
+            const wakeLabel  = lastWake === 'detection'       ? 'كشف مبدئي'
+                             : lastWake === 'confirmed_track' ? 'مسار مؤكد' : '';
+
             throttleModeEl.innerHTML = '<span style="color:var(--accent-success);font-weight:700;">✓ معالجة كاملة</span>';
             throttleModeEl.className = 'value success';
-            let detailText = '';
-            if (ft.mode === 'full' && idleSec > 0 && remainMin > 0) {
-                detailText = 'التوفير يبدأ خلال ' + remainMin + ' دقيقة بدون نشاط';
-            } else {
-                detailText = 'الخط نشط';
-            }
+
+            // Idle progress bar: green → orange as idleness grows
+            const barColor = idlePct >= 80 ? 'var(--accent-warning)'
+                           : idlePct >= 50 ? '#fb923c'
+                           : 'var(--accent-success)';
+            timerFill.style.width      = idlePct.toFixed(1) + '%';
+            timerFill.style.background = barColor;
+            timerLeft.textContent  = 'غير نشط: ' + fmtSec(idleSec);
+            timerRight.textContent = 'يتوقف بعد: ' + fmtSec(untilSec != null ? untilSec : Math.max(0, timeoutSec - idleSec));
+            timerBar.style.display = 'block';
+
+            let detailText = idleSec > 0
+                ? 'التوفير يبدأ بعد ' + fmtSec(untilSec != null ? untilSec : Math.max(0, timeoutSec - idleSec))
+                : 'الخط نشط';
             if (wakeLabel) detailText += ' · آخر تنبيه: ' + wakeLabel;
             throttleDetailEl.textContent = detailText;
             throttleCard.style.borderColor = 'rgba(45,212,191,0.2)';

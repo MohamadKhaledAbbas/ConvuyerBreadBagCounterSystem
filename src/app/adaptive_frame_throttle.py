@@ -127,6 +127,10 @@ class AdaptiveFrameThrottle:
         # These indicate spurious noise detections.
         self._detection_only_wakes: int = 0
 
+        # Timestamp when we last entered DEGRADED mode (None when in FULL mode).
+        # Used to compute degraded_since_seconds in get_state().
+        self._degraded_since: float | None = None
+
         # Logging throttle — avoid spamming logs during degraded mode
         self._last_degraded_log_time: float = 0.0
         self._degraded_log_interval: float = 300.0  # log every 5 min in degraded
@@ -192,6 +196,7 @@ class AdaptiveFrameThrottle:
             if self._mode == self.MODE_DEGRADED:
                 now = time.monotonic()
                 self._mode = self.MODE_FULL
+                self._degraded_since = None
                 self._last_wake_time = now
                 self._wake_transitions += 1
                 self._last_wake_signal = "detection"
@@ -229,6 +234,7 @@ class AdaptiveFrameThrottle:
 
             if self._mode == self.MODE_DEGRADED:
                 self._mode = self.MODE_FULL
+                self._degraded_since = None
                 self._last_wake_time = now
                 self._wake_transitions += 1
                 self._last_wake_signal = "confirmed_track"
@@ -268,6 +274,7 @@ class AdaptiveFrameThrottle:
 
             if idle_seconds >= self._idle_timeout_s:
                 self._mode = self.MODE_DEGRADED
+                self._degraded_since = now
                 self._degraded_transitions += 1
                 idle_min = idle_seconds / 60.0
                 logger.info(
@@ -288,11 +295,32 @@ class AdaptiveFrameThrottle:
         with self._lock:
             now = time.monotonic()
             idle_seconds = now - self._last_activity_time
+
+            # How long have we been in DEGRADED mode (None when FULL)
+            degraded_since_seconds = (
+                round(now - self._degraded_since, 1)
+                if self._degraded_since is not None else None
+            )
+
+            # Seconds remaining before degradation (None when already DEGRADED)
+            time_until_degrade_s = (
+                round(max(0.0, self._idle_timeout_s - idle_seconds), 1)
+                if self._mode == self.MODE_FULL else None
+            )
+
+            # Idle progress as 0–100 % (useful for a progress bar in the UI)
+            idle_percent = round(
+                min(100.0, idle_seconds / self._idle_timeout_s * 100.0), 1
+            )
+
             return {
                 "enabled": self._enabled,
                 "mode": self._mode,
                 "idle_seconds": round(idle_seconds, 1),
                 "idle_timeout_s": self._idle_timeout_s,
+                "idle_percent": idle_percent,
+                "time_until_degrade_s": time_until_degrade_s,
+                "degraded_since_seconds": degraded_since_seconds,
                 "skip_n": self._skip_n,
                 "hysteresis_s": self._hysteresis_s,
                 "frames_skipped": self._frames_skipped,
