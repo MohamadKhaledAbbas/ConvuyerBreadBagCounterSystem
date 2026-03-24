@@ -380,6 +380,44 @@ function esc(str) {
 let countdown = 30;
 let countdownInterval;
 let uptimeSeconds = null;
+let throttleTimerState = null;   // live-tick snapshot for the timer card
+
+// Helper: format seconds → HH:MM:SS or MM:SS  (module scope so tickThrottleTimers can use it)
+function fmtSec(s) {
+    if (s == null) return '—';
+    s = Math.max(0, Math.round(s));
+    const h  = Math.floor(s / 3600);
+    const m  = Math.floor((s % 3600) / 60);
+    const sc = s % 60;
+    const mm = String(m).padStart(2, '0');
+    const ss = String(sc).padStart(2, '0');
+    return h > 0 ? String(h).padStart(2, '0') + ':' + mm + ':' + ss : mm + ':' + ss;
+}
+
+// Tick the throttle timer labels every second (between API polls)
+function tickThrottleTimers() {
+    if (!throttleTimerState) return;
+    const s = throttleTimerState;
+    s.idleSec = (s.idleSec || 0) + 1;
+
+    if (s.mode === 'degraded') {
+        s.degradedSec = (s.degradedSec || 0) + 1;
+        const pct = Math.min(100, (s.idleSec / (s.timeoutSec || 900)) * 100);
+        $('throttleTimerFill').style.width = pct.toFixed(1) + '%';
+        $('throttleTimerLeft').textContent  = 'في وضع التوفير: ' + fmtSec(s.degradedSec);
+        $('throttleTimerRight').textContent = 'غير نشط منذ: '    + fmtSec(s.idleSec);
+    } else {
+        // full mode
+        if (s.untilSec != null) s.untilSec = Math.max(0, s.untilSec - 1);
+        const remaining = s.untilSec != null ? s.untilSec : Math.max(0, (s.timeoutSec || 900) - s.idleSec);
+        const idlePct   = Math.min(100, (s.idleSec / (s.timeoutSec || 900)) * 100);
+        const barColor  = idlePct >= 80 ? 'var(--accent-warning)' : idlePct >= 50 ? '#fb923c' : 'var(--accent-success)';
+        $('throttleTimerFill').style.width      = idlePct.toFixed(1) + '%';
+        $('throttleTimerFill').style.background = barColor;
+        $('throttleTimerLeft').textContent  = 'غير نشط: '     + fmtSec(s.idleSec);
+        $('throttleTimerRight').textContent = 'يتوقف بعد: '   + fmtSec(remaining);
+    }
+}
 
 function formatUptime(secs) {
     const h = Math.floor(secs / 3600);
@@ -394,6 +432,7 @@ setInterval(() => {
         uptimeSeconds++;
         $('uptime').textContent = formatUptime(uptimeSeconds);
     }
+    tickThrottleTimers();
 }, 1000);
 
 // ── Component names map ──
@@ -680,17 +719,6 @@ async function checkHealth() {
         const timerLeft        = $('throttleTimerLeft');
         const timerRight       = $('throttleTimerRight');
 
-        // Helper: format seconds → HH:MM:SS or MM:SS
-        function fmtSec(s) {
-            if (s == null) return '—';
-            s = Math.max(0, Math.round(s));
-            const h = Math.floor(s / 3600);
-            const m = Math.floor((s % 3600) / 60);
-            const sec = s % 60;
-            const mm = String(m).padStart(2, '0');
-            const ss = String(sec).padStart(2, '0');
-            return h > 0 ? String(h).padStart(2,'0') + ':' + mm + ':' + ss : mm + ':' + ss;
-        }
 
         if (!ft.enabled) {
             throttleModeEl.textContent = 'دائماً كامل';
@@ -723,6 +751,8 @@ async function checkHealth() {
                 + ' · تجاوز <b class="eng">' + esc(framesSkip) + '</b> إطار'
                 + ' · استيقاظ <b class="eng">' + esc(String(wakes)) + '</b>'
                 + (noise ? ' · ضوضاء <b class="eng">' + esc(String(noise)) + '</b>' : '');
+            // Snapshot for per-second tick
+            throttleTimerState = { mode: 'degraded', idleSec: idleS, degradedSec: degradedS || 0, timeoutSec: ft.idle_timeout_s || 900 };
         } else {
             // FULL mode
             const idleSec    = ft.idle_seconds || 0;
@@ -752,6 +782,8 @@ async function checkHealth() {
             if (wakeLabel) detailText += ' · آخر تنبيه: ' + wakeLabel;
             throttleDetailEl.textContent = detailText;
             throttleCard.style.borderColor = 'rgba(45,212,191,0.2)';
+            // Snapshot for per-second tick
+            throttleTimerState = { mode: 'full', idleSec: idleSec, untilSec: untilSec, timeoutSec: timeoutSec };
         }
 
         // Components
