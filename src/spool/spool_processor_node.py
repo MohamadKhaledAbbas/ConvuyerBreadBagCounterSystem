@@ -360,6 +360,13 @@ class SpoolProcessorNode(Node if is_rdk_platform() else object):
                 "avg_fps": round(
                     self._frames_published / max(time.time() - self._start_time, 1), 1
                 ),
+                # Retention mode so health endpoint can display it
+                "retention_idle_mode": self.retention._idle_mode if self.retention else False,
+                "retention_segments_kept": (
+                    self.retention.config.idle_max_segments
+                    if (self.retention and self.retention._idle_mode)
+                    else (self.retention.config.min_segments_keep if self.retention else 5)
+                ),
             }
 
             tmp_path = SPOOL_PROCESSOR_STATUS_FILE + ".tmp"
@@ -447,6 +454,8 @@ class SpoolProcessorNode(Node if is_rdk_platform() else object):
                         _sentinel_active = True
                         _sentinel_cursor_saved = _last_processed_segment
                         _sentinel_frames_sent = 0
+                        if self.retention:
+                            self.retention.set_idle_mode(True)
                         logger.info(
                             f"[SpoolProcessor] SENTINEL_ENTER | "
                             f"cursor_saved={_sentinel_cursor_saved} | "
@@ -458,6 +467,8 @@ class SpoolProcessorNode(Node if is_rdk_platform() else object):
                     # ── Transition: sentinel (DEGRADED) → FULL ──────────
                     elif throttle_mode == "full" and _sentinel_active:
                         _sentinel_active = False
+                        if self.retention:
+                            self.retention.set_idle_mode(False)
 
                         # Skip idle segments: advance cursor to near-latest
                         # to avoid reprocessing hours of empty belt footage.

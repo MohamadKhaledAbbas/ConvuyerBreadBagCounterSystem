@@ -29,7 +29,8 @@ class RetentionConfig:
     """
     max_age_hours: float = 5.0 / 60.0          # 5 minutes — old idle segments are useless
     max_storage_bytes: int = 200 * 1024 * 1024  # 200 MB hard cap
-    min_segments_keep: int = 5                  # always keep last 5 for catch-up after sentinel wake
+    min_segments_keep: int = 5                  # full mode: always keep last 5 for catch-up
+    idle_max_segments: int = 10                 # sentinel/power-save: keep only last N segments
     check_interval_seconds: float = 30.0        # check every 30 s (tight retention needs faster checks)
     only_delete_processed: bool = True
 
@@ -65,6 +66,9 @@ class RetentionPolicy:
         self._processed_segments: Set[int] = set()
         self._processed_lock = threading.Lock()
 
+        # Operating mode — set by the spool processor on sentinel transitions
+        self._idle_mode: bool = False
+
         # Background thread control
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -84,6 +88,37 @@ class RetentionPolicy:
         """
         with self._processed_lock:
             self._processed_segments.add(segment_num)
+
+    def set_idle_mode(self, idle: bool) -> None:
+        """Signal whether the pipeline is in idle / sentinel / power-save mode.
+
+        In idle mode the cleanup strategy switches from age-based to
+        count-based: only the most-recent ``idle_max_segments`` segments are
+        kept; everything older is deleted unconditionally on the next cycle.
+        This is correct because the processor intentionally skips all idle
+        segments — they will never be marked as processed.
+
+        In full mode the processing-aware two-pass strategy resumes:
+        within-grace-period segments are only deleted after processing;
+        segments that have aged out are deleted regardless.
+
+        Args:
+            idle: True when entering sentinel/power-save mode, False on wake.
+        """
+        if idle == self._idle_mode:
+            return
+        self._idle_mode = idle
+        if idle:
+            logger.info(
+                f"[Retention] → IDLE/sentinel mode — "
+                f"keeping last {self.config.idle_max_segments} segments, "
+                f"all older deleted unconditionally"
+            )
+        else:
+            logger.info(
+                "[Retention] → FULL mode — "
+                "processing-aware age/storage cleanup resumed"
+            )
 
     def delete_processed_immediately(self, segment_num: int) -> bool:
         """
@@ -232,8 +267,27 @@ class RetentionPolicy:
         """
         Run a single cleanup cycle.
 
+        Strategy depends on the current operating mode:
+
+        **Idle / sentinel mode** — count-based:
+            Keep only the last ``idle_max_segments`` segments and delete
+            everything older unconditionally.  No age check, no processing
+            check.  The processor intentionally skips idle segments so they
+            will never be marked as processed; count-based eviction is the
+            only mechanism that works.
+
+        **Full mode** — processing-aware two-pass:
+            Pass 1 (age): segments older than ``max_age_hours`` are deleted
+            unconditionally — age overrides ``only_delete_processed``.
+            Pass 2 (storage cap): if still over ``max_storage_bytes``, delete
+            oldest segments; within the grace period only delete processed
+            ones.
+
+        In both modes ``min_segments_keep`` (full) / ``idle_max_segments``
+        (idle) act as a hard floor on the number of segments retained.
+
         Returns:
-            Number of segments deleted
+            Number of segments deleted in this cycle.
         """
         self.last_check_time = time.time()
         cycle_t0 = time.monotonic()
@@ -242,12 +296,30 @@ class RetentionPolicy:
         if not segments:
             return 0
 
-
         deleted_count = 0
         now = time.time()
-        max_age_seconds = self.config.max_age_hours * 3600
 
-        # Calculate how many we must keep
+        # ── IDLE / SENTINEL mode: count-based cleanup ─────────────────────
+        if self._idle_mode:
+            idle_keep = self.config.idle_max_segments
+            can_delete = max(0, len(segments) - idle_keep)
+            if can_delete == 0:
+                return 0
+
+            for segment_num, path, size, mtime in segments[:can_delete]:
+                self._delete_segment(segment_num, path)
+                deleted_count += 1
+
+            if deleted_count > 0:
+                logger.info(
+                    f"[Retention] CLEANUP_CYCLE mode=idle deleted={deleted_count} "
+                    f"kept={idle_keep} "
+                    f"elapsed_ms={(time.monotonic() - cycle_t0) * 1000:.1f}"
+                )
+            return deleted_count
+
+        # ── FULL mode: processing-aware two-pass cleanup ───────────────────
+        max_age_seconds = self.config.max_age_hours * 3600
         min_keep = self.config.min_segments_keep
         can_delete_count = max(0, len(segments) - min_keep)
 
@@ -257,23 +329,26 @@ class RetentionPolicy:
         # Candidates for deletion (oldest first, excluding min_keep newest)
         deletion_candidates = segments[:can_delete_count]
 
-        # First pass: Delete old segments
+        # ── Pass 1: age-based deletion ──
+        # A segment that has outlived max_age is deleted unconditionally.
+        # only_delete_processed is intentionally NOT checked here: in idle /
+        # sentinel mode the processor never calls mark_processed(), so the set
+        # stays empty and the age gate would never fire — that was the original
+        # bug.  min_segments_keep already protects the most-recent N segments
+        # needed for sentinel wake-up catch-up.
         for segment_num, path, size, mtime in deletion_candidates:
             age = now - mtime
-
-            # Check age policy
             if age < max_age_seconds:
-                continue
-
-            # Check processing policy
-            if self.config.only_delete_processed:
-                if not self.is_processed(segment_num):
-                    continue
+                continue  # still within grace period — leave for processor
 
             self._delete_segment(segment_num, path)
             deleted_count += 1
 
-        # Second pass: Check storage limit
+        # ── Pass 2: storage-cap enforcement ──
+        # Delete oldest segments until we are under the storage limit.
+        # Respect only_delete_processed ONLY while a segment is still within
+        # its grace period (age < max_age).  If it has already aged out, size
+        # pressure overrides the processing requirement.
         segments = self._list_segment_files()
         total_storage = self._get_total_storage(segments)
 
@@ -284,8 +359,9 @@ class RetentionPolicy:
                 if total_storage <= self.config.max_storage_bytes:
                     break
 
-                # Check processing policy (less strict for storage limit)
-                if self.config.only_delete_processed:
+                age = now - mtime
+                if self.config.only_delete_processed and age < max_age_seconds:
+                    # Within grace period — only delete if already processed
                     if not self.is_processed(segment_num):
                         continue
 
@@ -295,7 +371,7 @@ class RetentionPolicy:
 
         if deleted_count > 0:
             logger.info(
-                f"[Retention] CLEANUP_CYCLE phase=done deleted={deleted_count} "
+                f"[Retention] CLEANUP_CYCLE mode=full deleted={deleted_count} "
                 f"used_gb={self._get_total_storage(self._list_segment_files()) / (1024 ** 3):.2f} "
                 f"elapsed_ms={(time.monotonic() - cycle_t0) * 1000:.1f}"
             )
