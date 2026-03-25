@@ -14,6 +14,8 @@ Features:
 - Frame indexing with timestamps
 """
 
+import json
+import os
 import queue
 import threading
 import time
@@ -25,6 +27,12 @@ from src.spool.segment_io import SegmentWriter, FrameRecord
 from src.spool.spool_utils import format_structured_log
 from src.utils.AppLogging import logger
 from src.utils.platform import is_rdk_platform
+
+# ── Cross-process status file ────────────────────────────────────────
+# Written periodically from the writer thread so the FastAPI health
+# endpoint (separate process) can report RTSP ingestion stats.
+SPOOL_RECORDER_STATUS_FILE = "/tmp/spool_recorder_status.json"
+_RECORDER_STATUS_INTERVAL_S = 5.0  # write every 5 seconds
 
 # ROS2 imports (conditional)
 if is_rdk_platform():
@@ -131,6 +139,9 @@ class SpoolRecorderNode(Node if is_rdk_platform() else object):
             # High-watermark tracking for diagnostics
             self._write_queue_hwm = 0
 
+            # Status file tracking (for health endpoint)
+            self._last_status_write = 0.0
+
             # Create subscription if message type available
             if HAS_H26X_MSG:
                 self._subscription = self.create_subscription(
@@ -177,12 +188,60 @@ class SpoolRecorderNode(Node if is_rdk_platform() else object):
                 self.writer.update_sps_pps(self._cached_sps, self._cached_pps)
                 self.writer.write_frame(record, has_idr=has_idr)
 
+                # Periodically write status file for health endpoint
+                self._write_status_file()
+
             except queue.Empty:
+                # Also write status during idle periods so health stays fresh
+                self._write_status_file()
                 continue
             except Exception as e:
                 logger.error(f"[SpoolRecorder] Writer thread error: {e}")
 
         logger.info("[SpoolRecorder] Writer thread stopped")
+
+    def _write_status_file(self) -> None:
+        """Write recorder stats to a shared JSON file for the health endpoint.
+
+        Called from _writer_loop every ~5 s.  The FastAPI health endpoint
+        (separate process) reads this to show RTSP ingestion FPS, segment
+        count, queue health, etc.  Atomic write via tmp + os.replace.
+        """
+        now_mono = time.monotonic()
+        if now_mono - self._last_status_write < _RECORDER_STATUS_INTERVAL_S:
+            return
+        self._last_status_write = now_mono
+
+        try:
+            elapsed = time.time() - self._start_time
+            status = {
+                "timestamp": time.time(),
+                "frames_received": self._frames_received,
+                "avg_fps": round(self._frames_received / max(elapsed, 1), 1),
+                "idr_count": self._idr_count,
+                "segments_completed": self.writer.segments_completed if self.writer else 0,
+                "total_bytes_written": self.writer.total_bytes_written if self.writer else 0,
+                "elapsed_seconds": round(elapsed, 1),
+                "write_queue_size": self._write_queue.qsize() if self._write_queue else 0,
+                "write_queue_hwm": self._write_queue_hwm,
+                "write_queue_capacity": self.config.write_queue_size,
+            }
+
+            tmp_path = SPOOL_RECORDER_STATUS_FILE + ".tmp"
+            with open(tmp_path, "w") as f:
+                json.dump(status, f)
+            os.replace(tmp_path, SPOOL_RECORDER_STATUS_FILE)
+        except Exception as e:
+            logger.debug(f"[SpoolRecorder] Status file write failed: {e}")
+
+    @staticmethod
+    def _cleanup_status_file() -> None:
+        """Remove the status file on shutdown (best-effort)."""
+        try:
+            if os.path.exists(SPOOL_RECORDER_STATUS_FILE):
+                os.unlink(SPOOL_RECORDER_STATUS_FILE)
+        except OSError:
+            pass
 
     # ─── ROS2 callback ──────────────────────────────────────────
 
@@ -344,6 +403,7 @@ class SpoolRecorderNode(Node if is_rdk_platform() else object):
             self._writer_thread.join(timeout=5.0)
         if self.writer:
             self.writer.close()
+        self._cleanup_status_file()
         logger.info("[SpoolRecorder] Stopped")
 
 

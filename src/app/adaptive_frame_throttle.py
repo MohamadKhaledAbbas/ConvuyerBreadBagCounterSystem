@@ -64,7 +64,7 @@ Thread-safety:
 
 import threading
 import time
-from typing import Dict, Any
+from typing import Callable, Dict, Any, Optional
 
 from src.utils.AppLogging import logger
 
@@ -99,6 +99,7 @@ class AdaptiveFrameThrottle:
         idle_timeout_s: float = 900.0,
         skip_n: int = 5,
         hysteresis_s: float = 60.0,
+        on_mode_change: Optional[Callable[[str], None]] = None,
     ):
         """
         Args:
@@ -114,6 +115,12 @@ class AdaptiveFrameThrottle:
                             before it can degrade again.  Prevents rapid
                             oscillation from single spurious detections.
                             Default 60 seconds.
+            on_mode_change: Optional callback invoked **outside the lock**
+                            whenever the mode transitions (FULL↔DEGRADED).
+                            Receives the new mode string ("full" / "degraded").
+                            Used by ConveyorCounterApp to write the shared
+                            throttle state file for cross-process coordination
+                            with SpoolProcessorNode.
         """
         self._enabled = enabled
         self._idle_timeout_s = max(0.01, idle_timeout_s)
@@ -147,6 +154,9 @@ class AdaptiveFrameThrottle:
         # Logging throttle — avoid spamming logs during degraded mode
         self._last_degraded_log_time: float = 0.0
         self._degraded_log_interval: float = 300.0  # log every 5 min in degraded
+
+        # Cross-process mode-change callback (invoked outside the lock)
+        self._on_mode_change: Optional[Callable[[str], None]] = on_mode_change
 
         if enabled:
             logger.info(
@@ -211,6 +221,7 @@ class AdaptiveFrameThrottle:
         if not self._enabled:
             return
 
+        _fire_callback = False
         with self._lock:
             if self._mode == self.MODE_DEGRADED:
                 now = time.monotonic()
@@ -227,6 +238,14 @@ class AdaptiveFrameThrottle:
                     f"idle_timer NOT reset (was {idle_min:.1f} min) | "
                     f"skipped {self._frames_skipped} frames during idle period"
                 )
+                _fire_callback = True
+
+        # Invoke callback outside the lock to avoid deadlocks
+        if _fire_callback and self._on_mode_change is not None:
+            try:
+                self._on_mode_change(self.MODE_FULL)
+            except Exception as e:
+                logger.warning(f"[FrameThrottle] on_mode_change callback error: {e}")
 
     def report_activity(self):
         """
@@ -247,6 +266,7 @@ class AdaptiveFrameThrottle:
         if not self._enabled:
             return
 
+        _fire_callback = False
         with self._lock:
             now = time.monotonic()
             self._last_activity_time = now
@@ -262,6 +282,7 @@ class AdaptiveFrameThrottle:
                     f"Resuming full-rate processing + timer reset | "
                     f"skipped {self._frames_skipped} frames during idle period"
                 )
+                _fire_callback = True
             else:
                 # Already FULL — if the last wake was detection-only (Signal A),
                 # the follow-up Signal B confirms it was a real bag.
@@ -269,6 +290,13 @@ class AdaptiveFrameThrottle:
                 if self._last_wake_signal == "detection" and self._detection_only_wakes > 0:
                     self._detection_only_wakes -= 1
                     self._last_wake_signal = "confirmed_track"
+
+        # Invoke callback outside the lock to avoid deadlocks
+        if _fire_callback and self._on_mode_change is not None:
+            try:
+                self._on_mode_change(self.MODE_FULL)
+            except Exception as e:
+                logger.warning(f"[FrameThrottle] on_mode_change callback error: {e}")
 
     def check_timeout(self):
         """
@@ -278,6 +306,7 @@ class AdaptiveFrameThrottle:
         if not self._enabled:
             return
 
+        _fire_callback = False
         with self._lock:
             if self._mode != self.MODE_FULL:
                 # Already degraded — periodic logging only
@@ -303,6 +332,14 @@ class AdaptiveFrameThrottle:
                     f"CPU load reduced ~{(1 - 1 / self._skip_n) * 100:.0f}%"
                 )
                 self._last_degraded_log_time = now
+                _fire_callback = True
+
+        # Invoke callback outside the lock to avoid deadlocks
+        if _fire_callback and self._on_mode_change is not None:
+            try:
+                self._on_mode_change(self.MODE_DEGRADED)
+            except Exception as e:
+                logger.warning(f"[FrameThrottle] on_mode_change callback error: {e}")
 
     def get_state(self) -> Dict[str, Any]:
         """

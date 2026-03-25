@@ -2,14 +2,21 @@
 Health status endpoints for system diagnostics.
 
 Provides API endpoints for checking the health of various system components
-including the codec health monitor, frame processing, ROS2 pipeline, and
-monitoring logs.
+including the codec health monitor, frame processing, ROS2 pipeline,
+spool recorder/processor throughput, and monitoring logs.
 
 Architecture Note:
     main.py and the FastAPI server (run_endpoint.py) run as SEPARATE processes.
-    The codec health monitor runs inside main.py and writes its status to a
-    shared file (/tmp/codec_health_status.json). This endpoint reads that file
-    so both processes can communicate without shared memory.
+    Each pipeline component writes its status to a shared JSON file on /tmp
+    (RAM-backed tmpfs on RDK).  This endpoint reads those files so both
+    processes can communicate without shared memory.
+
+    Cross-process status files:
+      /tmp/codec_health_status.json      ← codec health monitor (main.py)
+      /tmp/spool_processor_status.json   ← SpoolProcessorNode
+      /tmp/spool_recorder_status.json    ← SpoolRecorderNode
+      /tmp/pipeline_throttle.json        ← ConveyorCounterApp (throttle mode)
+      data/pipeline_state.json           ← ConveyorCounterApp (counts, FPS, etc.)
 
     WARNING/ERROR/CRITICAL log messages are captured by a DB-backed handler
     and stored in the monitoring_logs table with 7-day retention.
@@ -25,14 +32,19 @@ from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from src.endpoint.pipeline_state import read_state as read_pipeline_state
 from src.endpoint.shared import get_db
 from src.utils.AppLogging import logger
 from src.utils.platform import is_rdk_platform
 
 router = APIRouter(prefix="/api/health", tags=["health"])
 
-# Path must match the one in codec_health_monitor.py
+# ── Cross-process status file paths ──────────────────────────────────
+# Each path MUST match the constant in the writer module.
 CODEC_HEALTH_STATUS_FILE = "/tmp/codec_health_status.json"
+SPOOL_PROCESSOR_STATUS_FILE = "/tmp/spool_processor_status.json"
+SPOOL_RECORDER_STATUS_FILE = "/tmp/spool_recorder_status.json"
+PIPELINE_THROTTLE_STATE_FILE = "/tmp/pipeline_throttle.json"
 
 
 class RecoverRequest(BaseModel):
@@ -40,22 +52,159 @@ class RecoverRequest(BaseModel):
     stage: int = Field(..., ge=1, le=4, description="Recovery stage (1-4)")
 
 
+# ── Status file readers ──────────────────────────────────────────────
+
+def _read_json_status(path: str, staleness_s: float = 60.0) -> Optional[dict]:
+    """Generic helper: read a JSON status file, add age/stale fields.
+
+    Returns None if the file doesn't exist or is unreadable.
+    """
+    try:
+        if not os.path.exists(path):
+            return None
+        with open(path, "r") as f:
+            data = json.load(f)
+        ts = data.get("timestamp") or data.get("updated_at") or 0
+        if ts:
+            age = time.time() - ts
+            data["age_seconds"] = round(age, 1)
+            data["stale"] = age > staleness_s
+        return data
+    except Exception as e:
+        logger.debug(f"[HealthAPI] Error reading {path}: {e}")
+        return None
+
+
 def _read_status_file() -> Optional[dict]:
     """Read codec health status from the shared file written by main.py."""
-    try:
-        if os.path.exists(CODEC_HEALTH_STATUS_FILE):
-            with open(CODEC_HEALTH_STATUS_FILE, 'r') as f:
-                data = json.load(f)
-            # Add freshness info
-            ts = data.get("timestamp", 0)
-            if ts:
-                age = time.time() - ts
-                data["age_seconds"] = round(age, 1)
-                data["stale"] = age > 60  # Stale if older than 60s
-            return data
-    except Exception as e:
-        logger.debug(f"[HealthAPI] Error reading codec status file: {e}")
-    return None
+    return _read_json_status(CODEC_HEALTH_STATUS_FILE, staleness_s=60.0)
+
+
+def _read_spool_processor_status() -> Optional[dict]:
+    """Read spool processor status (written every ~5 s)."""
+    return _read_json_status(SPOOL_PROCESSOR_STATUS_FILE, staleness_s=30.0)
+
+
+def _read_spool_recorder_status() -> Optional[dict]:
+    """Read spool recorder status (written every ~5 s)."""
+    return _read_json_status(SPOOL_RECORDER_STATUS_FILE, staleness_s=30.0)
+
+
+def _read_throttle_state() -> Optional[dict]:
+    """Read pipeline throttle coordination file (written by ConveyorCounterApp)."""
+    return _read_json_status(PIPELINE_THROTTLE_STATE_FILE, staleness_s=120.0)
+
+
+# ── Dedicated component endpoints ────────────────────────────────────
+
+@router.get("/spool")
+async def get_spool_processor_health() -> JSONResponse:
+    """
+    Get the health status of the spool processor.
+
+    Reads from a shared status file written by SpoolProcessorNode
+    running in the breadcount-spool-processor process.
+
+    Includes:
+    - current_fps: Rolling 10-second FPS throughput
+    - time_behind_recorder_s: Estimated seconds behind the live RTSP feed
+    - segments_behind: Number of unprocessed segments on disk
+    - sentinel_active: Whether the processor is in power-save sentinel mode
+    - sentinel_frames_sent: Total sentinel probe frames published
+
+    Returns:
+        JSON with spool processor statistics and health info.
+    """
+    status = _read_spool_processor_status()
+
+    if status is not None:
+        is_stale = status.get("stale", False)
+        sentinel = status.get("sentinel_active", False)
+        time_behind = status.get("time_behind_recorder_s", 0)
+
+        # Healthy if: not stale AND (sentinel mode OR time behind < 30s)
+        healthy = not is_stale and (sentinel or time_behind < 30.0)
+
+        return JSONResponse(
+            content={
+                "healthy": healthy,
+                "current_fps": status.get("current_fps", 0),
+                "avg_fps": status.get("avg_fps", 0),
+                "time_behind_recorder_s": time_behind,
+                "segments_behind": status.get("segments_behind", 0),
+                "segments_on_disk": status.get("segments_on_disk", 0),
+                "sentinel_active": sentinel,
+                "sentinel_frames_sent": status.get("sentinel_frames_sent", 0),
+                "frames_published": status.get("frames_published", 0),
+                "segments_processed": status.get("segments_processed", 0),
+                "last_processed_segment": status.get("last_processed_segment", -1),
+                "latest_recorder_segment": status.get("latest_recorder_segment", -1),
+                "age_seconds": status.get("age_seconds"),
+                "stale": is_stale,
+            },
+            status_code=200,
+        )
+
+    return JSONResponse(
+        content={
+            "healthy": None,
+            "reason": "Spool processor status file not found. Is breadcount-spool-processor running?",
+        },
+        status_code=200,
+    )
+
+
+@router.get("/recorder")
+async def get_spool_recorder_health() -> JSONResponse:
+    """
+    Get the health status of the spool recorder (RTSP ingestion).
+
+    Reads from a shared status file written by SpoolRecorderNode
+    running in the breadcount-spool-recorder process.
+
+    Includes:
+    - avg_fps: Average RTSP frames received per second
+    - frames_received: Total frames ingested from camera
+    - segments_completed: Total disk segments written
+    - write_queue_size: Current write-buffer depth
+    - write_queue_hwm: Peak write-buffer depth (high-water mark)
+
+    Returns:
+        JSON with spool recorder statistics and health info.
+    """
+    status = _read_spool_recorder_status()
+
+    if status is not None:
+        is_stale = status.get("stale", False)
+        avg_fps = status.get("avg_fps", 0)
+        # Healthy if: not stale AND receiving frames (fps > 1)
+        healthy = not is_stale and avg_fps > 1.0
+
+        return JSONResponse(
+            content={
+                "healthy": healthy,
+                "avg_fps": avg_fps,
+                "frames_received": status.get("frames_received", 0),
+                "idr_count": status.get("idr_count", 0),
+                "segments_completed": status.get("segments_completed", 0),
+                "total_bytes_written": status.get("total_bytes_written", 0),
+                "elapsed_seconds": status.get("elapsed_seconds", 0),
+                "write_queue_size": status.get("write_queue_size", 0),
+                "write_queue_hwm": status.get("write_queue_hwm", 0),
+                "write_queue_capacity": status.get("write_queue_capacity", 0),
+                "age_seconds": status.get("age_seconds"),
+                "stale": is_stale,
+            },
+            status_code=200,
+        )
+
+    return JSONResponse(
+        content={
+            "healthy": None,
+            "reason": "Spool recorder status file not found. Is breadcount-spool-recorder running?",
+        },
+        status_code=200,
+    )
 
 
 @router.get("/codec")
@@ -156,22 +305,34 @@ async def restart_codec() -> JSONResponse:
 @router.get("/pipeline")
 async def get_pipeline_health() -> JSONResponse:
     """
-    Get overall pipeline health status.
+    Comprehensive pipeline health — the single endpoint for full system status.
 
-    Checks:
-    - Codec health (reads shared status file)
-    - Spool health (from health checkpoints)
-    - RTSP health (from health checkpoints)
-    - Recovery stage
+    Aggregates every cross-process status file and the pipeline state into
+    one response covering all five supervisord services:
+
+      1. **rtsp** — RTSP camera ingest (from codec health checkpoints)
+      2. **spool_recorder** — Disk segment writer (frames received, FPS)
+      3. **spool_processor** — Segment reader / publisher (FPS, time behind, sentinel)
+      4. **codec** — hobot_codec VPU decoder (state, restarts)
+      5. **app** — ConveyorCounterApp detection/tracking (FPS, active tracks)
+
+    Also provides:
+      - **throughput**: end-to-end FPS at each pipeline stage
+      - **power_save**: throttle mode, idle %, sentinel status
+      - **recovery**: current recovery stage and escalation count
+      - overall **status**: "healthy" | "degraded"
 
     Returns:
-        JSON with overall health status.
+        JSON with comprehensive health status (HTTP 200 if healthy, 503 if degraded).
     """
     health: Dict[str, Any] = {
         "status": "healthy",
-        "components": {}
+        "components": {},
+        "throughput": {},
+        "power_save": {},
     }
 
+    # ── 1. Codec & checkpoint-based components ────────────────────
     codec_status = _read_status_file()
     if codec_status is not None:
         state = codec_status.get("state", "unknown")
@@ -191,7 +352,7 @@ async def get_pipeline_health() -> JSONResponse:
         # Spool health from checkpoints
         checkpoints = codec_status.get("health_checkpoints", {})
         spool_cp = checkpoints.get("spool_input", {})
-        health["components"]["spool"] = {
+        health["components"]["spool_input"] = {
             "healthy": spool_cp.get("alive", False) if spool_cp else None,
             "reason": spool_cp.get("reason") if spool_cp else "no_data",
         }
@@ -208,8 +369,10 @@ async def get_pipeline_health() -> JSONResponse:
             health["status"] = "degraded"
 
         # Recovery stage
-        health["recovery_stage"] = codec_status.get("current_recovery_stage", 1)
-        health["escalation_count"] = codec_status.get("escalation_count", 0)
+        health["recovery"] = {
+            "stage": codec_status.get("current_recovery_stage", 1),
+            "escalation_count": codec_status.get("escalation_count", 0),
+        }
     else:
         if is_rdk_platform():
             health["components"]["codec"] = {
@@ -217,7 +380,7 @@ async def get_pipeline_health() -> JSONResponse:
                 "state": "unknown",
                 "reason": "Status file not found — main.py may not be running"
             }
-            health["components"]["spool"] = {"healthy": None, "reason": "no_data"}
+            health["components"]["spool_input"] = {"healthy": None, "reason": "no_data"}
             health["components"]["rtsp"] = {"healthy": None, "reason": "no_data"}
             health["status"] = "degraded"
         else:
@@ -225,6 +388,104 @@ async def get_pipeline_health() -> JSONResponse:
                 "healthy": True,
                 "note": "Not applicable (not on RDK)"
             }
+        health["recovery"] = {"stage": 1, "escalation_count": 0}
+
+    # ── 2. Spool recorder (RTSP → disk) ──────────────────────────
+    rec = _read_spool_recorder_status()
+    if rec is not None:
+        rec_stale = rec.get("stale", False)
+        rec_fps = rec.get("avg_fps", 0)
+        rec_healthy = not rec_stale and rec_fps > 1.0
+
+        health["components"]["spool_recorder"] = {
+            "healthy": rec_healthy,
+            "avg_fps": rec_fps,
+            "frames_received": rec.get("frames_received", 0),
+            "segments_completed": rec.get("segments_completed", 0),
+            "write_queue_size": rec.get("write_queue_size", 0),
+            "write_queue_hwm": rec.get("write_queue_hwm", 0),
+            "write_queue_capacity": rec.get("write_queue_capacity", 0),
+            "stale": rec_stale,
+        }
+        if not rec_healthy:
+            health["status"] = "degraded"
+        health["throughput"]["recorder_fps"] = rec_fps
+    else:
+        health["components"]["spool_recorder"] = {"healthy": None, "reason": "no_data"}
+
+    # ── 3. Spool processor (disk → codec) ────────────────────────
+    proc = _read_spool_processor_status()
+    if proc is not None:
+        sp_stale = proc.get("stale", False)
+        sp_sentinel = proc.get("sentinel_active", False)
+        sp_time_behind = proc.get("time_behind_recorder_s", 0)
+        sp_fps = proc.get("current_fps", 0)
+        sp_healthy = not sp_stale and (sp_sentinel or sp_time_behind < 30.0)
+
+        health["components"]["spool_processor"] = {
+            "healthy": sp_healthy,
+            "current_fps": sp_fps,
+            "avg_fps": proc.get("avg_fps", 0),
+            "time_behind_recorder_s": sp_time_behind,
+            "segments_behind": proc.get("segments_behind", 0),
+            "segments_on_disk": proc.get("segments_on_disk", 0),
+            "frames_published": proc.get("frames_published", 0),
+            "segments_processed": proc.get("segments_processed", 0),
+            "sentinel_active": sp_sentinel,
+            "sentinel_frames_sent": proc.get("sentinel_frames_sent", 0),
+            "stale": sp_stale,
+        }
+        if not sp_healthy:
+            health["status"] = "degraded"
+        health["throughput"]["processor_fps"] = sp_fps
+        health["throughput"]["time_behind_recorder_s"] = sp_time_behind
+        health["throughput"]["segments_behind"] = proc.get("segments_behind", 0)
+    else:
+        health["components"]["spool_processor"] = {"healthy": None, "reason": "no_data"}
+
+    # ── 4. App metrics (detection / tracking / classification) ───
+    pipeline = read_pipeline_state()
+    app_metrics = pipeline.get("app_metrics", {})
+    app_fps = app_metrics.get("fps", 0)
+    updated_at = pipeline.get("_updated_at", 0)
+    app_stale = (time.time() - updated_at) > 60 if updated_at else True
+
+    health["components"]["app"] = {
+        "healthy": not app_stale and app_fps > 0,
+        "fps": app_fps,
+        "frame_count": app_metrics.get("frame_count", 0),
+        "processing_time_ms": app_metrics.get("processing_time_ms", 0),
+        "active_tracks": app_metrics.get("active_tracks", 0),
+        "pending_classifications": app_metrics.get("pending_classifications", 0),
+        "total_counted": app_metrics.get("total_counted", 0),
+        "lost_track_count": app_metrics.get("lost_track_count", 0),
+        "rejected_count": app_metrics.get("rejected_count", 0),
+        "stale": app_stale,
+    }
+    if app_stale and is_rdk_platform():
+        health["status"] = "degraded"
+    health["throughput"]["app_fps"] = app_fps
+
+    # ── 5. Power-save / frame throttle ───────────────────────────
+    frame_throttle = pipeline.get("frame_throttle", {})
+    throttle_file = _read_throttle_state()
+
+    health["power_save"] = {
+        "mode": frame_throttle.get("mode", "unknown"),
+        "enabled": frame_throttle.get("enabled", False),
+        "idle_seconds": frame_throttle.get("idle_seconds", 0),
+        "idle_percent": frame_throttle.get("idle_percent", 0),
+        "time_until_degrade_s": frame_throttle.get("time_until_degrade_s"),
+        "degraded_since_seconds": frame_throttle.get("degraded_since_seconds"),
+        "skip_n": frame_throttle.get("skip_n", 0),
+        "frames_skipped": frame_throttle.get("frames_skipped", 0),
+        "total_frames_seen": frame_throttle.get("total_frames_seen", 0),
+        "degraded_transitions": frame_throttle.get("degraded_transitions", 0),
+        "wake_transitions": frame_throttle.get("wake_transitions", 0),
+        "last_wake_signal": frame_throttle.get("last_wake_signal"),
+        "sentinel_active": (proc.get("sentinel_active", False) if proc else False),
+        "throttle_file_stale": throttle_file.get("stale", True) if throttle_file else True,
+    }
 
     status_code = 200 if health["status"] == "healthy" else 503
     return JSONResponse(content=health, status_code=status_code)

@@ -592,6 +592,26 @@ class SegmentReader:
         with self._segment_lock:
             self._last_completed_segment = segment_num
 
+    def read_first_record(self, segment_num: int) -> Optional[FrameRecord]:
+        """
+        Read only the first frame record from a segment.
+
+        Used by the sentinel-mode power-save to extract a single IDR
+        keyframe from the latest segment for probe detection, without
+        iterating over the entire segment.  Each segment starts with an
+        IDR-aligned frame, so the first record is always independently
+        decodable by the VPU.
+
+        Args:
+            segment_num: Segment number to read from.
+
+        Returns:
+            The first FrameRecord, or None if the segment is empty/invalid.
+        """
+        for record in self.read_segment(segment_num):
+            return record
+        return None
+
     def read_frames(self, start_segment: Optional[int] = None) -> Iterator[FrameRecord]:
         """
         Read frames from all segments in order.

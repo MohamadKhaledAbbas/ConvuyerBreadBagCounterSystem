@@ -224,10 +224,44 @@
         .footer-nav a { color: var(--accent-primary); text-decoration: none; margin: 0 .5rem; }
         .footer-nav a:hover { text-decoration: underline; }
 
+        /* ── Throughput pipeline bar ── */
+        .throughput-bar {
+            display: flex;
+            align-items: stretch;
+            gap: 0;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-md);
+            overflow: hidden;
+            margin-bottom: 2rem;
+            backdrop-filter: blur(10px);
+        }
+        .tp-stage {
+            flex: 1;
+            padding: .9rem .8rem;
+            text-align: center;
+            position: relative;
+        }
+        .tp-stage + .tp-stage::before {
+            content: '›';
+            position: absolute; right: 100%; top: 50%; transform: translateY(-50%);
+            color: var(--text-muted); font-size: 1.1rem; line-height: 1;
+            pointer-events: none;
+        }
+        .tp-stage .tp-label { font-size: .7rem; color: var(--text-muted); font-weight: 600; margin-bottom: .3rem; }
+        .tp-stage .tp-value { font-size: 1.05rem; font-weight: 700; font-family: 'Inter', monospace; }
+        .tp-stage .tp-sub   { font-size: .68rem; color: var(--text-muted); margin-top: .15rem; }
+        .tp-stage.tp-ok  .tp-value { color: var(--accent-success); }
+        .tp-stage.tp-warn .tp-value { color: var(--accent-warning); }
+        .tp-stage.tp-bad  .tp-value { color: var(--accent-danger); }
+        .tp-stage.tp-na   .tp-value { color: var(--text-muted); }
+
         @media (max-width: 600px) {
             .info-grid { grid-template-columns: 1fr 1fr; }
             .hero-title { font-size: 1.3rem; }
             .comp-grid { grid-template-columns: 1fr 1fr; }
+            .throughput-bar { flex-wrap: wrap; }
+            .tp-stage + .tp-stage::before { display: none; }
         }
     </style>
 </head>
@@ -312,6 +346,106 @@
     <div class="section-title"><i class="fa-solid fa-cubes"></i> مكونات خط الإنتاج</div>
     <div class="comp-grid" id="compGrid">
         <div class="comp-card"><div class="comp-dot gray"></div><div><div class="comp-name">جارٍ التحميل...</div></div></div>
+    </div>
+
+    <!-- Throughput Pipeline -->
+    <div class="section-title"><i class="fa-solid fa-gauge-high"></i> إنتاجية خط المعالجة</div>
+    <div class="throughput-bar" id="throughputBar">
+        <div class="tp-stage tp-na" id="tpRecorder">
+            <div class="tp-label">📼 المسجّل</div>
+            <div class="tp-value" id="tpRecFps">—</div>
+            <div class="tp-sub">إطار/ث</div>
+        </div>
+        <div class="tp-stage tp-na" id="tpProcessor">
+            <div class="tp-label">⚙️ المعالج</div>
+            <div class="tp-value" id="tpProcFps">—</div>
+            <div class="tp-sub" id="tpProcSub">إطار/ث</div>
+        </div>
+        <div class="tp-stage tp-na" id="tpApp">
+            <div class="tp-label">🧠 التطبيق</div>
+            <div class="tp-value" id="tpAppFps">—</div>
+            <div class="tp-sub" id="tpAppSub">إطار/ث</div>
+        </div>
+    </div>
+
+    <!-- ── Behind Real-Time & Media Pipeline Details ── -->
+    <div id="behindSection" style="display:none; margin-bottom:2rem;">
+        <!-- Row 1: time-behind hero card + segments + on-disk + sentinel -->
+        <div class="info-grid" style="margin-bottom:.8rem;">
+            <div class="info-card" id="timeBehindCard">
+                <div class="label"><i class="fa-solid fa-clock-rotate-left"></i> التأخر عن الوقت الحقيقي</div>
+                <div class="value eng" id="timeBehindVal" style="font-size:1.8rem;line-height:1.1;">—</div>
+                <div style="position:relative;height:5px;border-radius:3px;background:rgba(255,255,255,.08);overflow:hidden;margin-top:7px;">
+                    <div id="timeBehindBar" style="height:100%;border-radius:3px;width:0%;transition:width .6s ease;background:var(--accent-success);"></div>
+                </div>
+                <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px;" id="timeBehindDetail">—</div>
+            </div>
+            <div class="info-card">
+                <div class="label"><i class="fa-solid fa-film"></i> مقاطع في الانتظار</div>
+                <div class="value eng" id="segsBehindVal">—</div>
+                <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px;" id="segsBehindDetail">—</div>
+            </div>
+            <div class="info-card">
+                <div class="label"><i class="fa-solid fa-hard-drive"></i> مقاطع على القرص</div>
+                <div class="value eng primary" id="segsOnDiskVal">—</div>
+            </div>
+            <div class="info-card">
+                <div class="label"><i class="fa-solid fa-shield-halved"></i> وضع الحارس</div>
+                <div class="value" id="sentinelModeVal">—</div>
+                <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px;" id="sentinelDetail">—</div>
+            </div>
+        </div>
+        <!-- Row 2: spool recorder + processor quick stats -->
+        <div class="info-grid">
+            <div class="info-card">
+                <div class="label"><i class="fa-solid fa-circle-dot" style="color:#f87171;"></i> معدل المسجّل (RTSP)</div>
+                <div class="value eng" id="srFps">—</div>
+                <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px;" id="srDetail">—</div>
+            </div>
+            <div class="info-card">
+                <div class="label"><i class="fa-solid fa-boxes-stacked"></i> مقاطع مكتملة (المسجّل)</div>
+                <div class="value eng primary" id="srSegments">—</div>
+            </div>
+            <div class="info-card">
+                <div class="label"><i class="fa-solid fa-layer-group"></i> طابور كتابة المسجّل</div>
+                <div class="value eng" id="srQueue">—</div>
+                <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px;" id="srQueueDetail">—</div>
+            </div>
+            <div class="info-card">
+                <div class="label"><i class="fa-solid fa-forward-fast"></i> مقاطع المعالج</div>
+                <div class="value eng primary" id="spSegmentsProcessed">—</div>
+                <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px;" id="spDetail">—</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- App Processing Metrics -->
+    <div class="section-title"><i class="fa-solid fa-chart-line"></i> مقاييس معالجة التطبيق</div>
+    <div class="info-grid" id="appMetricsGrid">
+        <div class="info-card">
+            <div class="label"><i class="fa-solid fa-film"></i> معدل المعالجة</div>
+            <div class="value eng" id="amFps">—</div>
+        </div>
+        <div class="info-card">
+            <div class="label"><i class="fa-solid fa-route"></i> المسارات النشطة</div>
+            <div class="value eng" id="amTracks">—</div>
+        </div>
+        <div class="info-card">
+            <div class="label"><i class="fa-solid fa-check-double"></i> المجموع المحسوب</div>
+            <div class="value eng primary" id="amTotalCounted">—</div>
+        </div>
+        <div class="info-card">
+            <div class="label"><i class="fa-solid fa-person-falling-burst"></i> المسارات المفقودة</div>
+            <div class="value eng" id="amLostTracks">—</div>
+        </div>
+        <div class="info-card">
+            <div class="label"><i class="fa-solid fa-ban"></i> المرفوضات</div>
+            <div class="value eng" id="amRejected">—</div>
+        </div>
+        <div class="info-card">
+            <div class="label"><i class="fa-solid fa-stopwatch"></i> زمن المعالجة</div>
+            <div class="value eng" id="amProcTime">—</div>
+        </div>
     </div>
 
     <!-- System Info -->
@@ -789,6 +923,147 @@ async function checkHealth() {
             // Snapshot for per-second tick
             throttleTimerState = { mode: 'full', idleSec: idleSec, untilSec: untilSec, timeoutSec: timeoutSec };
         }
+
+        // ── Throughput pipeline bar ──
+        const tp = data.throughput || {};
+        function setTpStage(elId, fps, subText) {
+            const el = $(elId);
+            const valEl = el.querySelector('.tp-value');
+            const subEl = el.querySelector('.tp-sub');
+            if (fps == null) {
+                valEl.textContent = '—';
+                el.className = 'tp-stage tp-na';
+            } else {
+                valEl.textContent = fps.toFixed(1);
+                el.className = 'tp-stage ' + (fps >= 20 ? 'tp-ok' : fps >= 5 ? 'tp-warn' : 'tp-bad');
+            }
+            if (subEl && subText) subEl.textContent = subText;
+        }
+        setTpStage('tpRecorder',  tp.recorder_fps,  'إطار/ث');
+        const behindS   = tp.time_behind_recorder_s;
+        const segBehind = tp.segments_behind;
+        let procSub = 'إطار/ث';
+        if (behindS != null) {
+            const behindFmt = behindS < 60
+                ? behindS.toFixed(1) + 'ث تأخر'
+                : Math.floor(behindS / 60) + 'د ' + Math.round(behindS % 60) + 'ث تأخر';
+            procSub = 'إطار/ث · ' + behindFmt;
+            if (segBehind != null && segBehind > 0) procSub += ' · ' + segBehind + ' مقطع';
+        }
+        setTpStage('tpProcessor', tp.processor_fps, procSub);
+        const appSub = tp.app_fps != null && data.app_metrics
+            ? 'إطار/ث · ' + (data.app_metrics.processing_time_ms || 0).toFixed(1) + 'ms'
+            : 'إطار/ث';
+        setTpStage('tpApp',       tp.app_fps,       appSub);
+
+        // ── Behind Real-time & spool component details ──
+        const spoolRec  = data.spool_recorder  || {};
+        const spoolProc = data.spool_processor || {};
+        const behindSection = $('behindSection');
+        if (spoolProc.available || spoolRec.available) {
+            behindSection.style.display = '';
+
+            // ── Time-behind card ──
+            const behind   = (spoolProc.available && spoolProc.time_behind_recorder_s != null)
+                             ? spoolProc.time_behind_recorder_s : null;
+            const behindEl  = $('timeBehindVal');
+            const behindBar = $('timeBehindBar');
+            const behindCard = $('timeBehindCard');
+            if (behind != null) {
+                const MAX_BEHIND_S = 120;   // full-bar threshold
+                const pct = Math.min(100, (behind / MAX_BEHIND_S) * 100);
+                const barColor = behind < 5 ? 'var(--accent-success)'
+                               : behind < 30 ? 'var(--accent-warning)' : '#f87171';
+                // Format: < 60 s → "2.3 ث", >= 60 s → "1د 12ث"
+                if (behind < 60) {
+                    behindEl.textContent = behind.toFixed(1) + ' ث';
+                } else {
+                    const m = Math.floor(behind / 60);
+                    const s = Math.round(behind % 60);
+                    behindEl.textContent = m + 'د ' + String(s).padStart(2,'0') + 'ث';
+                }
+                behindEl.className = 'value eng ' + (behind < 5 ? 'success' : behind < 30 ? 'warning' : 'danger');
+                behindBar.style.width      = pct.toFixed(1) + '%';
+                behindBar.style.background = barColor;
+                behindCard.style.borderColor = behind >= 30 ? 'rgba(248,113,113,0.4)'
+                                             : behind >= 5  ? 'rgba(251,191,36,0.35)' : '';
+                $('timeBehindDetail').textContent = behind >= 30 ? '⚠ النظام متأخر بشكل ملحوظ'
+                                                 : behind >= 5  ? '↻ تأخر طفيف — قيد اللحاق'
+                                                 : '✓ يعمل في الوقت الفعلي';
+            } else {
+                behindEl.textContent = '—';
+                behindEl.className   = 'value eng muted';
+                behindBar.style.width = '0%';
+                $('timeBehindDetail').textContent = 'غير متاح';
+            }
+
+            // ── Segments behind ──
+            if (spoolProc.available) {
+                const segs = spoolProc.segments_behind || 0;
+                $('segsBehindVal').textContent = segs.toLocaleString('en');
+                $('segsBehindVal').className   = 'value eng ' + (segs > 10 ? 'danger' : segs > 3 ? 'warning' : 'success');
+                $('segsBehindDetail').textContent = segs > 0
+                    ? segs + ' مقطع في انتظار المعالجة'
+                    : '✓ لا يوجد تراكم';
+
+                // ── Segments on disk ──
+                $('segsOnDiskVal').textContent = (spoolProc.segments_on_disk || 0).toLocaleString('en');
+
+                // ── Sentinel mode ──
+                const sentinelEl     = $('sentinelModeVal');
+                const sentinelDetEl  = $('sentinelDetail');
+                if (spoolProc.sentinel_active) {
+                    sentinelEl.innerHTML     = '<span style="color:var(--accent-warning);font-weight:700;">⚡ نشط</span>';
+                    sentinelDetEl.textContent = 'إطارات مُرسلة: ' + (spoolProc.sentinel_frames_sent || 0).toLocaleString('en');
+                } else {
+                    sentinelEl.innerHTML     = '<span style="color:var(--accent-success);font-weight:700;">✓ غير نشط</span>';
+                    sentinelDetEl.textContent = 'بث مستمر عبر التسجيل';
+                }
+
+                // ── Spool processor: segments processed ──
+                $('spSegmentsProcessed').textContent = (spoolProc.segments_processed || 0).toLocaleString('en');
+                $('spDetail').textContent = 'إطارات مرسلة: ' + (spoolProc.frames_published || 0).toLocaleString('en');
+            }
+
+            // ── Spool recorder details ──
+            if (spoolRec.available) {
+                const srFpsVal = spoolRec.avg_fps || 0;
+                $('srFps').textContent = srFpsVal.toFixed(1) + ' fps';
+                $('srFps').className   = 'value eng ' + (srFpsVal >= 20 ? 'success' : srFpsVal >= 5 ? 'warning' : 'danger');
+                $('srDetail').textContent = 'إطارات: ' + (spoolRec.frames_received || 0).toLocaleString('en')
+                                          + '  ·  IDR: ' + (spoolRec.idr_count || 0).toLocaleString('en');
+
+                $('srSegments').textContent = (spoolRec.segments_completed || 0).toLocaleString('en');
+
+                const qSize = spoolRec.write_queue_size     || 0;
+                const qCap  = spoolRec.write_queue_capacity || 1;
+                const qHwm  = spoolRec.write_queue_hwm      || 0;
+                const qPct  = Math.round(qSize / qCap * 100);
+                $('srQueue').textContent = qSize + ' / ' + qCap + '  (' + qPct + '%)';
+                $('srQueue').className   = 'value eng ' + (qPct >= 80 ? 'danger' : qPct >= 50 ? 'warning' : 'success');
+                $('srQueueDetail').textContent = 'الذروة: ' + qHwm;
+            }
+        } else {
+            behindSection.style.display = 'none';
+        }
+
+        // ── App metrics ──
+        const am = data.app_metrics || {};
+        function setAm(id, val, suffix, colorFn) {
+            const el = $(id);
+            if (val == null || val === undefined) { el.textContent = '—'; el.className = 'value eng muted'; return; }
+            el.textContent = (typeof val === 'number' && Number.isInteger(val))
+                ? val.toLocaleString('en') + (suffix || '')
+                : val + (suffix || '');
+            el.className = 'value eng ' + (colorFn ? colorFn(val) : '');
+        }
+        setAm('amFps',          am.fps,              ' fps', v => v >= 20 ? 'success' : v >= 5 ? 'warning' : 'danger');
+        setAm('amTracks',       am.active_tracks,    '',     v => v > 0  ? 'primary' : '');
+        setAm('amTotalCounted', am.total_counted,    '',     () => 'primary');
+        setAm('amLostTracks',   am.lost_track_count, '',     v => v > 10 ? 'warning' : '');
+        setAm('amRejected',     am.rejected_count,   '',     v => v > 10 ? 'warning' : '');
+        setAm('amProcTime',     am.processing_time_ms != null ? am.processing_time_ms.toFixed(1) : null, ' ms',
+              v => parseFloat(v) >= 200 ? 'warning' : 'success');
 
         // Components
         renderComponents(data.components || {}, p.frame_throttle || {});

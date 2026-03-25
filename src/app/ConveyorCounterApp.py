@@ -41,6 +41,7 @@ except ImportError:
 # Import modular pipeline components
 from src.app.adaptive_frame_throttle import AdaptiveFrameThrottle
 from src.app.pipeline_core import PipelineCore
+from src.app.pipeline_throttle_state import write_throttle_state, cleanup_throttle_state
 from src.app.pipeline_visualizer import PipelineVisualizer
 from src.classifier.BaseClassifier import BaseClassifier
 from src.classifier.ClassificationWorker import ClassificationWorker
@@ -356,6 +357,10 @@ class ConveyorCounterApp:
         (health page, counts SSE, etc.) always see up-to-date throttle data
         even when the belt is idle and no classification events are firing.
 
+        Also refreshes the cross-process throttle state file as a heartbeat,
+        so the SpoolProcessor's staleness timeout (120 s) never fires while
+        the main app is healthy.
+
         Interval: ``_state_publish_interval_s`` (default 15 s).  The health
         page polls every 30 s, so a 15 s write interval guarantees at most
         one stale poll before the fresh value is visible.
@@ -369,6 +374,19 @@ class ConveyorCounterApp:
         except Exception as e:
             # Never let a state-write error crash the main loop.
             logger.debug(f"[ConveyorCounterApp] Periodic state publish failed: {e}")
+
+        # Heartbeat: refresh the cross-process throttle state file so the
+        # SpoolProcessor knows the main app is still alive and doesn't
+        # revert to full-speed processing due to staleness timeout.
+        if self._throttle is not None:
+            try:
+                write_throttle_state(
+                    mode=self._throttle.mode,
+                    sentinel_interval_s=self.tracking_config.frame_throttle_sentinel_interval_s,
+                    skip_n=self.tracking_config.frame_throttle_skip_n,
+                )
+            except Exception:
+                pass  # Non-critical — staleness fallback to "full" is safe
 
     def _init_components(self):
         """Initialize pipeline components with new modular architecture."""
@@ -548,11 +566,35 @@ class ConveyorCounterApp:
         logger.info("[ConveyorCounterApp] Components initialized with modular architecture")
 
         # Adaptive Frame Throttle (idle power-saving)
+        # The on_mode_change callback writes the throttle mode to a shared
+        # state file (/tmp/pipeline_throttle.json) so that the SpoolProcessor
+        # (separate process) can switch to sentinel mode in DEGRADED, saving
+        # VPU/CPU across the entire media pipeline.
+        sentinel_interval_s = self.tracking_config.frame_throttle_sentinel_interval_s
+        skip_n = self.tracking_config.frame_throttle_skip_n
+
+        def _on_throttle_mode_change(new_mode: str):
+            """Write throttle mode to shared state file for cross-process coordination."""
+            write_throttle_state(
+                mode=new_mode,
+                sentinel_interval_s=sentinel_interval_s,
+                skip_n=skip_n,
+            )
+
         self._throttle = AdaptiveFrameThrottle(
             enabled=self.tracking_config.frame_throttle_enabled,
             idle_timeout_s=self.tracking_config.frame_throttle_idle_timeout_s,
-            skip_n=self.tracking_config.frame_throttle_skip_n,
+            skip_n=skip_n,
             hysteresis_s=self.tracking_config.frame_throttle_hysteresis_s,
+            on_mode_change=_on_throttle_mode_change,
+        )
+
+        # Write initial "full" state so the SpoolProcessor knows the mode
+        # even before any transition has occurred.
+        write_throttle_state(
+            mode="full",
+            sentinel_interval_s=sentinel_interval_s,
+            skip_n=skip_n,
         )
 
     def _process_frame(self, frame: np.ndarray) -> np.ndarray:
@@ -1097,6 +1139,17 @@ class ConveyorCounterApp:
                 "last_count_timestamp": self.state.last_count_time,
                 "work_started_timestamp": self.state.first_count_time,
                 "frame_throttle": self._throttle.get_state() if self._throttle else {},
+                # ── App-level processing metrics for health endpoint ──
+                "app_metrics": {
+                    "fps": round(self.state.fps, 1),
+                    "frame_count": self._frame_count,
+                    "processing_time_ms": round(self.state.processing_time_ms, 1),
+                    "active_tracks": self.state.active_tracks,
+                    "pending_classifications": self.state.pending_classifications,
+                    "total_counted": self.state.total_counted,
+                    "lost_track_count": self.state.lost_track_count,
+                    "rejected_count": self.state.rejected_count,
+                },
             }
             write_pipeline_state(state)
         except Exception as e:
@@ -1342,6 +1395,14 @@ class ConveyorCounterApp:
                 self._codec_health_monitor.stop()
             except Exception as e:
                 logger.warning(f"[ConveyorCounterApp] Codec health monitor stop error (ignored): {e}")
+
+        # Write "full" to cross-process throttle state file so the
+        # SpoolProcessor resumes full-speed processing immediately
+        # (doesn't have to wait for the staleness timeout).
+        try:
+            cleanup_throttle_state()
+        except Exception:
+            pass  # Best-effort — staleness fallback is the safety net
 
         # Shutdown ROS2 context if initialized
         if self._ros_executor is not None:

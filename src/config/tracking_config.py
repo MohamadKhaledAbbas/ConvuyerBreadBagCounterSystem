@@ -529,6 +529,26 @@ class TrackingConfig:
     Default: 60 seconds.
     """
 
+    frame_throttle_sentinel_interval_s: float = _parse_float_env("FRAME_THROTTLE_SENTINEL_INTERVAL_S", 1.0)
+    """
+    Seconds between sentinel (probe) frames when in DEGRADED mode.
+    In pipeline-wide power-save, the SpoolProcessor skips to the latest
+    segment and publishes just 1 frame every this many seconds.  The codec
+    only decodes sentinel frames and the app runs detection on them.
+    If a bag is detected on a sentinel frame → instant wake to FULL mode.
+    Default: 1.0 second — gives ~1 s worst-case detection latency while
+    reducing VPU/CPU to ~6% of full-rate usage.
+    """
+
+    frame_throttle_wake_buffer_segments: int = _parse_int_env("FRAME_THROTTLE_WAKE_BUFFER_SEGMENTS", 3)
+    """
+    When waking from DEGRADED sentinel mode to FULL, keep this many recent
+    segments before the wake point for catch-up processing.  All older idle
+    segments are skipped (deleted by retention).
+    Default: 3 segments ≈ 15 seconds of video buffer.  Ensures any bag that
+    appeared just before the sentinel detected it is fully captured.
+    """
+
     # ==========================================================================
     # Bidirectional Smoothing Parameters (legacy — used when smoothing_algorithm='window')
     # ==========================================================================

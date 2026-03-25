@@ -12,10 +12,15 @@ Features:
 - State persistence for crash recovery
 - Segment tracking for retention
 - Configurable playback modes (realtime, fast-forward, catchup)
+- Pipeline-wide sentinel power-save mode
+- Cross-process status file for health endpoint monitoring
 """
 
+import json
+import os
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
@@ -31,6 +36,14 @@ from src.spool.spool_utils import (
 )
 from src.utils.AppLogging import logger
 from src.utils.platform import is_rdk_platform
+
+# Pipeline-wide power-save coordination (reads throttle mode from main app)
+try:
+    from src.app.pipeline_throttle_state import read_throttle_state
+except ImportError:
+    # Fallback if module not available — always full speed
+    def read_throttle_state(**_kwargs):  # type: ignore[misc]
+        return "full", 1.0
 
 # ROS2 imports (conditional)
 if is_rdk_platform():
@@ -63,6 +76,52 @@ class PlaybackMode(Enum):
     CATCHUP = "catchup"         # Fast until caught up, then realtime
 
 
+# ── Cross-process status file ────────────────────────────────────────
+# Written by the processor's _process_loop every few seconds so the
+# FastAPI health endpoint (separate process) can report spool stats.
+SPOOL_PROCESSOR_STATUS_FILE = "/tmp/spool_processor_status.json"
+_STATUS_WRITE_INTERVAL_S = 5.0  # write status file every 5 seconds
+
+
+class RollingFPSCounter:
+    """Thread-safe rolling FPS counter using a fixed time window.
+
+    Maintains a deque of recent frame timestamps and computes FPS
+    as count / window.  Used by the spool processor to report current
+    throughput rather than a lifetime average.
+    """
+
+    __slots__ = ("_timestamps", "_window_s")
+
+    def __init__(self, window_s: float = 10.0):
+        self._timestamps: deque = deque()
+        self._window_s = window_s
+
+    def tick(self) -> None:
+        """Record that a frame was published right now."""
+        now = time.monotonic()
+        self._timestamps.append(now)
+        # Evict stale entries outside the window
+        cutoff = now - self._window_s
+        while self._timestamps and self._timestamps[0] < cutoff:
+            self._timestamps.popleft()
+
+    def fps(self) -> float:
+        """Current FPS within the rolling window."""
+        if len(self._timestamps) < 2:
+            return 0.0
+        now = time.monotonic()
+        cutoff = now - self._window_s
+        while self._timestamps and self._timestamps[0] < cutoff:
+            self._timestamps.popleft()
+        if len(self._timestamps) < 2:
+            return 0.0
+        span = self._timestamps[-1] - self._timestamps[0]
+        if span <= 0:
+            return 0.0
+        return (len(self._timestamps) - 1) / span
+
+
 @dataclass
 class ProcessorConfig:
     """Configuration for spool processor."""
@@ -77,6 +136,7 @@ class ProcessorConfig:
     enable_retention: bool = True
     delete_processed_segments: bool = True  # Delete segments after processing to save disk space
     retention_config: Optional[RetentionConfig] = None
+    sentinel_wake_buffer_segments: int = 3  # Segments to keep before wake point for catch-up
 
 
 class SpoolProcessorNode(Node if is_rdk_platform() else object):
@@ -156,6 +216,14 @@ class SpoolProcessorNode(Node if is_rdk_platform() else object):
             self._frames_published = 0
             self._segments_processed = 0
             self._start_time = time.time()
+
+            # Rolling FPS counter for current throughput (not lifetime avg)
+            self._rolling_fps = RollingFPSCounter(window_s=10.0)
+
+            # Status file tracking (for health endpoint cross-process visibility)
+            self._last_status_write = 0.0
+            self._sentinel_active_flag = False
+            self._sentinel_frames_total = 0
 
             # Probe H26XFrame message capabilities once at init instead of
             # calling hasattr() on every frame in the hot publish path.
@@ -245,8 +313,74 @@ class SpoolProcessorNode(Node if is_rdk_platform() else object):
 
         return sum(1 for s in segments if s > current)
 
+    def _write_status_file(
+        self,
+        last_processed_segment: int,
+        sentinel_active: bool,
+        sentinel_frames_sent: int,
+    ) -> None:
+        """Write processor status to a shared JSON file for the health endpoint.
+
+        Called periodically from _process_loop (~every 5 s).  The FastAPI
+        health endpoint (separate process) reads this file to display
+        spool processor statistics including time-behind-recorder and FPS.
+
+        The write is atomic (tmp + os.replace) so readers never see
+        partial data.
+        """
+        now_mono = time.monotonic()
+        if now_mono - self._last_status_write < _STATUS_WRITE_INTERVAL_S:
+            return
+        self._last_status_write = now_mono
+
+        try:
+            segments = self.reader.list_segments()
+            latest_on_disk = segments[-1] if segments else -1
+            segments_behind = max(0, latest_on_disk - last_processed_segment) if latest_on_disk >= 0 else 0
+
+            # Estimate time behind recorder: segments_behind * segment_duration
+            # RecorderConfig.segment_duration defaults to 5.0 s.
+            segment_duration_s = 5.0
+            time_behind_s = segments_behind * segment_duration_s
+
+            current_fps = self._rolling_fps.fps()
+
+            status = {
+                "timestamp": time.time(),
+                "sentinel_active": sentinel_active,
+                "sentinel_frames_sent": sentinel_frames_sent,
+                "frames_published": self._frames_published,
+                "segments_processed": self._segments_processed,
+                "last_processed_segment": last_processed_segment,
+                "latest_recorder_segment": latest_on_disk,
+                "segments_on_disk": len(segments),
+                "segments_behind": segments_behind,
+                "time_behind_recorder_s": round(time_behind_s, 1),
+                "current_fps": round(current_fps, 1),
+                "avg_fps": round(
+                    self._frames_published / max(time.time() - self._start_time, 1), 1
+                ),
+            }
+
+            tmp_path = SPOOL_PROCESSOR_STATUS_FILE + ".tmp"
+            with open(tmp_path, "w") as f:
+                json.dump(status, f)
+            os.replace(tmp_path, SPOOL_PROCESSOR_STATUS_FILE)
+
+        except Exception as e:
+            logger.debug(f"[SpoolProcessor] Status file write failed: {e}")
+
+    @staticmethod
+    def _cleanup_status_file() -> None:
+        """Remove the status file on shutdown (best-effort)."""
+        try:
+            if os.path.exists(SPOOL_PROCESSOR_STATUS_FILE):
+                os.unlink(SPOOL_PROCESSOR_STATUS_FILE)
+        except OSError:
+            pass
+
     def _process_loop(self):
-        """Main processing loop."""
+        """Main processing loop with pipeline-wide sentinel power-save."""
         logger.info("[SpoolProcessor] Processing started")
 
         # ── Persistent cursor: only process segments STRICTLY AFTER this ──
@@ -284,8 +418,122 @@ class SpoolProcessorNode(Node if is_rdk_platform() else object):
         # --- Diagnostic counters ---
         _diag_batch_num = 0
 
+        # ── Pipeline-wide sentinel mode state ────────────────────────────
+        # When the main app (ConveyorCounterApp) switches to DEGRADED mode
+        # it writes {"mode": "degraded"} to /tmp/pipeline_throttle.json.
+        # We read this file periodically and switch to sentinel mode:
+        #   • Publish 1 frame from the LATEST segment every sentinel_interval
+        #   • hobot_codec only decodes these sentinel frames (VPU ~6% load)
+        #   • Main app detects bags on sentinel frames → wake → resume FAST
+        _sentinel_active = False
+        _sentinel_cursor_saved = -1       # cursor when we entered sentinel mode
+        _sentinel_check_interval_s = 2.0  # how often to poll the state file
+        _last_sentinel_check = 0.0
+        _sentinel_frames_sent = 0
+        _sentinel_log_interval_s = 60.0   # log sentinel status every 60s
+        _last_sentinel_log = 0.0
+        sentinel_interval_s = 1.0         # current sentinel interval (updated from state file)
+
         while not self._stop_event.is_set():
             try:
+                # ── Check pipeline-wide throttle state ───────────────────
+                now_mono = time.monotonic()
+                if now_mono - _last_sentinel_check >= _sentinel_check_interval_s:
+                    _last_sentinel_check = now_mono
+                    throttle_mode, sentinel_interval_s = read_throttle_state()
+
+                    # ── Transition: FULL → sentinel (DEGRADED) ──────────
+                    if throttle_mode == "degraded" and not _sentinel_active:
+                        _sentinel_active = True
+                        _sentinel_cursor_saved = _last_processed_segment
+                        _sentinel_frames_sent = 0
+                        logger.info(
+                            f"[SpoolProcessor] SENTINEL_ENTER | "
+                            f"cursor_saved={_sentinel_cursor_saved} | "
+                            f"interval={sentinel_interval_s:.1f}s | "
+                            f"Pipeline-wide power save active — "
+                            f"publishing 1 probe frame every {sentinel_interval_s:.1f}s"
+                        )
+
+                    # ── Transition: sentinel (DEGRADED) → FULL ──────────
+                    elif throttle_mode == "full" and _sentinel_active:
+                        _sentinel_active = False
+
+                        # Skip idle segments: advance cursor to near-latest
+                        # to avoid reprocessing hours of empty belt footage.
+                        segments = self.reader.list_segments()
+                        buf = self.config.sentinel_wake_buffer_segments
+                        if segments:
+                            latest = segments[-1]
+                            # Keep `buf` segments before latest for catch-up
+                            resume_from = max(
+                                _sentinel_cursor_saved,
+                                latest - buf
+                            )
+
+                            # Count how many idle segments we're skipping
+                            skipped = [
+                                s for s in segments
+                                if _sentinel_cursor_saved < s < resume_from
+                            ]
+
+                            # Delete skipped idle segments to free disk space
+                            if skipped and self.retention:
+                                for s in skipped:
+                                    self.retention.delete_processed_immediately(s)
+                                self.reader.invalidate_cache()
+
+                            _last_processed_segment = resume_from
+
+                            logger.info(
+                                f"[SpoolProcessor] SENTINEL_EXIT → FULL | "
+                                f"cursor {_sentinel_cursor_saved} → {resume_from} | "
+                                f"skipped_idle={len(skipped)} segments | "
+                                f"sentinel_frames_sent={_sentinel_frames_sent} | "
+                                f"Resuming FAST sequential processing"
+                            )
+                        else:
+                            logger.info(
+                                f"[SpoolProcessor] SENTINEL_EXIT → FULL | "
+                                f"no segments on disk | "
+                                f"sentinel_frames_sent={_sentinel_frames_sent}"
+                            )
+
+                        # Reset frame-gap detection baseline after sentinel gap
+                        _last_dts_ns = 0
+
+                # ── Sentinel mode: publish probe frame from latest segment ──
+                if _sentinel_active:
+                    segments = self.reader.list_segments()
+                    if segments and len(segments) >= 2:
+                        # Use second-to-last segment (latest complete; the
+                        # very last may still be actively written by recorder)
+                        sentinel_seg = segments[-2]
+                        record = self.reader.read_first_record(sentinel_seg)
+                        if record is not None:
+                            if self._publish_frame(record):
+                                _sentinel_frames_sent += 1
+
+                    # Periodic sentinel status log
+                    if now_mono - _last_sentinel_log >= _sentinel_log_interval_s:
+                        _last_sentinel_log = now_mono
+                        seg_count = len(segments) if segments else 0
+                        logger.info(
+                            f"[SpoolProcessor] SENTINEL_STATUS | "
+                            f"probe_frames_sent={_sentinel_frames_sent} | "
+                            f"segments_on_disk={seg_count} | "
+                            f"cursor_saved={_sentinel_cursor_saved} | "
+                            f"interval={sentinel_interval_s:.1f}s"
+                        )
+
+                    # Sleep for sentinel interval (interruptible by stop event)
+                    self._write_status_file(
+                        _last_processed_segment, _sentinel_active, _sentinel_frames_sent,
+                    )
+                    self._stop_event.wait(sentinel_interval_s)
+                    continue
+
+                # ── Normal sequential processing (FULL mode) ─────────────
                 # Get available segments (fresh scan — cache was invalidated
                 # after the last delete, or has naturally expired).
                 segments = self.reader.list_segments()
@@ -370,6 +618,7 @@ class SpoolProcessorNode(Node if is_rdk_platform() else object):
 
                         # Publish frame
                         if self._publish_frame(record):
+                            self._rolling_fps.tick()
                             self.state.update(segment_num, record.index)
                             frame_count += 1
 
@@ -427,6 +676,11 @@ class SpoolProcessorNode(Node if is_rdk_platform() else object):
                     save_processor_state(self.state, self.config.state_file)
                     self._last_state_save = time.monotonic()
 
+                    # Write status file periodically for health endpoint
+                    self._write_status_file(
+                        _last_processed_segment, _sentinel_active, _sentinel_frames_sent,
+                    )
+
 
                 # Brief wait before checking for new segments
                 # Keep this short (50ms) to minimize dead time between
@@ -477,6 +731,9 @@ class SpoolProcessorNode(Node if is_rdk_platform() else object):
         # Stop retention
         if self.retention:
             self.retention.stop()
+
+        # Remove status file so the health endpoint knows we're stopped
+        self._cleanup_status_file()
 
         logger.info(
             f"[SpoolProcessor] Stopped. Processed {self._frames_published} frames, "

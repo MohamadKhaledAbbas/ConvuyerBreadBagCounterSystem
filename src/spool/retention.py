@@ -20,11 +20,17 @@ from src.utils.AppLogging import logger
 
 @dataclass
 class RetentionConfig:
-    """Configuration for segment retention policy."""
-    max_age_hours: float = 5.0
-    max_storage_bytes: int = 4 * 1024 * 1024 * 1024  # 4 GB
-    min_segments_keep: int = 5
-    check_interval_seconds: float = 60.0
+    """Configuration for segment retention policy.
+
+    Defaults are tuned for a live conveyor-counting pipeline where old
+    footage has no replay value.  Keep only the last 5 minutes of
+    segments (enough for sentinel wake catch-up) and cap total spool
+    storage at 1 GB to avoid filling the eMMC.
+    """
+    max_age_hours: float = 5.0 / 60.0          # 5 minutes — old idle segments are useless
+    max_storage_bytes: int = 200 * 1024 * 1024  # 200 MB hard cap
+    min_segments_keep: int = 5                  # always keep last 5 for catch-up after sentinel wake
+    check_interval_seconds: float = 30.0        # check every 30 s (tight retention needs faster checks)
     only_delete_processed: bool = True
 
 

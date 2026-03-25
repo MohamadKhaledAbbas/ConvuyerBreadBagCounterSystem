@@ -144,8 +144,10 @@ async def health() -> JSONResponse:
     Enhanced health check endpoint with system diagnostics.
 
     Returns version, uptime, DB connectivity, live pipeline metrics,
-    per-component pipeline health, and a 24-hour monitoring log summary
-    so the UI and external monitors get a complete picture.
+    per-component pipeline health, end-to-end throughput (FPS at each
+    stage, time behind real-time), power-save status, and a 24-hour
+    monitoring log summary so the UI and external monitors get a
+    complete picture of the entire system.
 
     Cache-Control: no-store is set explicitly so that browsers and any
     intermediate proxies never serve a stale snapshot.  The frame-throttle
@@ -293,6 +295,71 @@ async def health() -> JSONResponse:
             overall_status = "degraded"
             degraded_reasons.append("مراقب فك الترميز غير متصل")
 
+    # ── Spool recorder stats (RTSP → disk, cross-process) ──
+    spool_recorder: Dict[str, Any] = {"available": False}
+    try:
+        _rec_path = "/tmp/spool_recorder_status.json"
+        if os.path.exists(_rec_path):
+            import json
+            with open(_rec_path, "r") as _f:
+                _rec = json.load(_f)
+            _rec_ts = _rec.get("timestamp", 0)
+            _rec_age = (now - _rec_ts) if _rec_ts else 0
+            spool_recorder = {
+                "available": True,
+                "healthy": _rec_age < 30 and _rec.get("avg_fps", 0) > 1.0,
+                "avg_fps": _rec.get("avg_fps", 0),
+                "frames_received": _rec.get("frames_received", 0),
+                "segments_completed": _rec.get("segments_completed", 0),
+                "write_queue_size": _rec.get("write_queue_size", 0),
+                "write_queue_hwm": _rec.get("write_queue_hwm", 0),
+                "write_queue_capacity": _rec.get("write_queue_capacity", 0),
+                "age_seconds": round(_rec_age, 1),
+            }
+    except Exception:
+        pass
+
+    # ── Spool processor stats (disk → codec, cross-process) ──
+    spool_processor: Dict[str, Any] = {"available": False}
+    try:
+        _proc_path = "/tmp/spool_processor_status.json"
+        if os.path.exists(_proc_path):
+            import json
+            with open(_proc_path, "r") as _f:
+                _proc = json.load(_f)
+            _proc_ts = _proc.get("timestamp", 0)
+            _proc_age = (now - _proc_ts) if _proc_ts else 0
+            _proc_sentinel = _proc.get("sentinel_active", False)
+            _proc_behind = _proc.get("time_behind_recorder_s", 0)
+            spool_processor = {
+                "available": True,
+                "healthy": _proc_age < 30 and (_proc_sentinel or _proc_behind < 30.0),
+                "current_fps": _proc.get("current_fps", 0),
+                "avg_fps": _proc.get("avg_fps", 0),
+                "time_behind_recorder_s": _proc_behind,
+                "segments_behind": _proc.get("segments_behind", 0),
+                "segments_on_disk": _proc.get("segments_on_disk", 0),
+                "sentinel_active": _proc_sentinel,
+                "sentinel_frames_sent": _proc.get("sentinel_frames_sent", 0),
+                "frames_published": _proc.get("frames_published", 0),
+                "segments_processed": _proc.get("segments_processed", 0),
+                "age_seconds": round(_proc_age, 1),
+            }
+    except Exception:
+        pass
+
+    # ── App-level processing metrics ──
+    app_metrics = pipeline.get("app_metrics", {})
+
+    # ── End-to-end throughput summary ──
+    throughput = {
+        "recorder_fps": spool_recorder.get("avg_fps", 0) if spool_recorder.get("available") else None,
+        "processor_fps": spool_processor.get("current_fps", 0) if spool_processor.get("available") else None,
+        "app_fps": app_metrics.get("fps", 0),
+        "time_behind_recorder_s": spool_processor.get("time_behind_recorder_s", 0) if spool_processor.get("available") else None,
+        "segments_behind": spool_processor.get("segments_behind", 0) if spool_processor.get("available") else None,
+    }
+
     # ── Monitoring log summary (24h) ──
     log_summary: Dict[str, Any] = {}
     try:
@@ -334,6 +401,11 @@ async def health() -> JSONResponse:
             # Adaptive frame throttle (power-saving idle mode)
             "frame_throttle": pipeline.get("frame_throttle", {}),
         },
+        # ── NEW: per-stage throughput and media pipeline stats ──
+        "throughput": throughput,
+        "app_metrics": app_metrics,
+        "spool_recorder": spool_recorder,
+        "spool_processor": spool_processor,
         "components": components,
         "degraded_reasons": degraded_reasons,
         "monitoring_log_summary": log_summary,
