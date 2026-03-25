@@ -22,6 +22,7 @@ from typing import Dict, Any
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 
 from fastapi import Request
 from fastapi.responses import HTMLResponse
@@ -138,13 +139,18 @@ async def endpoints_page(request: Request):
 
 
 @app.get("/health")
-async def health() -> Dict[str, Any]:
+async def health() -> JSONResponse:
     """
     Enhanced health check endpoint with system diagnostics.
 
     Returns version, uptime, DB connectivity, live pipeline metrics,
     per-component pipeline health, and a 24-hour monitoring log summary
     so the UI and external monitors get a complete picture.
+
+    Cache-Control: no-store is set explicitly so that browsers and any
+    intermediate proxies never serve a stale snapshot.  The frame-throttle
+    power-mode card on the health page must always reflect the current mode
+    (FULL vs DEGRADED), which changes independently of any HTTP activity.
     """
     now = time.time()
     uptime_seconds = now - _SERVER_START_TIME
@@ -303,7 +309,7 @@ async def health() -> Dict[str, Any]:
     except Exception:
         pass
 
-    return {
+    payload = {
         "status": overall_status,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "version": APP_VERSION,
@@ -333,6 +339,14 @@ async def health() -> Dict[str, Any]:
         "monitoring_log_summary": log_summary,
         "system_info": system_info,
     }
+
+    # Return with explicit Cache-Control header so browsers and any reverse-
+    # proxies never serve a stale snapshot.  The frame-throttle card must
+    # always show the live mode (FULL vs DEGRADED).
+    return JSONResponse(
+        content=payload,
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+    )
 
 
 @app.get("/whoami")

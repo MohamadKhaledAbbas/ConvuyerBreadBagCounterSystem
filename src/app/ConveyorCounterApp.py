@@ -292,6 +292,13 @@ class ConveyorCounterApp:
         self._last_memory_log_time: float = 0.0
         self._memory_log_interval: float = 60.0  # Log memory every 60 seconds
 
+        # Periodic pipeline-state file refresh (independent of classification events).
+        # Ensures the frame-throttle mode (FULL / DEGRADED) is always visible to the
+        # health page and counts SSE even when the belt is idle and no classifications
+        # are happening.  15-second interval is fine: the health page polls every 30 s.
+        self._last_state_publish_time: float = 0.0
+        self._state_publish_interval_s: float = 25.0
+
         # Callbacks
         self._on_count_callback: Optional[Callable] = None
         
@@ -339,6 +346,29 @@ class ConveyorCounterApp:
                 )
             except Exception as e:
                 logger.debug(f"[MEMORY] Failed to get memory info: {e}")
+
+    def _maybe_publish_state_periodic(self) -> None:
+        """
+        Publish the pipeline state file at a fixed wall-clock interval.
+
+        Called on every iteration of the main frame loop — including frames
+        that are skipped by the throttle in DEGRADED mode — so that consumers
+        (health page, counts SSE, etc.) always see up-to-date throttle data
+        even when the belt is idle and no classification events are firing.
+
+        Interval: ``_state_publish_interval_s`` (default 15 s).  The health
+        page polls every 30 s, so a 15 s write interval guarantees at most
+        one stale poll before the fresh value is visible.
+        """
+        now = time.perf_counter()
+        if now - self._last_state_publish_time < self._state_publish_interval_s:
+            return
+        self._last_state_publish_time = now
+        try:
+            self._publish_pipeline_state()
+        except Exception as e:
+            # Never let a state-write error crash the main loop.
+            logger.debug(f"[ConveyorCounterApp] Periodic state publish failed: {e}")
 
     def _init_components(self):
         """Initialize pipeline components with new modular architecture."""
@@ -1227,6 +1257,16 @@ class ConveyorCounterApp:
                 # are skipped but still drained from the source queue to prevent
                 # buffer overflows and keep the camera feed alive.
                 self._throttle.check_timeout()
+
+                # ── Periodic state-file publish ──────────────────────────
+                # Runs on EVERY frame (including DEGRADED-mode skips) so that
+                # the health page and counts SSE always see the current throttle
+                # mode, confirmed totals, and smoother state even when no
+                # classifications have fired recently.  _publish_pipeline_state()
+                # is otherwise only called from _on_classification_completed(),
+                # which means the frame_throttle card on the health page would
+                # show stale data whenever the belt goes idle.
+                self._maybe_publish_state_periodic()
 
                 if not self._throttle.should_process(self._frame_count):
                     # NOTE: Skipped frames do NOT enter the evidence ring buffer

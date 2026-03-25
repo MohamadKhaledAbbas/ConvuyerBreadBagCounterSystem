@@ -617,7 +617,11 @@ async function checkHealth() {
 
     try {
         const t0 = performance.now();
-        const res = await fetch('/health');
+        // cache: 'no-store' ensures every poll hits the server directly,
+        // bypassing any browser HTTP cache.  The power-mode card must always
+        // reflect the live throttle state (FULL vs DEGRADED) which changes
+        // independently of any user-visible activity.
+        const res = await fetch('/health', { cache: 'no-store' });
         const latency = Math.round(performance.now() - t0);
         const data = await res.json();
 
