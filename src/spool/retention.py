@@ -8,10 +8,11 @@ Manages automatic cleanup of processed segment files based on:
 4. Minimum segment retention (keep N most recent)
 """
 
+import json
 import os
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, List, Set
 
@@ -33,6 +34,12 @@ class RetentionConfig:
     idle_max_segments: int = 10                 # sentinel/power-save: keep only last N segments
     check_interval_seconds: float = 30.0        # check every 30 s (tight retention needs faster checks)
     only_delete_processed: bool = True
+    # Throttle state file — retention reads this DIRECTLY so it knows the
+    # current pipeline mode without depending on set_idle_mode() being called.
+    # Same file that ConveyorCounterApp writes and SpoolProcessorNode reads.
+    # Set to "" to disable self-detection and rely only on set_idle_mode().
+    throttle_state_path: str = "/tmp/pipeline_throttle.json"
+    throttle_staleness_s: float = 120.0         # treat stale file as "full" mode
 
 
 class RetentionPolicy:
@@ -259,6 +266,43 @@ class RetentionPolicy:
                 f"path={path} elapsed_ms={(time.monotonic() - t0) * 1000:.1f} err={e}"
             )
 
+    def _is_idle_mode(self) -> bool:
+        """Return True if the pipeline is currently in idle / sentinel mode.
+
+        Primary source: the shared throttle state file written by
+        ``ConveyorCounterApp``.  This is the same file the spool processor
+        reads, so retention is always in sync with the actual pipeline mode
+        without depending on ``set_idle_mode()`` being called at the right
+        time.
+
+        Fall-back (file missing, unreadable, or stale): the manually-set
+        ``_idle_mode`` flag (from ``set_idle_mode()``).
+        """
+        path = self.config.throttle_state_path
+        if not path:
+            return self._idle_mode
+
+        try:
+            with open(path, "r") as f:
+                state = json.load(f)
+
+            mode = state.get("mode", "full")
+            updated_at = float(state.get("updated_at", 0.0))
+            age = time.time() - updated_at
+
+            if age > self.config.throttle_staleness_s:
+                # Stale → treat as full (same safety logic as read_throttle_state)
+                return False
+
+            return mode == "degraded"
+
+        except FileNotFoundError:
+            # File not yet written (early startup) — fall back to manual flag
+            return self._idle_mode
+        except Exception as e:
+            logger.debug(f"[Retention] Could not read throttle state: {e}")
+            return self._idle_mode
+
     def _get_total_storage(self, segments: List[tuple]) -> int:
         """Calculate total storage used by segments."""
         return sum(s[2] for s in segments)
@@ -299,8 +343,12 @@ class RetentionPolicy:
         deleted_count = 0
         now = time.time()
 
+        # Determine mode once for this cycle.  Reads the throttle state file
+        # directly so it works even before set_idle_mode() has been called.
+        idle_mode = self._is_idle_mode()
+
         # ── IDLE / SENTINEL mode: count-based cleanup ─────────────────────
-        if self._idle_mode:
+        if idle_mode:
             idle_keep = self.config.idle_max_segments
             can_delete = max(0, len(segments) - idle_keep)
             if can_delete == 0:
@@ -313,7 +361,7 @@ class RetentionPolicy:
             if deleted_count > 0:
                 logger.info(
                     f"[Retention] CLEANUP_CYCLE mode=idle deleted={deleted_count} "
-                    f"kept={idle_keep} "
+                    f"kept={idle_keep} total_on_disk={len(segments)} "
                     f"elapsed_ms={(time.monotonic() - cycle_t0) * 1000:.1f}"
                 )
             return deleted_count
