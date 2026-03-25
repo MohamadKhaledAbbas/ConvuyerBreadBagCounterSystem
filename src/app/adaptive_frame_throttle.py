@@ -8,15 +8,24 @@ without affecting counting reliability.
 
 Two-Signal Architecture:
     Signal A — ``report_detection()``  (fast-path wake)
-        ANY raw detection in a processed frame immediately wakes the system
+        A detection **inside the conveyor ROI** immediately wakes the system
         from DEGRADED to FULL mode.  Does NOT reset the idle timer.
         This guarantees zero bag skips — worst-case latency to first detection
         in DEGRADED mode is (skip_n - 1) frames (~235 ms at 17 FPS, skip_n=5).
 
+        Important: callers MUST pre-filter detections to the conveyor ROI
+        before deciding whether to call this method.  Outside-belt detections
+        (operator hands, table-edge reflections, etc.) must never reach here.
+        When ``conveyor_roi_enabled=True`` the pipeline already drops
+        out-of-ROI detections before returning them; when the flag is False
+        (debug/test mode), the caller must apply the ROI bounds manually.
+
     Signal B — ``report_activity()``  (noise-filtered stay-alive)
         Called ONLY when confirmed tracks (hits >= min_track_duration_frames)
         or ghost tracks exist.  Resets the idle timer.  Also wakes from
-        DEGRADED if still in that mode (belt-and-suspenders).
+        DEGRADED if still in that mode (belt-and-suspenders).  Confirmed
+        tracks are inherently ROI-scoped because they are built from
+        ROI-filtered detections in PipelineCore.
 
 This separation prevents environmental noise (reflections, vibrations) from
 resetting the idle timer while ensuring real bags wake the system instantly.
@@ -34,11 +43,15 @@ Usage (integrated into ConveyorCounterApp):
 
         detections, tracks, rois = pipeline.process_frame(frame)
 
-        # Signal A: fast-path wake on any detection
-        if detections:
+        # Signal A: fast-path wake on in-ROI detection only.
+        # When conveyor_roi_enabled=True, `detections` is already filtered;
+        # otherwise apply the ROI bounds explicitly before calling this.
+        roi_detections = _filter_to_roi(detections, tracking_config)
+        if roi_detections:
             throttle.report_detection()
 
-        # Signal B: noise-filtered timer reset on confirmed/ghost tracks
+        # Signal B: noise-filtered timer reset on confirmed/ghost tracks.
+        # Tracks are inherently ROI-scoped (built from filtered detections).
         confirmed = tracker.get_confirmed_tracks()
         ghosts_active = len(tracker.ghost_tracks) > 0
         if confirmed or ghosts_active:
@@ -181,13 +194,19 @@ class AdaptiveFrameThrottle:
         """
         Signal A — Fast-path wake signal.
 
-        Called when ANY raw detection is found in a processed frame.
+        Called when at least one detection that falls **inside the conveyor
+        ROI** is found in a processed frame.  Callers are responsible for
+        pre-filtering detections to the conveyor ROI before invoking this
+        method; outside-belt detections (operator hands, reflections, etc.)
+        must not reach here.
+
         If in DEGRADED mode, immediately wakes to FULL mode.
         Does NOT reset the idle timer (``_last_activity_time``).
 
         This is the fast-path guard that guarantees zero bag skips.
-        Spurious detections cause at most a 60-second FULL wake (hysteresis)
-        before re-degrading, because the idle timer is not touched.
+        Spurious in-ROI detections cause at most a 60-second FULL wake
+        (hysteresis) before re-degrading, because the idle timer is not
+        touched.
         """
         if not self._enabled:
             return

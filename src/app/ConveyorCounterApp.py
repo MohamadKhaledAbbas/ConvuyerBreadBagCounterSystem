@@ -127,17 +127,46 @@ class CounterState:
                 self.tentative_counts[class_name] -= 1
             return self.tentative_total
 
-    def increment_count(self, class_name: str) -> int:
-        """Thread-safe count increment (confirmed, after smoothing)."""
+    def increment_count(self, class_name: str, bag_time: Optional[float] = None) -> int:
+        """Thread-safe count increment (confirmed, after smoothing).
+
+        Args:
+            class_name: Confirmed classification label.
+            bag_time:   Original timestamp of the bag's classification record
+                        (``ClassificationRecord.timestamp``).  When provided this
+                        is used instead of ``time.time()`` so that pending bags
+                        flushed after the inactivity timeout (default 30 min) are
+                        anchored to when they *actually* passed the conveyor, not
+                        to when the flush happened.  Prevents the counts page from
+                        reporting an inflated "work stopped" duration equal to the
+                        timeout window.
+
+        Time-field invariants:
+          • ``first_count_time`` — earliest confirmed bag timestamp in this
+            session; only moves backward (to an earlier time).
+          • ``last_count_time``  — latest confirmed bag timestamp; only moves
+            forward.  If an older pending bag is flushed after a more-recent
+            confirmed bag, the last-count marker does not regress.
+        """
         with self._lock:
             self.total_counted += 1
             if class_name not in self.counts_by_class:
                 self.counts_by_class[class_name] = 0
             self.counts_by_class[class_name] += 1
-            now = time.time()
-            if self.first_count_time == 0.0:
-                self.first_count_time = now
-            self.last_count_time = now
+
+            # Prefer the original bag timestamp so that counts flushed after the
+            # 30-min smoother timeout are reflected as occurring when the bag
+            # physically passed, not when the DB write happened.
+            t = bag_time if (bag_time is not None and bag_time > 0) else time.time()
+
+            # first_count_time: clamp to earliest bag seen in this session.
+            if self.first_count_time == 0.0 or t < self.first_count_time:
+                self.first_count_time = t
+
+            # last_count_time: only advance, never regress.
+            if t > self.last_count_time:
+                self.last_count_time = t
+
             return self.total_counted
 
     def add_event(self, event: str):
@@ -528,19 +557,46 @@ class ConveyorCounterApp:
         # ── Adaptive Frame Throttle: two-signal design ────────────────
         #
         # Signal A (report_detection) — FAST wake, does NOT reset idle timer.
-        # Any raw detection wakes the system from DEGRADED immediately.
-        # Worst-case latency: (skip_n - 1) frames (~235 ms at 17 FPS).
+        # Only detections whose center falls WITHIN the conveyor ROI are used.
+        # This is a hard rule regardless of whether the pipeline's own ROI
+        # filter (conveyor_roi_enabled) is active: outside-belt detections
+        # (hands, table edges, reflections) must never wake the throttle or
+        # affect the idle timer.
+        #
+        #   • When conveyor_roi_enabled=True  → pipeline already dropped
+        #     outside-ROI hits, so `detections` is pre-filtered; we reuse it.
+        #   • When conveyor_roi_enabled=False → pipeline passed all detections
+        #     through (debug mode), so we apply the ROI bounds here explicitly.
+        #
+        # Worst-case wake latency: (skip_n - 1) frames (~235 ms at 17 FPS).
         #
         # Signal B (report_activity) — Noise-filtered, DOES reset idle timer.
-        # Only confirmed tracks (hits >= 5) or ghost tracks can keep the
-        # system in FULL mode.  This prevents environmental noise (reflections,
-        # vibrations) from endlessly postponing power-saving degradation.
+        # Based on confirmed tracks and ghost tracks only.  Tracks are created
+        # from ROI-filtered detections (ROI filter runs BEFORE the tracker in
+        # PipelineCore), so no extra spatial filtering is needed here.
         if self._throttle is not None:
-            # Signal A: any detection → immediate wake from degraded
+            # Signal A: in-ROI detection → immediate wake from DEGRADED
             if detections:
-                self._throttle.report_detection()
+                tc = self.tracking_config
+                if tc.conveyor_roi_enabled:
+                    # PipelineCore already dropped outside-ROI detections;
+                    # the list is clean — use it directly.
+                    roi_detections = detections
+                else:
+                    # Pipeline ROI filter is off (test / debug mode).
+                    # Still apply spatial bounds for the throttle so that
+                    # outside-belt objects don't cause spurious wakes.
+                    roi_detections = [
+                        d for d in detections
+                        if (tc.conveyor_roi_x_min <= d.center[0] <= tc.conveyor_roi_x_max
+                            and tc.conveyor_roi_y_min <= d.center[1] <= tc.conveyor_roi_y_max)
+                    ]
+                if roi_detections:
+                    self._throttle.report_detection()
 
-            # Signal B: confirmed or ghost tracks → reset idle timer
+            # Signal B: confirmed or ghost tracks → reset idle timer.
+            # Tracks are already ROI-scoped (they derive from ROI-filtered
+            # detections), so no spatial check is needed.
             tracker = self._pipeline_core.tracker
             confirmed_tracks = tracker.get_confirmed_tracks()
             ghosts_active = len(tracker.ghost_tracks) > 0
@@ -849,8 +905,10 @@ class ConveyorCounterApp:
                 self._save_roi_by_class(roi, record)
             return
 
-        # Update CONFIRMED counts (thread-safe)
-        new_total = self.state.increment_count(record.class_name)
+        # Update CONFIRMED counts (thread-safe).
+        # Pass the original bag timestamp so first_count_time / last_count_time
+        # track the actual belt activity rather than the DB-write moment.
+        new_total = self.state.increment_count(record.class_name, bag_time=record.timestamp)
 
         # Get current class count
         class_count = self.state.get_counts_snapshot().get(record.class_name, 0)
