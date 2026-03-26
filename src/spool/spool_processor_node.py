@@ -336,12 +336,35 @@ class SpoolProcessorNode(Node if is_rdk_platform() else object):
         try:
             segments = self.reader.list_segments()
             latest_on_disk = segments[-1] if segments else -1
-            segments_behind = max(0, latest_on_disk - last_processed_segment) if latest_on_disk >= 0 else 0
 
-            # Estimate time behind recorder: segments_behind * segment_duration
-            # RecorderConfig.segment_duration defaults to 5.0 s.
-            segment_duration_s = 5.0
-            time_behind_s = segments_behind * segment_duration_s
+            # ── Segments-behind / time-behind calculation ─────────────────
+            # Use a COUNT of segments actually on disk that are newer than
+            # the processed cursor — NOT segment-ID arithmetic.
+            #
+            # Segment-ID arithmetic (latest_id − cursor_id) gives a wildly
+            # inflated result when retention has deleted old segments while
+            # the cursor was frozen.  Worst case: sentinel mode where the
+            # cursor stays at the pre-sentinel position while retention
+            # keeps only idle_max_segments (e.g. 10) segments on disk:
+            #
+            #   cursor=10, on-disk=[481..490]
+            #   ID-diff  → 490 − 10 = 480           ← WRONG (inflated)
+            #   count    → len([s>10 in 481..490])   ← CORRECT = 10
+            #
+            # In sentinel / power-save mode the processor intentionally
+            # skips all pending segments; they are idle footage kept only
+            # for wake-up catch-up, not a processing backlog.  Report 0
+            # so the dashboard shows "0 segments" rather than the
+            # misleading "480 segments / 40 min behind".
+            if sentinel_active:
+                segments_behind = 0
+                time_behind_s   = 0.0
+            else:
+                # Count segments on disk strictly newer than the cursor.
+                # Segment duration matches TrackingConfig.spool_segment_duration (5.0 s).
+                segment_duration_s = 5.0
+                segments_behind    = sum(1 for s in segments if s > last_processed_segment)
+                time_behind_s      = float(segments_behind) * segment_duration_s
 
             current_fps = self._rolling_fps.fps()
 

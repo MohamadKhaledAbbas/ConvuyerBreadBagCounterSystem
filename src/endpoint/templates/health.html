@@ -942,8 +942,16 @@ async function checkHealth() {
         setTpStage('tpRecorder',  tp.recorder_fps,  'إطار/ث');
         const behindS   = tp.time_behind_recorder_s;
         const segBehind = tp.segments_behind;
+        // Read sentinel flag early (spoolProc const is declared below this block)
+        // so the throughput-bar sub-text reflects power-save mode correctly.
+        const isSentinel = !!(data.spool_processor && data.spool_processor.available
+                               && data.spool_processor.sentinel_active);
         let procSub = 'إطار/ث';
-        if (behindS != null) {
+        if (isSentinel) {
+            // In sentinel mode time_behind / segments_behind are 0 by design.
+            // Show an explicit label instead of the trivially-true "0.0ث تأخر".
+            procSub = 'إطار/ث · ⚡ وضع الحارس';
+        } else if (behindS != null && behindS > 0) {
             const behindFmt = behindS < 60
                 ? behindS.toFixed(1) + 'ث تأخر'
                 : Math.floor(behindS / 60) + 'د ' + Math.round(behindS % 60) + 'ث تأخر';
@@ -964,12 +972,23 @@ async function checkHealth() {
             behindSection.style.display = '';
 
             // ── Time-behind card ──
-            const behind   = (spoolProc.available && spoolProc.time_behind_recorder_s != null)
-                             ? spoolProc.time_behind_recorder_s : null;
-            const behindEl  = $('timeBehindVal');
-            const behindBar = $('timeBehindBar');
+            // In sentinel mode time_behind_recorder_s is forced to 0 on the
+            // backend (idle segments are not a processing backlog).  Render
+            // an explicit power-save label so the card is informative rather
+            // than the ambiguous "0.0 ث / يعمل في الوقت الفعلي".
+            const behind     = (spoolProc.available && spoolProc.time_behind_recorder_s != null)
+                               ? spoolProc.time_behind_recorder_s : null;
+            const behindEl   = $('timeBehindVal');
+            const behindBar  = $('timeBehindBar');
             const behindCard = $('timeBehindCard');
-            if (behind != null) {
+            if (spoolProc.available && spoolProc.sentinel_active) {
+                behindEl.innerHTML   = '<span style="font-size:1.1rem;">⚡</span>';
+                behindEl.className   = 'value eng warning';
+                behindBar.style.width      = '0%';
+                behindBar.style.background = 'var(--accent-warning)';
+                behindCard.style.borderColor = 'rgba(251,191,36,0.3)';
+                $('timeBehindDetail').textContent = 'وضع توفير الطاقة — معالجة مُعلَّقة';
+            } else if (behind != null) {
                 const MAX_BEHIND_S = 120;   // full-bar threshold
                 const pct = Math.min(100, (behind / MAX_BEHIND_S) * 100);
                 const barColor = behind < 5 ? 'var(--accent-success)'
@@ -999,12 +1018,22 @@ async function checkHealth() {
 
             // ── Segments behind ──
             if (spoolProc.available) {
-                const segs = spoolProc.segments_behind || 0;
-                $('segsBehindVal').textContent = segs.toLocaleString('en');
-                $('segsBehindVal').className   = 'value eng ' + (segs > 10 ? 'danger' : segs > 3 ? 'warning' : 'success');
-                $('segsBehindDetail').textContent = segs > 0
-                    ? segs + ' مقطع في انتظار المعالجة'
-                    : '✓ لا يوجد تراكم';
+                if (spoolProc.sentinel_active) {
+                    // segments_behind = 0 by design in sentinel mode (idle segments
+                    // are not a backlog).  Show on-disk count with sentinel context
+                    // so the operator understands these are wake-up buffers, not queue.
+                    const onDisk = spoolProc.segments_on_disk || 0;
+                    $('segsBehindVal').innerHTML  = '⚡ <span class="eng">' + onDisk.toLocaleString('en') + '</span>';
+                    $('segsBehindVal').className  = 'value warning';
+                    $('segsBehindDetail').textContent = 'وضع الحارس — ' + onDisk + ' مقطع خامل للاستيقاظ';
+                } else {
+                    const segs = spoolProc.segments_behind || 0;
+                    $('segsBehindVal').textContent = segs.toLocaleString('en');
+                    $('segsBehindVal').className   = 'value eng ' + (segs > 10 ? 'danger' : segs > 3 ? 'warning' : 'success');
+                    $('segsBehindDetail').textContent = segs > 0
+                        ? segs + ' مقطع في انتظار المعالجة'
+                        : '✓ لا يوجد تراكم';
+                }
 
                 // ── Segments on disk ──
                 $('segsOnDiskVal').textContent = (spoolProc.segments_on_disk || 0).toLocaleString('en');
