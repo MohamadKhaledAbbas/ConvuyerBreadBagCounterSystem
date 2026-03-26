@@ -587,10 +587,8 @@ function renderComponents(components, frameThrottle) {
         const lastSignal = frameThrottle.last_wake_signal || '';
         const signalLabel = lastSignal === 'detection' ? ' (كشف مبدئي)'
                           : lastSignal === 'confirmed_track' ? ' (مسار مؤكد)' : '';
-        const noiseCount = frameThrottle.detection_only_wakes || 0;
         let statusText = isDegraded ? 'توفير الطاقة' : 'معالجة كاملة';
         if (!isDegraded && signalLabel) statusText += signalLabel;
-        if (noiseCount > 0) statusText += ' · ضوضاء: ' + noiseCount;
         allComps['frame_throttle'] = {
             healthy: true,   // throttle itself is always healthy — it's informational
             status:  statusText,
@@ -865,12 +863,9 @@ async function checkHealth() {
             throttleCard.style.borderColor = '';
             timerBar.style.display = 'none';
         } else if (ft.mode === 'degraded') {
-            const skipN      = ft.skip_n || 5;
             const degradedS  = ft.degraded_since_seconds;
             const idleS      = ft.idle_seconds || 0;
-            const framesSkip = (ft.frames_skipped || 0).toLocaleString('en');
             const wakes      = ft.wake_transitions || 0;
-            const noise      = ft.detection_only_wakes || 0;
 
             throttleModeEl.innerHTML = '<span style="color:var(--accent-warning);font-weight:700;">⚡ توفير الطاقة</span>';
             throttleModeEl.className = 'value warning';
@@ -884,11 +879,10 @@ async function checkHealth() {
             timerRight.textContent = 'غير نشط منذ: ' + fmtSec(idleS);
             timerBar.style.display = 'block';
 
+            // Sentinel mode: spool processor is the sole rate limiter (1 probe frame/sec)
             throttleDetailEl.innerHTML =
-                'إطار كل <b class="eng">' + esc(String(skipN)) + '</b>'
-                + ' · تجاوز <b class="eng">' + esc(framesSkip) + '</b> إطار'
-                + ' · استيقاظ <b class="eng">' + esc(String(wakes)) + '</b>'
-                + (noise ? ' · ضوضاء <b class="eng">' + esc(String(noise)) + '</b>' : '');
+                'إطار حارس / ثانية'
+                + ' · استيقاظ <b class="eng">' + esc(String(wakes)) + '</b>';
             // Snapshot for per-second tick
             throttleTimerState = { mode: 'degraded', idleSec: idleS, degradedSec: degradedS || 0, timeoutSec: ft.idle_timeout_s || 900 };
         } else {

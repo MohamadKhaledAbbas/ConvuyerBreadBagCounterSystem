@@ -11,8 +11,7 @@ File format (``/tmp/pipeline_throttle.json``):
     {
         "mode": "full" | "degraded",
         "updated_at": 1711396800.0,
-        "sentinel_interval_s": 1.0,
-        "skip_n": 5
+        "sentinel_interval_s": 1.0
     }
 
 Write strategy: atomic (write to .tmp, ``os.replace`` to .json).
@@ -42,7 +41,6 @@ DEFAULT_THROTTLE_STATE_PATH = "/tmp/pipeline_throttle.json"
 def write_throttle_state(
     mode: str,
     sentinel_interval_s: float = 1.0,
-    skip_n: int = 5,
     path: str = DEFAULT_THROTTLE_STATE_PATH,
 ) -> None:
     """
@@ -54,16 +52,13 @@ def write_throttle_state(
     Args:
         mode:                ``"full"`` or ``"degraded"``.
         sentinel_interval_s: Seconds between sentinel probe frames
-                             in degraded mode.
-        skip_n:              The frame-skip factor (informational for
-                             the processor to know the expected savings).
+                             in degraded mode (controlled by SpoolProcessorNode).
         path:                File path for the shared state.
     """
     state = {
         "mode": mode,
         "updated_at": time.time(),
         "sentinel_interval_s": sentinel_interval_s,
-        "skip_n": skip_n,
     }
     tmp_path = path + ".tmp"
     try:

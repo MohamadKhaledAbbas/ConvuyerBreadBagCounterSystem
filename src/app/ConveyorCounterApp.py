@@ -383,7 +383,6 @@ class ConveyorCounterApp:
                 write_throttle_state(
                     mode=self._throttle.mode,
                     sentinel_interval_s=self.tracking_config.frame_throttle_sentinel_interval_s,
-                    skip_n=self.tracking_config.frame_throttle_skip_n,
                 )
             except Exception:
                 pass  # Non-critical — staleness fallback to "full" is safe
@@ -571,20 +570,17 @@ class ConveyorCounterApp:
         # (separate process) can switch to sentinel mode in DEGRADED, saving
         # VPU/CPU across the entire media pipeline.
         sentinel_interval_s = self.tracking_config.frame_throttle_sentinel_interval_s
-        skip_n = self.tracking_config.frame_throttle_skip_n
 
         def _on_throttle_mode_change(new_mode: str):
             """Write throttle mode to shared state file for cross-process coordination."""
             write_throttle_state(
                 mode=new_mode,
                 sentinel_interval_s=sentinel_interval_s,
-                skip_n=skip_n,
             )
 
         self._throttle = AdaptiveFrameThrottle(
             enabled=self.tracking_config.frame_throttle_enabled,
             idle_timeout_s=self.tracking_config.frame_throttle_idle_timeout_s,
-            skip_n=skip_n,
             hysteresis_s=self.tracking_config.frame_throttle_hysteresis_s,
             on_mode_change=_on_throttle_mode_change,
         )
@@ -594,7 +590,6 @@ class ConveyorCounterApp:
         write_throttle_state(
             mode="full",
             sentinel_interval_s=sentinel_interval_s,
-            skip_n=skip_n,
         )
 
     def _process_frame(self, frame: np.ndarray) -> np.ndarray:
@@ -640,7 +635,7 @@ class ConveyorCounterApp:
         #   • When conveyor_roi_enabled=False → pipeline passed all detections
         #     through (debug mode), so we apply the ROI bounds here explicitly.
         #
-        # Worst-case wake latency: (skip_n - 1) frames (~235 ms at 17 FPS).
+        # Worst-case wake latency equals one sentinel probe interval (~1 s).
         #
         # Signal B (report_activity) — Noise-filtered, DOES reset idle timer.
         # Based on confirmed tracks and ghost tracks only.  Tracks are created
@@ -1321,13 +1316,6 @@ class ConveyorCounterApp:
                 # show stale data whenever the belt goes idle.
                 self._maybe_publish_state_periodic()
 
-                if not self._throttle.should_process(self._frame_count):
-                    # NOTE: Skipped frames do NOT enter the evidence ring buffer
-                    # or trigger snapshot capture.  This is acceptable because
-                    # there are no active tracks during idle.  Snapshots can
-                    # still be triggered on the next processed frame.
-                    continue
-                
                 # Process frame through modular pipeline
                 annotated = self._process_frame(frame)
                 
@@ -1440,7 +1428,6 @@ class ConveyorCounterApp:
             ts = self._throttle.get_state()
             logger.info(
                 f"  Frame throttle: mode={ts['mode']}, "
-                f"skipped={ts['frames_skipped']}/{ts['total_frames_seen']} frames, "
                 f"degraded_transitions={ts['degraded_transitions']}, "
                 f"wake_transitions={ts['wake_transitions']}"
             )
