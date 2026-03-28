@@ -173,6 +173,18 @@ class ITracker(ABC):
         """
         return []
 
+    def reset(self) -> None:
+        """Reset the tracker to a fresh state (as if newly constructed).
+
+        Clears all active tracks, ghost tracks, completed events, and resets
+        statistics.  Called by the idle session reset (2-hour inactivity) to
+        start a clean counting session without restarting the app.
+
+        Default implementation calls cleanup().  Subclasses should override
+        with a full reset that preserves configuration but clears all state.
+        """
+        self.cleanup()
+
     @abstractmethod
     def cleanup(self):
         """Release tracker resources."""

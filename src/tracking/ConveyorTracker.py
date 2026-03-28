@@ -2555,6 +2555,27 @@ class ConveyorTracker(ITracker):
             'next_track_id': self._next_id
         }
 
+    def reset(self):
+        """Reset the tracker to a fresh state (as if newly constructed).
+
+        Clears all active tracks, ghost tracks, completed tracks, and resets
+        statistics counters.  The track ID counter is also reset so new tracks
+        start from 1 again, making it visually clear a new session has begun.
+
+        Called by ConveyorCounterApp when the 2-hour idle session reset fires.
+        """
+        self.tracks.clear()
+        self.completed_tracks.clear()
+        self.ghost_tracks.clear()
+        self._next_id = 1
+        self._duplicates_prevented = 0
+        self._tracks_created = 0
+        self._ghost_exits_promoted = 0
+        self._velocity_samples.clear()
+        self._learned_velocity_px_per_sec = None
+        self._last_conveyor_velocity = None
+        logger.info("[ConveyorTracker] RESET — all tracks and statistics cleared (idle session reset)")
+
     def cleanup(self):
         """Clean up tracker resources."""
         self.tracks.clear()

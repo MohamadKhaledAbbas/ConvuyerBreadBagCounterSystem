@@ -524,6 +524,23 @@ class BidirectionalSmoother:
             summary[record.class_name] = summary.get(record.class_name, 0) + 1
         return summary
 
+    def reset(self):
+        """Reset the smoother to a fresh state (as if newly constructed).
+
+        Called by ConveyorCounterApp when the 2-hour idle session reset fires.
+        Any pending items in the window are discarded (they belong to the old
+        session).  Statistics counters are zeroed.
+        """
+        self.window_buffer.clear()
+        self.confirmed_records.clear()
+        self._confirm_count = 0
+        self._last_activity_time = time.time()
+
+        self.total_records = 0
+        self.smoothed_records = 0
+
+        logger.info("[BidirectionalSmoother] RESET — all state cleared (idle session reset)")
+
     def cleanup(self):
         """Clean up resources."""
         if self.window_buffer:

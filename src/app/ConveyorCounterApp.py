@@ -300,6 +300,20 @@ class ConveyorCounterApp:
         self._last_state_publish_time: float = 0.0
         self._state_publish_interval_s: float = 25.0
 
+        # ── Idle session reset (2-hour inactivity auto-reset) ─────────────
+        # Mirrors the 2-hour cosmetic reset in the SSE/counts endpoint, but
+        # this one actually resets ALL internal pipeline state so that when
+        # work resumes the counters, smoother, tracker, and batch type all
+        # start from zero — as if the app had been freshly restarted.
+        #
+        # Timer design: _last_activity_for_reset is updated every frame when
+        # confirmed tracks or ghost tracks exist (same signal as the frame
+        # throttle's Signal B).  When it's been > _IDLE_SESSION_RESET_SECONDS
+        # since the last activity, the reset fires.  After reset the timestamp
+        # is zeroed so it won't fire again until new tracks appear and go idle.
+        self._IDLE_SESSION_RESET_SECONDS: float = 2 * 60 * 60  # 2 hours
+        self._last_activity_for_reset: float = 0.0  # 0 = no activity yet
+
         # Callbacks
         self._on_count_callback: Optional[Callable] = None
         
@@ -386,6 +400,101 @@ class ConveyorCounterApp:
                 )
             except Exception:
                 pass  # Non-critical — staleness fallback to "full" is safe
+
+    def _check_idle_session_reset(self) -> None:
+        """
+        Check whether the 2-hour idle session reset should fire.
+
+        Called on every frame in the main loop — cheap (single timestamp
+        comparison).  Uses ``_last_activity_for_reset`` which is updated
+        every frame when confirmed tracks or ghost tracks exist.
+
+        Lifecycle:
+          1. App starts → ``_last_activity_for_reset = 0`` (no activity yet,
+             nothing to reset).
+          2. Bags appear → confirmed tracks keep updating the timestamp.
+          3. Belt goes idle → timestamp freezes at the last-seen-tracks time.
+          4. After ``_IDLE_SESSION_RESET_SECONDS`` with no tracks → reset fires,
+             timestamp is zeroed back to 0.
+          5. New bags appear → back to step 2.
+        """
+        if self._last_activity_for_reset <= 0:
+            return  # No activity yet — nothing to reset
+
+        idle_seconds = time.time() - self._last_activity_for_reset
+        if idle_seconds < self._IDLE_SESSION_RESET_SECONDS:
+            return  # Not idle long enough
+
+        # ── Idle threshold reached — reset everything ──
+        self._perform_idle_session_reset()
+
+    def _perform_idle_session_reset(self) -> None:
+        """
+        Reset ALL internal pipeline state to zeros — full fresh-start.
+
+        This is the "real" reset behind the 2-hour idle threshold.  After this
+        method completes, every counter, smoother buffer, tracker, and batch-type
+        variable is zeroed.  The pipeline state file is written immediately so that
+        the SSE / counts endpoint see the clean slate right away.
+
+        Persistent data (database events) is NOT affected — only the in-memory
+        session state is cleared.
+        """
+        logger.info(
+            "[ConveyorCounterApp] ══════════════════════════════════════════════\n"
+            "  IDLE SESSION RESET — 2 hours of inactivity detected.\n"
+            "  Resetting all counters, smoother, tracker, and batch state.\n"
+            "  ══════════════════════════════════════════════════════════════"
+        )
+
+        # ── 1. CounterState ──────────────────────────────────────────────
+        with self.state._lock:
+            self.state.total_counted = 0
+            self.state.counts_by_class = {}
+            self.state.tentative_total = 0
+            self.state.tentative_counts = {}
+            self.state.active_tracks = 0
+            self.state.last_count_time = 0.0
+            self.state.first_count_time = 0.0
+            self.state.pending_classifications = 0
+            self.state.pending_smoothing = 0
+            self.state.last_classification = None
+            self.state.recent_events = []
+            self.state.rejected_count = 0
+            self.state.lost_track_count = 0
+            self.state.total_smoothed = 0
+
+        # ── 2. Smoother (RunLengthStateMachine or BidirectionalSmoother) ─
+        if self._smoother is not None:
+            self._smoother.reset()
+
+        # ── 3. Tracker ───────────────────────────────────────────────────
+        if self._pipeline_core is not None and self._pipeline_core.tracker is not None:
+            self._pipeline_core.tracker.reset()
+
+        # ── 4. ROI collector (clear cached ROIs from old session) ────────
+        if self._roi_collector is not None and hasattr(self._roi_collector, 'clear_all'):
+            try:
+                self._roi_collector.clear_all()
+            except Exception:
+                pass  # Best-effort
+
+        # ── 5. ROI cache (track_id → best_roi kept for save-by-class) ───
+        self._roi_cache.clear()
+
+        # ── 6. Batch type tracking ───────────────────────────────────────
+        self._current_batch_type = None
+        self._previous_batch_type = None
+        self._batch_type_window.clear()
+        self._last_classified_type = None
+
+        # ── 7. Zero the activity timer (prevents re-firing until new tracks) ─
+        self._last_activity_for_reset = 0.0
+
+        # ── 8. Write the zeroed pipeline state immediately ───────────────
+        self._publish_pipeline_state()
+
+        logger.info("[ConveyorCounterApp] Idle session reset complete — all values zeroed")
 
     def _init_components(self):
         """Initialize pipeline components with new modular architecture."""
@@ -669,6 +778,20 @@ class ConveyorCounterApp:
             ghosts_active = len(tracker.ghost_tracks) > 0
             if confirmed_tracks or ghosts_active:
                 self._throttle.report_activity()
+                self._last_activity_for_reset = time.time()
+        else:
+            # Throttle disabled — still need confirmed-track check for idle reset
+            tracker = self._pipeline_core.tracker
+            confirmed_tracks = tracker.get_confirmed_tracks()
+            ghosts_active = hasattr(tracker, 'ghost_tracks') and len(tracker.ghost_tracks) > 0
+            if confirmed_tracks or ghosts_active:
+                self._last_activity_for_reset = time.time()
+
+        # ── Idle session reset (2-hour inactivity) ────────────────────
+        # Runs every frame — cheap single timestamp comparison.
+        # If confirmed tracks existed and then disappeared for >2 hours,
+        # reset all counters so work resumes from zero.
+        self._check_idle_session_reset()
 
         # Update state
         self.state.active_tracks = len(active_tracks)

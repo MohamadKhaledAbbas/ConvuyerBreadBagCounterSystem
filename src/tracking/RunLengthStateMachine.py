@@ -335,6 +335,39 @@ class RunLengthStateMachine:
             summary[record.class_name] = summary.get(record.class_name, 0) + 1
         return summary
 
+    def reset(self):
+        """Reset the state machine to a fresh state (as if newly constructed).
+
+        Called by ConveyorCounterApp when the 2-hour idle session reset fires.
+        Any pending items are discarded (they belong to the old session).
+        Statistics counters are zeroed.
+        """
+        self._state = self.ACCUMULATING
+        self._confirmed_batch_class = None
+
+        self._accum_buffer.clear()
+        self._current_run.clear()
+        self._current_run_class = None
+
+        self._transition_buffer.clear()
+        self._transition_candidate_class = None
+        self._candidate_evidence_count = 0
+        self._transition_noise_count = 0
+
+        self._output_queue.clear()
+
+        self.confirmed_records.clear()
+        self.transition_history.clear()
+
+        self.total_records = 0
+        self.smoothed_records = 0
+        self._confirm_count = 0
+
+        self._last_activity_time = time.time()
+        self._last_decision_reason = ''
+
+        logger.info("[RunLengthStateMachine] RESET — all state cleared (idle session reset)")
+
     def cleanup(self):
         """Release resources; flush any remaining items."""
         if self._has_pending():

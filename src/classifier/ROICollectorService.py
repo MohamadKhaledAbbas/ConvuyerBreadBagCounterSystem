@@ -222,6 +222,15 @@ class ROICollectorService(IROICollector):
             f"{f', decay_rate={temporal_decay_rate:.2f}' if enable_temporal_weighting else ''}"
         )
 
+    def clear_all(self):
+        """Clear all cached ROI collections.
+
+        Called by ConveyorCounterApp during the 2-hour idle session reset to
+        discard ROIs from the previous work session.
+        """
+        self.collections.clear()
+        logger.info("[ROICollector] All ROI collections cleared (idle session reset)")
+
     def collect_roi(
         self,
         track_id: int,
