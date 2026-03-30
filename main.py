@@ -20,24 +20,34 @@ from src.config.settings import AppConfig
 from src.config.tracking_config import TrackingConfig
 from src.app.ConveyorCounterApp import ConveyorCounterApp
 from src.utils.AppLogging import logger
+from src.utils.platform import PLATFORM_NAME
+import src.config.paths as _paths
 
 
 def main():
     """Main entry point."""
-    logger.info("=" * 60)
-    logger.info("Conveyor Bread Bag Counter System v2")
-    logger.info("=" * 60)
-    
-    # Create configuration
     app_config = AppConfig()
     tracking_config = TrackingConfig()
-    
-    # Log configuration
-    logger.info(f"Detection model: {app_config.detection_model}")
-    logger.info(f"Classifier model: {app_config.classification_model}")
-    logger.info(f"Output dir: {tracking_config.spool_dir}")
-    logger.info(f"Database: {app_config.db_path}")
-    logger.info("Display and other settings: Read from database config")
+
+    W = 64
+    logger.info("=" * W)
+    logger.info(f"  Conveyor Bread Bag Counter  |  v{app_config.APP_VERSION}")
+    logger.info(f"  Platform : {PLATFORM_NAME}")
+    logger.info("=" * W)
+    logger.info(f"  Paths")
+    logger.info(f"    Data dir       : {_paths.DATA_DIR}")
+    logger.info(f"    Database       : {_paths.DB_PATH}")
+    logger.info(f"    Logs           : {_paths.LOG_DIR}")
+    logger.info(f"    Spool          : {_paths.SPOOL_DIR}")
+    logger.info(f"    Recordings     : {_paths.RECORDING_DIR}")
+    logger.info(f"    Pipeline state : {_paths.PIPELINE_STATE_FILE}")
+    logger.info(f"    IPC status     : {_paths.TMP_STATUS_DIR}/")
+    logger.info("-" * W)
+    logger.info(f"  Models")
+    logger.info(f"    Detection      : {app_config.detection_model}")
+    logger.info(f"    Classification : {app_config.classification_model}")
+    logger.info("=" * W)
+    logger.info("  Display and other runtime settings: read from database config")
 
     # Create and run application (config read from DB)
     app = ConveyorCounterApp(

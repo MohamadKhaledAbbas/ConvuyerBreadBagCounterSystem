@@ -40,11 +40,13 @@ from src.utils.platform import is_rdk_platform
 router = APIRouter(prefix="/api/health", tags=["health"])
 
 # ── Cross-process status file paths ──────────────────────────────────
-# Each path MUST match the constant in the writer module.
-CODEC_HEALTH_STATUS_FILE = "/tmp/codec_health_status.json"
-SPOOL_PROCESSOR_STATUS_FILE = "/tmp/spool_processor_status.json"
-SPOOL_RECORDER_STATUS_FILE = "/tmp/spool_recorder_status.json"
-PIPELINE_THROTTLE_STATE_FILE = "/tmp/pipeline_throttle.json"
+# Imported from the single-source-of-truth paths module.
+from src.config.paths import (
+    CODEC_HEALTH_STATUS_FILE,
+    SPOOL_PROCESSOR_STATUS_FILE,
+    SPOOL_RECORDER_STATUS_FILE,
+    PIPELINE_THROTTLE_STATE_FILE,
+)
 
 
 class RecoverRequest(BaseModel):

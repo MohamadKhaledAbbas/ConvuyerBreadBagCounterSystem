@@ -17,9 +17,7 @@ import time
 from typing import Dict, Any, Optional
 
 from src.utils.AppLogging import logger
-
-# Default state file location (same data directory as database)
-_DEFAULT_STATE_PATH = "data/pipeline_state.json"
+from src.config.paths import PIPELINE_STATE_FILE as _DEFAULT_STATE_PATH
 
 # Cache: once the directory is known to exist, skip os.makedirs() on
 # subsequent writes.  Keyed by the parent directory string.

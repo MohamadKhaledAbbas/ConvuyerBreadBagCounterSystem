@@ -19,7 +19,7 @@ import subprocess
 from typing import Dict, Any, Optional
 
 from src.utils.AppLogging import logger
-from src.utils.platform import is_rdk_platform, IS_WINDOWS
+from src.utils.platform import is_rdk_platform, IS_WINDOWS, IS_LINUX
 
 
 def get_system_info(db_path: Optional[str] = None) -> Dict[str, Any]:
@@ -255,7 +255,7 @@ def _get_generic_temperatures() -> Dict[str, Any]:
         pass
 
     # Linux sysfs fallback
-    if not IS_WINDOWS:
+    if IS_LINUX:
         result.update(_read_thermal_zones())
 
     return result

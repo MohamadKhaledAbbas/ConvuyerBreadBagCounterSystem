@@ -35,7 +35,7 @@ from src.utils.AppLogging import logger
 # Default path for the shared throttle state file.
 # /tmp is a RAM-backed tmpfs on the RDK, so reads/writes are fast and
 # will not wear the eMMC.
-DEFAULT_THROTTLE_STATE_PATH = "/tmp/pipeline_throttle.json"
+from src.config.paths import PIPELINE_THROTTLE_STATE_FILE as DEFAULT_THROTTLE_STATE_PATH
 
 
 def write_throttle_state(

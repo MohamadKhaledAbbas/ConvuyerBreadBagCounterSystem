@@ -29,11 +29,11 @@ from fastapi.responses import Response, HTMLResponse
 from src.constants import snapshot_requested_key
 from src.endpoint.shared import get_db
 from src.utils.AppLogging import logger
+from src.config.paths import SNAPSHOT_DIR
 
 router = APIRouter(tags=["snapshot"])
 
 # Default snapshot directory
-SNAPSHOT_DIR = os.getenv("SNAPSHOT_DIR", "data/snapshot")
 SNAPSHOT_RAW_PATH = os.path.join(SNAPSHOT_DIR, "latest_raw.jpg")
 SNAPSHOT_OVERLAY_PATH = os.path.join(SNAPSHOT_DIR, "latest_overlay.jpg")
 SNAPSHOT_META_PATH = os.path.join(SNAPSHOT_DIR, "latest_meta.json")

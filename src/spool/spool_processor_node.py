@@ -79,7 +79,12 @@ class PlaybackMode(Enum):
 # ── Cross-process status file ────────────────────────────────────────
 # Written by the processor's _process_loop every few seconds so the
 # FastAPI health endpoint (separate process) can report spool stats.
-SPOOL_PROCESSOR_STATUS_FILE = "/tmp/spool_processor_status.json"
+from src.config.paths import (
+    SPOOL_DIR,
+    SPOOL_PROCESSOR_STATUS_FILE,
+    SPOOL_PROCESSOR_STATE_FILE,
+)
+
 _STATUS_WRITE_INTERVAL_S = 5.0  # write status file every 5 seconds
 
 
@@ -125,9 +130,9 @@ class RollingFPSCounter:
 @dataclass
 class ProcessorConfig:
     """Configuration for spool processor."""
-    spool_dir: str = "/tmp/spool"
+    spool_dir: str = SPOOL_DIR
     output_topic: str = "/spool_image_ch_0"
-    state_file: str = "/tmp/spool/processor_state.json"
+    state_file: str = SPOOL_PROCESSOR_STATE_FILE
     playback_mode: PlaybackMode = PlaybackMode.FAST  # Process as fast as possible to catch up
     base_fps: float = 30.0
     min_frame_interval_ms: float = 33.0  # ~30fps max (1000/33 = 30.3 fps) - prevents CPU overload
@@ -819,7 +824,7 @@ def main():
     rclpy.init()
 
     config = ProcessorConfig(
-        spool_dir="/tmp/spool",
+        spool_dir=SPOOL_DIR,
         output_topic="/spool_image_ch_0",
         playback_mode=PlaybackMode.ADAPTIVE,
         base_fps=30.0

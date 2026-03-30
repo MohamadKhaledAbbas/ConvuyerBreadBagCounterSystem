@@ -27,11 +27,11 @@ import time
 from pathlib import Path
 from typing import Dict
 
+from src.config.paths import LOG_DIR
+
 # ============================================================================
 # Logging Configuration Constants
 # ============================================================================
-
-LOG_DIR: str = "data/logs"
 
 # Retention
 LOG_RETENTION_DAYS: int = 7  # Days to keep rotated/compressed logs

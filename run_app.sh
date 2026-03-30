@@ -28,9 +28,12 @@ fi
 echo "[INFO] is_development=$IS_DEVELOPMENT, show_ui_screen=$SHOW_UI_SCREEN, accuracy_mode=$ACCURACY_MODE"
 
 # --- Clean up stale artifacts from previous runs / unclean shutdown ---
+# Read centralized paths from Python paths module
+TMP_STATUS_DIR=$(python3 -c "from src.config.paths import TMP_STATUS_DIR; print(TMP_STATUS_DIR)" 2>/dev/null || echo "/tmp")
+SPOOL_DIR=$(python3 -c "from src.config.paths import SPOOL_DIR; print(SPOOL_DIR)" 2>/dev/null || echo "/tmp/spool")
 echo "[INFO] Cleaning up stale artifacts from previous runs..."
-rm -f /tmp/codec_health_status.json
-rm -f /tmp/spool/*.tmp 2>/dev/null
+rm -f "${TMP_STATUS_DIR}/codec_health_status.json"
+rm -f "${SPOOL_DIR}"/*.tmp 2>/dev/null
 # Clean FastDDS shared memory artifacts that can cause issues after power loss
 rm -f /dev/shm/fastrtps_* /dev/shm/fast_datasharing_* 2>/dev/null
 echo "[INFO] Stale artifact cleanup complete"

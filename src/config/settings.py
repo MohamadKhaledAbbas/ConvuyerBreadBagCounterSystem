@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, Any, Optional
 
+from src.config.paths import DB_PATH, RECORDING_DIR
 from src.utils.platform import IS_RDK
 
 
@@ -49,10 +50,10 @@ class AppConfig:
     Application configuration for ConvuyerBreadBagCounterSystem.
     """
     
-    APP_VERSION: str = "28-03-2026_v2.7.5"
+    APP_VERSION: str = "28-03-2026_v2.8.0"
 
     # Video source for testing
-    video_path: str = os.getenv("VIDEO_PATH", "D:\\Recordings\\2026_02_05\\2026_03_03\\output_2026-03-02_22-45-22.h264")
+    video_path: str = os.getenv("VIDEO_PATH", "/media/khaled/DATA/Recordings/2026_02_05/2026_03_03/output_2026-03-02_22-45-22.h264")
     
     # Platform-specific model paths
     detection_model: str = os.getenv(
@@ -67,13 +68,10 @@ class AppConfig:
     )
     
     # Database path
-    if IS_RDK:
-        db_path: str = os.getenv("DB_PATH", "/home/sunrise/ConvuyerBreadCounting/data/db/bag_events.db")
-    else:
-        db_path: str = os.getenv("DB_PATH", "data/db/bag_events.db")
+    db_path: str = DB_PATH
     
     # Recording directory
-    recording_dir: str = os.getenv("RECORDING_DIR", "data/recordings")
+    recording_dir: str = RECORDING_DIR
     
     # Model versions
     detection_model_version: str = os.getenv("DETECTION_MODEL_VERSION", "v1.0")

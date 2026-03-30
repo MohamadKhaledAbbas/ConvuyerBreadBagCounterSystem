@@ -58,7 +58,8 @@ def generate_launch_description():
     ]
 
     # Get RTSP configuration from database
-    db_path = os.getenv("DB_PATH", "/home/sunrise/ConvuyerBreadCounting/data/db/bag_events.db")
+    from src.config.paths import DB_PATH
+    db_path = DB_PATH
     db = DatabaseManager(db_path)
 
     rtsp_username = db.get_config(constants.rtsp_username, 'admin')

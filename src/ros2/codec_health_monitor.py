@@ -184,8 +184,7 @@ class MonitorStats:
 # Shared status file (cross-process communication)
 # ---------------------------------------------------------------------------
 
-CODEC_HEALTH_STATUS_FILE = "/tmp/codec_health_status.json"
-SPOOL_TMP_PATTERN = "/tmp/spool/*.tmp"
+from src.config.paths import CODEC_HEALTH_STATUS_FILE, SPOOL_TMP_PATTERN
 
 
 def read_codec_health_status() -> Optional[dict]:

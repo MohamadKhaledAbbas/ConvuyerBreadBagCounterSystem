@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 
 from src.utils.AppLogging import logger
+from src.config.paths import KNOWN_CLASSES_DIR
 
 
 class DatabaseManager:
@@ -330,15 +331,15 @@ class DatabaseManager:
     def _seed_default_bag_types(self):
         """Seed default bag types if they don't exist (fallback schema path)."""
         default_bag_types = [
-            (1, 'Brown_Orange', 'عربي', 0, 'data/classes/Brown_Orange_Family/Brown_Orange_Family.jpg', '2026-02-03 03:31:05'),
-            (2, 'Red_Yellow', '11 رغيف', 0, 'data/classes/Red_Yellow/Red_Yellow.jpg', '2026-02-03 03:31:05'),
-            (3, 'Wheatberry', 'قمحة ', 0, 'data/classes/Wheatberry/Wheatberry.jpg', '2026-02-03 10:52:21'),
-            (4, 'Blue_Yellow', '12 رغيف', 0, 'data/classes/Blue_Yellow/Blue_Yellow.jpg', '2026-02-06 01:39:32'),
-            (5, 'Green_Yellow', '14 رغيف', 0, 'data/classes/Green_Yellow/Green_Yellow.jpg', '2026-02-06 01:55:36'),
-            (6, 'Bran', 'نخالة', 0, 'data/classes/Bran/Bran.jpg', '2026-02-08 18:16:49'),
-            (7, 'Black_Orange', 'عشرات', 0, 'data/classes/Black_Orange/Black_Orange.jpg', '2026-02-10 00:00:00'),
-            (8, 'Purple_Yellow', 'شاورما', 0, 'data/classes/Purple_Yellow/Purple_Yellow.jpg', '2026-02-10 00:00:00'),
-            (9, 'Rejected', 'غير واضحة', 0, 'data/classes/Rejected/Rejected.jpg', '2026-02-06 01:51:49'),
+            (1, 'Brown_Orange', 'عربي', 0, f'{KNOWN_CLASSES_DIR}/Brown_Orange_Family/Brown_Orange_Family.jpg', '2026-02-03 03:31:05'),
+            (2, 'Red_Yellow', '11 رغيف', 0, f'{KNOWN_CLASSES_DIR}/Red_Yellow/Red_Yellow.jpg', '2026-02-03 03:31:05'),
+            (3, 'Wheatberry', 'قمحة ', 0, f'{KNOWN_CLASSES_DIR}/Wheatberry/Wheatberry.jpg', '2026-02-03 10:52:21'),
+            (4, 'Blue_Yellow', '12 رغيف', 0, f'{KNOWN_CLASSES_DIR}/Blue_Yellow/Blue_Yellow.jpg', '2026-02-06 01:39:32'),
+            (5, 'Green_Yellow', '14 رغيف', 0, f'{KNOWN_CLASSES_DIR}/Green_Yellow/Green_Yellow.jpg', '2026-02-06 01:55:36'),
+            (6, 'Bran', 'نخالة', 0, f'{KNOWN_CLASSES_DIR}/Bran/Bran.jpg', '2026-02-08 18:16:49'),
+            (7, 'Black_Orange', 'عشرات', 0, f'{KNOWN_CLASSES_DIR}/Black_Orange/Black_Orange.jpg', '2026-02-10 00:00:00'),
+            (8, 'Purple_Yellow', 'شاورما', 0, f'{KNOWN_CLASSES_DIR}/Purple_Yellow/Purple_Yellow.jpg', '2026-02-10 00:00:00'),
+            (9, 'Rejected', 'غير واضحة', 0, f'{KNOWN_CLASSES_DIR}/Rejected/Rejected.jpg', '2026-02-06 01:51:49'),
         ]
         with self._cursor() as cursor:
             cursor.executemany(
@@ -361,7 +362,7 @@ class DatabaseManager:
             if result:
                 return result[0]
             if thumb is None:
-                thumb = f"data/classes/{name}/{name}.jpg"
+                thumb = f"{KNOWN_CLASSES_DIR}/{name}/{name}.jpg"
             cursor.execute(
                 "INSERT INTO bag_types (name, arabic_name, weight, thumb) VALUES (?, ?, ?, ?)",
                 (name, arabic_name or name, weight, thumb)

@@ -37,6 +37,11 @@ from src.utils.AppLogging import logger
 from src.utils.system_info import get_system_info
 
 from src.config.settings import AppConfig
+from src.config.paths import (
+    CODEC_HEALTH_STATUS_FILE,
+    SPOOL_PROCESSOR_STATUS_FILE,
+    SPOOL_RECORDER_STATUS_FILE,
+)
 
 # Application version
 APP_VERSION = AppConfig.APP_VERSION
@@ -229,7 +234,7 @@ async def health() -> JSONResponse:
         degraded_reasons.append("قاعدة البيانات غير متصلة")
 
     # Codec / spool / RTSP from shared status file
-    codec_status_file = "/tmp/codec_health_status.json"
+    codec_status_file = CODEC_HEALTH_STATUS_FILE
     codec_data = None
     try:
         if os.path.exists(codec_status_file):
@@ -298,7 +303,7 @@ async def health() -> JSONResponse:
     # ── Spool recorder stats (RTSP → disk, cross-process) ──
     spool_recorder: Dict[str, Any] = {"available": False}
     try:
-        _rec_path = "/tmp/spool_recorder_status.json"
+        _rec_path = SPOOL_RECORDER_STATUS_FILE
         if os.path.exists(_rec_path):
             import json
             with open(_rec_path, "r") as _f:
@@ -322,7 +327,7 @@ async def health() -> JSONResponse:
     # ── Spool processor stats (disk → codec, cross-process) ──
     spool_processor: Dict[str, Any] = {"available": False}
     try:
-        _proc_path = "/tmp/spool_processor_status.json"
+        _proc_path = SPOOL_PROCESSOR_STATUS_FILE
         if os.path.exists(_proc_path):
             import json
             with open(_proc_path, "r") as _f:
@@ -469,12 +474,13 @@ def setup_static_mounts() -> None:
     Creates directories if they don't exist.
     """
     # Unknown classes directory (images for manual classification)
-    unknown_dir = os.getenv("UNKNOWN_CLASSES_DIR", "data/unknown")
+    from src.config.paths import UNKNOWN_CLASSES_DIR, KNOWN_CLASSES_DIR
+    unknown_dir = UNKNOWN_CLASSES_DIR
     os.makedirs(unknown_dir, exist_ok=True)
     app.mount("/unknown_classes", StaticFiles(directory=unknown_dir), name="unknown_classes")
 
     # Known classes directory (reference images)
-    classes_dir = os.getenv("CLASSES_DIR", "data/classes")
+    classes_dir = KNOWN_CLASSES_DIR
     os.makedirs(classes_dir, exist_ok=True)
     app.mount("/known_classes", StaticFiles(directory=classes_dir), name="known_classes")
 

@@ -18,6 +18,8 @@ from fastapi import APIRouter, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, StreamingResponse
 
+from src.config.paths import KNOWN_CLASSES_DIR
+
 from src.endpoint.pipeline_state import read_state
 from src.endpoint.shared import get_db, get_templates
 from src.utils.AppLogging import logger
@@ -168,7 +170,7 @@ async def api_bag_types() -> List[Dict[str, Any]]:
     # Normalize thumb paths: data/classes/X → known_classes/X
     for bt in bag_types:
         thumb = bt.get("thumb", "") or ""
-        bt["thumb"] = thumb.replace("data/classes/", "known_classes/")
+        bt["thumb"] = thumb.replace(KNOWN_CLASSES_DIR + "/", "known_classes/")
 
     return bag_types
 

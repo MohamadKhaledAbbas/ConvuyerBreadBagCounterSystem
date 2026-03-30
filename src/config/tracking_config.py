@@ -13,6 +13,11 @@ This allows for simpler tracking logic without complex state machines.
 import os
 from dataclasses import dataclass
 
+from src.config.paths import SPOOL_DIR as _DEFAULT_SPOOL_DIR
+from src.config.paths import ROI_CANDIDATES_DIR as _DEFAULT_ROI_CANDIDATES_DIR
+from src.config.paths import CLASSIFIED_ROIS_DIR as _DEFAULT_CLASSIFIED_ROIS_DIR
+from src.config.paths import LOST_SNAPSHOTS_DIR as _DEFAULT_LOST_SNAPSHOTS_DIR
+
 from src.utils.platform import IS_RDK
 
 
@@ -591,7 +596,7 @@ class TrackingConfig:
     
     spool_dir: str = _parse_str_env(
         "SPOOL_DIR",
-        "/home/sunrise/ConvuyerBreadCounting/data/spool" if IS_RDK else "data/spool"
+        _DEFAULT_SPOOL_DIR
     )
     """Directory for spool segment files."""
     
@@ -623,7 +628,7 @@ class TrackingConfig:
     save_roi_candidates: bool = _parse_bool_env("SAVE_ROI_CANDIDATES", False)
     """Save ROI candidates with metadata."""
     
-    roi_candidates_dir: str = _parse_str_env("ROI_CANDIDATES_DIR", "data/roi_candidates")
+    roi_candidates_dir: str = _parse_str_env("ROI_CANDIDATES_DIR", _DEFAULT_ROI_CANDIDATES_DIR)
     """Directory for saved ROI candidates."""
     
     save_rois_by_class: bool = _parse_bool_env("SAVE_ROIS_BY_CLASS", False)
@@ -636,7 +641,7 @@ class TrackingConfig:
     Only the top-K ROIs selected for classification voting are saved.
     """
 
-    classified_rois_dir: str = _parse_str_env("CLASSIFIED_ROIS_DIR", "data/classified_rois")
+    classified_rois_dir: str = _parse_str_env("CLASSIFIED_ROIS_DIR", _DEFAULT_CLASSIFIED_ROIS_DIR)
     """Directory for saving ROIs used in classification."""
 
     classified_rois_retention_hours: float = _parse_float_env("CLASSIFIED_ROIS_RETENTION_HOURS", 72.0)
@@ -662,7 +667,7 @@ class TrackingConfig:
 
     # ── Lost track snapshot settings ──────────────────────────────────────
 
-    lost_snapshots_dir: str = _parse_str_env("LOST_SNAPSHOTS_DIR", "data/spool/lost_snapshots")
+    lost_snapshots_dir: str = _parse_str_env("LOST_SNAPSHOTS_DIR", _DEFAULT_LOST_SNAPSHOTS_DIR)
     """Directory for saving frame snapshots when tracks are lost."""
 
     lost_snapshots_retention_hours: float = _parse_float_env("LOST_SNAPSHOTS_RETENTION_HOURS", 24.0)

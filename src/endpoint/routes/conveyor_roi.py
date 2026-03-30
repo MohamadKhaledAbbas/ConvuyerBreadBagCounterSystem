@@ -13,6 +13,8 @@ false-positive detections on table edges, operator hands, etc.
 import json
 import os
 
+from src.config.paths import CONVEYOR_ROI_FILE
+
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
@@ -89,7 +91,7 @@ async def update_conveyor_roi(request: Request):
     }
 
 
-_ROI_PERSIST_PATH = "data/conveyor_roi.json"
+_ROI_PERSIST_PATH = CONVEYOR_ROI_FILE
 
 
 def _persist_roi_settings(cfg: TrackingConfig):

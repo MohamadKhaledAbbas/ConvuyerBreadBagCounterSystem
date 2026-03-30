@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Optional, List, Set
 
 from src.utils.AppLogging import logger
+from src.config.paths import PIPELINE_THROTTLE_STATE_FILE
 
 
 @dataclass
@@ -38,7 +39,7 @@ class RetentionConfig:
     # current pipeline mode without depending on set_idle_mode() being called.
     # Same file that ConveyorCounterApp writes and SpoolProcessorNode reads.
     # Set to "" to disable self-detection and rely only on set_idle_mode().
-    throttle_state_path: str = "/tmp/pipeline_throttle.json"
+    throttle_state_path: str = PIPELINE_THROTTLE_STATE_FILE
     throttle_staleness_s: float = 120.0         # treat stale file as "full" mode
 
 

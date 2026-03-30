@@ -13,6 +13,8 @@ All configuration in one place for maintainability.
 from dataclasses import dataclass
 from typing import Optional
 
+from src.config.paths import DB_PATH, KNOWN_CLASSES_DIR, UNKNOWN_CLASSES_DIR
+
 
 @dataclass
 class AppConfig:
@@ -31,12 +33,12 @@ class AppConfig:
     shift_end_hour: int = 14    # Daily shift end time (2 PM next day)
 
     # ==================== Database Configuration ====================
-    db_path: str = "data/db/bag_events.db"
+    db_path: str = DB_PATH
 
     # ==================== Image Paths Configuration ====================
     # Filesystem paths
-    known_classes_dir: str = "data/classes"      # Known bag type images
-    unknown_classes_dir: str = "data/unknown"    # Unknown/unclassified images
+    known_classes_dir: str = KNOWN_CLASSES_DIR      # Known bag type images
+    unknown_classes_dir: str = UNKNOWN_CLASSES_DIR    # Unknown/unclassified images
 
     # Web serving paths (URL paths)
     web_known_classes_path: str = "known_classes"

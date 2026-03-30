@@ -31,7 +31,8 @@ from src.utils.platform import is_rdk_platform
 # ── Cross-process status file ────────────────────────────────────────
 # Written periodically from the writer thread so the FastAPI health
 # endpoint (separate process) can report RTSP ingestion stats.
-SPOOL_RECORDER_STATUS_FILE = "/tmp/spool_recorder_status.json"
+from src.config.paths import SPOOL_RECORDER_STATUS_FILE, SPOOL_DIR
+
 _RECORDER_STATUS_INTERVAL_S = 5.0  # write every 5 seconds
 
 # ROS2 imports (conditional)
@@ -55,7 +56,7 @@ else:
 class RecorderConfig:
     """Configuration for spool recorder."""
     topic: str = "/rtsp_image_ch_0"
-    spool_dir: str = "/tmp/spool"
+    spool_dir: str = SPOOL_DIR
     segment_duration: float = 5.0
     max_segment_duration: float = 10.0
     write_metadata: bool = True
@@ -439,7 +440,7 @@ def main():
 
     config = RecorderConfig(
         topic="/rtsp_image_ch_0",
-        spool_dir="/tmp/spool",
+        spool_dir=SPOOL_DIR,
         segment_duration=5.0
     )
 

@@ -13,6 +13,8 @@ import time
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple
 
+from src.config.paths import ROI_CANDIDATES_DIR as _DEFAULT_ROI_CANDIDATES_DIR
+
 import cv2
 import numpy as np
 
@@ -72,7 +74,7 @@ class EnhancedROICollectorService(IROICollector):
         max_rois_per_track: int = 10,
         save_roi_candidates: bool = False,
         save_all_rois: bool = False,
-        roi_candidates_dir: str = "data/roi_candidates"
+        roi_candidates_dir: str = _DEFAULT_ROI_CANDIDATES_DIR
     ):
         """Initialize enhanced ROI collector."""
         self.quality_config = quality_config or EnhancedROIQualityConfig()
