@@ -41,7 +41,7 @@ python3 model_converter/mapper.py --onnx model/yolo_small_classify_v14.onnx --ca
 
 ---
 
-rsync -avz --progress --filter="merge rsync.rules" /mnt/c/0001_MyFiles/0016_Projects/0002_ProjectBased/0012_ConvuyerBreadBagCounterSystem/* sunrise@rdkboard:/home/sunrise/ConvuyerBreadCounting
+rsync -avz --progress --filter="merge rsync.rules" /MyFiles/0002_project_based/0002_ConvuyerBreadCounting/ConvuyerBreadBagCounterSystem/* rdkboard:/home/sunrise/ConvuyerBreadCounting
 
 
 # Run mapper.py with RGB input type and calibration images:

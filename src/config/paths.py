@@ -28,7 +28,7 @@ from src.utils.platform import IS_RDK
 
 DATA_DIR: str = os.getenv(
     "DATA_DIR",
-    "/media/USB_DRIVE/ConvuyerBreadCounting/data" if IS_RDK else "data/mytestdata",
+    "/media/USB_DRIVE/ConvuyerBreadCounting/data" if IS_RDK else "data",
 )
 
 # Spool: video segment files + processor state.
