@@ -28,6 +28,9 @@ from src.utils.platform import IS_LINUX, IS_RDK
 # Base directories — change DATA_DIR to relocate db/logs/recordings/classes
 # ============================================================================
 
+# Fixed project root on the RDK board. Used as the base for the local
+# fallback data directory when no writable USB/SSD drive is found.
+_PROJECT_ROOT: str = os.getenv("PROJECT_ROOT", "/home/sunrise/ConvuyerBreadCounting")
 
 _APP_DIR_NAME = "ConvuyerBreadCounting"
 
@@ -90,16 +93,18 @@ def _resolve_root_ssd_drive() -> str:
             continue
         candidates.append(target)
 
-    # Prefer a drive that already has the application directory on it.
+    # Prefer a drive that already has the application directory AND is writable.
     for target in candidates:
-        if os.path.isdir(os.path.join(target, _APP_DIR_NAME)):
+        if os.path.isdir(os.path.join(target, _APP_DIR_NAME)) and os.access(target, os.W_OK):
             return target
 
-    # No drive has the app directory yet — use the first available mount
+    # No drive has the app directory yet — use the first writable mount
     # so the app can create its data layout on a fresh drive.
-    if candidates:
-        return candidates[0]
+    for target in candidates:
+        if os.access(target, os.W_OK):
+            return target
 
+    # All candidates exist but none are writable (read-only mount).
     return ""
 
 
@@ -108,7 +113,7 @@ ROOT_SSD_DRIVE: str = _resolve_root_ssd_drive()
 DEFAULT_DATA_DIR: str = (
     os.path.join(ROOT_SSD_DRIVE, "ConvuyerBreadCounting", "data")
     if ROOT_SSD_DRIVE
-    else "data"
+    else os.path.join(_PROJECT_ROOT, "data")
 )
 
 DATA_DIR: str = os.getenv(

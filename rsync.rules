@@ -37,6 +37,7 @@
 - data/roi_candidates/
 - data/unknown/
 - data/dataset/
+- data/model
 
 # =============================================================================
 # INCLUDE: Essential application files

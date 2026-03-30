@@ -152,11 +152,43 @@ def setup_logging(
     Returns:
         Configured root application logger.
     """
-    # Ensure log directory exists
-    Path(log_dir).mkdir(parents=True, exist_ok=True)
+    # Ensure log directory exists, falling back to local data/logs if the
+    # primary path (e.g. an SSD mount) is not writable by this user.
+    _FALLBACK_LOG_DIR = os.path.join("data", "logs")
 
-    # Proactive cleanup of aged log artefacts
-    _cleanup_old_logs(log_dir, retention_days=retention_days)
+    def _try_prepare_log_dir(directory: str) -> bool:
+        """Return True if *directory* exists (or was created) and is writable."""
+        try:
+            Path(directory).mkdir(parents=True, exist_ok=True)
+            # Quick write-access probe — avoids discovering the problem only
+            # when the RotatingFileHandler tries to open the log file.
+            probe = os.path.join(directory, ".write_probe")
+            with open(probe, "w") as _f:
+                pass
+            os.remove(probe)
+            return True
+        except (PermissionError, OSError):
+            return False
+
+    if not _try_prepare_log_dir(log_dir):
+        print(
+            f"[Logging] WARNING: cannot write to '{log_dir}' "
+            f"(permission denied) — falling back to '{_FALLBACK_LOG_DIR}'",
+            flush=True,
+        )
+        log_dir = _FALLBACK_LOG_DIR
+        if not _try_prepare_log_dir(log_dir):
+            # Last resort: console-only logging
+            print(
+                f"[Logging] ERROR: fallback log dir '{log_dir}' also not writable"
+                " — file logging disabled, console only.",
+                flush=True,
+            )
+            log_dir = ""
+
+    if log_dir:
+        # Proactive cleanup of aged log artefacts
+        _cleanup_old_logs(log_dir, retention_days=retention_days)
 
     # Logger setup
     app_logger = logging.getLogger("ConvuyerBreadBagCounter")
@@ -170,33 +202,34 @@ def setup_logging(
     detailed_formatter = logging.Formatter(_DETAILED_FMT, datefmt=_DETAILED_DATEFMT)
     console_formatter = logging.Formatter(_CONSOLE_FMT, datefmt=_CONSOLE_DATEFMT)
 
-    # --- 1. Rotating main log (DEBUG+) ---
-    main_log_path = os.path.join(log_dir, "convuyer_counter.log")
-    main_handler = logging.handlers.RotatingFileHandler(
-        main_log_path,
-        maxBytes=log_max_bytes,
-        backupCount=log_backup_count,
-        encoding="utf-8",
-    )
-    main_handler.setLevel(logging.DEBUG)
-    main_handler.setFormatter(detailed_formatter)
-    main_handler.namer = _namer
-    main_handler.rotator = _rotator
-    app_logger.addHandler(main_handler)
+    if log_dir:
+        # --- 1. Rotating main log (DEBUG+) ---
+        main_log_path = os.path.join(log_dir, "convuyer_counter.log")
+        main_handler = logging.handlers.RotatingFileHandler(
+            main_log_path,
+            maxBytes=log_max_bytes,
+            backupCount=log_backup_count,
+            encoding="utf-8",
+        )
+        main_handler.setLevel(logging.DEBUG)
+        main_handler.setFormatter(detailed_formatter)
+        main_handler.namer = _namer
+        main_handler.rotator = _rotator
+        app_logger.addHandler(main_handler)
 
-    # --- 2. Rotating error log (WARNING+) ---
-    error_log_path = os.path.join(log_dir, "convuyer_counter_error.log")
-    error_handler = logging.handlers.RotatingFileHandler(
-        error_log_path,
-        maxBytes=error_log_max_bytes,
-        backupCount=error_log_backup_count,
-        encoding="utf-8",
-    )
-    error_handler.setLevel(logging.WARNING)
-    error_handler.setFormatter(detailed_formatter)
-    error_handler.namer = _namer
-    error_handler.rotator = _rotator
-    app_logger.addHandler(error_handler)
+        # --- 2. Rotating error log (WARNING+) ---
+        error_log_path = os.path.join(log_dir, "convuyer_counter_error.log")
+        error_handler = logging.handlers.RotatingFileHandler(
+            error_log_path,
+            maxBytes=error_log_max_bytes,
+            backupCount=error_log_backup_count,
+            encoding="utf-8",
+        )
+        error_handler.setLevel(logging.WARNING)
+        error_handler.setFormatter(detailed_formatter)
+        error_handler.namer = _namer
+        error_handler.rotator = _rotator
+        app_logger.addHandler(error_handler)
 
     # --- 3. Console handler (INFO+ by default) ---
     console_handler = logging.StreamHandler(sys.stdout)
@@ -205,17 +238,20 @@ def setup_logging(
     app_logger.addHandler(console_handler)
 
     # Startup banner
-    app_logger.info(
-        "[Logging] Initialised — main=%s (max %s MB × %d backups), "
-        "error=%s (max %s MB × %d backups), retention=%d days",
-        main_log_path,
-        round(log_max_bytes / (1024 * 1024), 1),
-        log_backup_count,
-        error_log_path,
-        round(error_log_max_bytes / (1024 * 1024), 1),
-        error_log_backup_count,
-        retention_days,
-    )
+    if log_dir:
+        app_logger.info(
+            "[Logging] Initialised — main=%s (max %s MB × %d backups), "
+            "error=%s (max %s MB × %d backups), retention=%d days",
+            os.path.join(log_dir, "convuyer_counter.log"),
+            round(log_max_bytes / (1024 * 1024), 1),
+            log_backup_count,
+            os.path.join(log_dir, "convuyer_counter_error.log"),
+            round(error_log_max_bytes / (1024 * 1024), 1),
+            error_log_backup_count,
+            retention_days,
+        )
+    else:
+        app_logger.warning("[Logging] File logging disabled — console only (no writable log directory found)")
 
     return app_logger
 
