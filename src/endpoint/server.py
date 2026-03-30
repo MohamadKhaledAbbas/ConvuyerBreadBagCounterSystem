@@ -41,6 +41,13 @@ from src.config.paths import (
     CODEC_HEALTH_STATUS_FILE,
     SPOOL_PROCESSOR_STATUS_FILE,
     SPOOL_RECORDER_STATUS_FILE,
+    ROOT_SSD_DRIVE,
+    DATA_DIR,
+    LOG_DIR,
+    DB_PATH,
+    SPOOL_DIR,
+    SNAPSHOT_DIR,
+    RECORDING_DIR,
 )
 
 # Application version
@@ -381,6 +388,17 @@ async def health() -> JSONResponse:
     except Exception:
         pass
 
+    # ── Storage paths ──
+    storage_paths = {
+        "root_ssd_drive": ROOT_SSD_DRIVE or None,
+        "data_dir": DATA_DIR,
+        "log_dir": LOG_DIR,
+        "db_path": DB_PATH,
+        "spool_dir": SPOOL_DIR,
+        "snapshot_dir": SNAPSHOT_DIR,
+        "recording_dir": RECORDING_DIR,
+    }
+
     payload = {
         "status": overall_status,
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -415,6 +433,7 @@ async def health() -> JSONResponse:
         "degraded_reasons": degraded_reasons,
         "monitoring_log_summary": log_summary,
         "system_info": system_info,
+        "storage_paths": storage_paths,
     }
 
     # Return with explicit Cache-Control header so browsers and any reverse-

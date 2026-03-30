@@ -8,6 +8,7 @@ Every module that needs a file/directory path MUST import from here
 instead of hardcoding strings.
 
 Environment variables override every path:
+    ROOT_SSD_DRIVE     → mounted SSD/USB root used to build DATA_DIR
     DATA_DIR            → base for db, recordings, pipeline state, classes
     SPOOL_DIR           → video segment spool files
     LOG_DIR             → application log files
@@ -19,16 +20,100 @@ Environment variables override every path:
 """
 
 import os
+import subprocess
 
-from src.utils.platform import IS_RDK
+from src.utils.platform import IS_LINUX, IS_RDK
 
 # ============================================================================
 # Base directories — change DATA_DIR to relocate db/logs/recordings/classes
 # ============================================================================
 
+
+_APP_DIR_NAME = "ConvuyerBreadCounting"
+
+
+def _resolve_root_ssd_drive() -> str:
+    """Resolve the mounted SSD/USB root that contains the application data directory.
+
+    Resolution order:
+      1. ``ROOT_SSD_DRIVE`` env var — explicit override, used as-is.
+      2. Query the live mount table (``findmnt``) for all removable drives
+         mounted under ``/media/``.  Among those candidates, return the first
+         one whose root contains a ``ConvuyerBreadCounting`` directory —
+         regardless of what the drive or mountpoint is named.
+      3. If no drive has the application directory yet, return the first
+         removable mount found (so the app can bootstrap itself on a fresh
+         drive on first run).
+      4. Return ``""`` to fall back to the local ``data/`` directory.
+    """
+    env_root = os.getenv("ROOT_SSD_DRIVE")
+    if env_root:
+        return env_root
+
+    if not IS_LINUX:
+        return ""
+
+    try:
+        result = subprocess.run(
+            [
+                "findmnt",
+                "-rn",
+                "-o",
+                "TARGET,FSTYPE",
+                "-t",
+                "exfat,vfat,ntfs,fuseblk,ext4",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=3,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+    if not result or result.returncode != 0:
+        return ""
+
+    candidates: list[str] = []
+    # Internal RDK mount points that must never be used as data storage.
+    _INTERNAL_MOUNTS = {"mass_storage", "sdcard1", "sdcard2"}
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        target = parts[0]
+        if not target.startswith("/media/"):
+            continue
+        # Exclude known internal/virtual RDK storage devices.
+        mount_name = target.split("/")[-1]
+        if mount_name in _INTERNAL_MOUNTS:
+            continue
+        candidates.append(target)
+
+    # Prefer a drive that already has the application directory on it.
+    for target in candidates:
+        if os.path.isdir(os.path.join(target, _APP_DIR_NAME)):
+            return target
+
+    # No drive has the app directory yet — use the first available mount
+    # so the app can create its data layout on a fresh drive.
+    if candidates:
+        return candidates[0]
+
+    return ""
+
+
+ROOT_SSD_DRIVE: str = _resolve_root_ssd_drive()
+
+DEFAULT_DATA_DIR: str = (
+    os.path.join(ROOT_SSD_DRIVE, "ConvuyerBreadCounting", "data")
+    if ROOT_SSD_DRIVE
+    else "data"
+)
+
 DATA_DIR: str = os.getenv(
     "DATA_DIR",
-    "/media/USB_DRIVE/ConvuyerBreadCounting/data" if IS_RDK else "data",
+    DEFAULT_DATA_DIR,
 )
 
 # Spool: video segment files + processor state.

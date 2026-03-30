@@ -481,6 +481,39 @@
         </div>
     </div>
 
+    <!-- Storage Paths -->
+    <div class="section-title"><i class="fa-solid fa-folder-open"></i> مسارات التخزين</div>
+    <div class="info-grid" id="storagePathsGrid" style="grid-template-columns: 1fr; gap: .6rem; margin-bottom:2rem;">
+        <div class="info-card" style="flex-direction:row;justify-content:space-between;align-items:center;gap:1rem;">
+            <div class="label" style="white-space:nowrap;"><i class="fa-solid fa-hard-drive"></i> محرك SSD</div>
+            <div class="value eng muted" id="pathRoot" style="font-size:.85rem;word-break:break-all;text-align:right;">—</div>
+        </div>
+        <div class="info-card" style="flex-direction:row;justify-content:space-between;align-items:center;gap:1rem;">
+            <div class="label" style="white-space:nowrap;"><i class="fa-solid fa-database"></i> البيانات</div>
+            <div class="value eng muted" id="pathData" style="font-size:.85rem;word-break:break-all;text-align:right;">—</div>
+        </div>
+        <div class="info-card" style="flex-direction:row;justify-content:space-between;align-items:center;gap:1rem;">
+            <div class="label" style="white-space:nowrap;"><i class="fa-solid fa-file-lines"></i> السجلات</div>
+            <div class="value eng muted" id="pathLog" style="font-size:.85rem;word-break:break-all;text-align:right;">—</div>
+        </div>
+        <div class="info-card" style="flex-direction:row;justify-content:space-between;align-items:center;gap:1rem;">
+            <div class="label" style="white-space:nowrap;"><i class="fa-solid fa-circle-dot"></i> قاعدة البيانات</div>
+            <div class="value eng muted" id="pathDb" style="font-size:.85rem;word-break:break-all;text-align:right;">—</div>
+        </div>
+        <div class="info-card" style="flex-direction:row;justify-content:space-between;align-items:center;gap:1rem;">
+            <div class="label" style="white-space:nowrap;"><i class="fa-solid fa-film"></i> البكرة</div>
+            <div class="value eng muted" id="pathSpool" style="font-size:.85rem;word-break:break-all;text-align:right;">—</div>
+        </div>
+        <div class="info-card" style="flex-direction:row;justify-content:space-between;align-items:center;gap:1rem;">
+            <div class="label" style="white-space:nowrap;"><i class="fa-solid fa-camera"></i> لقطات الشاشة</div>
+            <div class="value eng muted" id="pathSnapshot" style="font-size:.85rem;word-break:break-all;text-align:right;">—</div>
+        </div>
+        <div class="info-card" style="flex-direction:row;justify-content:space-between;align-items:center;gap:1rem;">
+            <div class="label" style="white-space:nowrap;"><i class="fa-solid fa-video"></i> التسجيلات</div>
+            <div class="value eng muted" id="pathRecording" style="font-size:.85rem;word-break:break-all;text-align:right;">—</div>
+        </div>
+    </div>
+
     <!-- Monitoring logs -->
     <div class="section-title"><i class="fa-solid fa-list-check"></i> سجل التنبيهات <small style="color:var(--text-muted);font-weight:400;font-size:.75rem;">(آخر ٢٤ ساعة)</small></div>
     <div style="background:var(--glass-bg);border:1px solid var(--glass-border);border-radius:var(--radius-md);padding:1rem;backdrop-filter:blur(10px);margin-bottom:2rem;">
@@ -637,6 +670,22 @@ function tempColor(val) {
     if (val >= 80) return 'danger';
     if (val >= 65) return 'warning';
     return 'success';
+}
+
+function renderStoragePaths(sp) {
+    function setPath(id, val) {
+        const el = $(id);
+        if (!el) return;
+        el.textContent = val || '—';
+        el.className = 'value eng ' + (val ? 'primary' : 'muted');
+    }
+    setPath('pathRoot',      sp.root_ssd_drive);
+    setPath('pathData',      sp.data_dir);
+    setPath('pathLog',       sp.log_dir);
+    setPath('pathDb',        sp.db_path);
+    setPath('pathSpool',     sp.spool_dir);
+    setPath('pathSnapshot',  sp.snapshot_dir);
+    setPath('pathRecording', sp.recording_dir);
 }
 
 function renderSystemInfo(si) {
@@ -1096,6 +1145,7 @@ async function checkHealth() {
 
         // System info
         renderSystemInfo(data.system_info || {});
+        renderStoragePaths(data.storage_paths || {});
 
     } catch (err) {
         heroEl.className = 'hero-status fail';
