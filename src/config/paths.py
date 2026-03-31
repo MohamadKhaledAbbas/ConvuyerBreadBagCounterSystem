@@ -30,7 +30,7 @@ from src.utils.platform import IS_LINUX, IS_RDK
 
 # Fixed project root on the RDK board. Used as the base for the local
 # fallback data directory when no writable USB/SSD drive is found.
-_PROJECT_ROOT: str = os.getenv("PROJECT_ROOT", "/home/sunrise/ConvuyerBreadCounting")
+_PROJECT_ROOT: str = os.getenv("PROJECT_ROOT", "/home/sunrise/ConvuyerBreadCounting" if IS_RDK else ".")
 
 _APP_DIR_NAME = "ConvuyerBreadCounting"
 
@@ -169,8 +169,14 @@ RECORDING_DIR: str = os.getenv(
     "RECORDING_DIR",
     os.path.join(DATA_DIR, "recordings"),
 )
-KNOWN_CLASSES_DIR: str = os.path.join(DATA_DIR, "classes")
-UNKNOWN_CLASSES_DIR: str = os.path.join(DATA_DIR, "unknown")
+KNOWN_CLASSES_DIR: str = os.getenv(
+    "KNOWN_CLASSES_DIR",
+    os.path.join(_PROJECT_ROOT, "data", "classes"),
+)
+UNKNOWN_CLASSES_DIR: str = os.getenv(
+    "UNKNOWN_CLASSES_DIR",
+    os.path.join(_PROJECT_ROOT, "data", "unknown"),
+)
 SNAPSHOT_DIR: str = os.getenv("SNAPSHOT_DIR", os.path.join(DATA_DIR, "snapshot"))
 CONVEYOR_ROI_FILE: str = os.path.join(DATA_DIR, "conveyor_roi.json")
 ROI_CANDIDATES_DIR: str = os.path.join(DATA_DIR, "roi_candidates")
