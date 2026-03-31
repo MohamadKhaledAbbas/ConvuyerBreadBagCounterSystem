@@ -18,10 +18,8 @@ from fastapi import APIRouter, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, StreamingResponse
 
-from src.config.paths import KNOWN_CLASSES_DIR
-
 from src.endpoint.pipeline_state import read_state
-from src.endpoint.shared import get_db, get_templates
+from src.endpoint.shared import get_db, get_templates, render_template
 from src.utils.AppLogging import logger
 
 router = APIRouter(tags=["counts"])
@@ -167,10 +165,12 @@ async def api_bag_types() -> List[Dict[str, Any]]:
     db = get_db()
     bag_types = await run_in_threadpool(db.get_all_bag_types)
 
-    # Normalize thumb paths: data/classes/X → known_classes/X
     for bt in bag_types:
         thumb = bt.get("thumb", "") or ""
-        bt["thumb"] = thumb.replace(KNOWN_CLASSES_DIR + "/", "known_classes/")
+        normalized = thumb.replace("\\", "/")
+        if normalized.startswith("./"):
+            normalized = normalized[2:]
+        bt["thumb"] = normalized.replace("data/classes/", "known_classes/", 1)
 
     return bag_types
 
@@ -245,4 +245,4 @@ async def counts_page(request: Request) -> HTMLResponse:
     - Visual pipeline progress indicator
     """
     templates = get_templates()
-    return templates.TemplateResponse("counts.html", {"request": request})
+    return render_template(templates, request, "counts.html")

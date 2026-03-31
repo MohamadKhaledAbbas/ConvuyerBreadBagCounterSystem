@@ -19,7 +19,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from src.config.tracking_config import TrackingConfig, tracking_config
-from src.endpoint.shared import get_templates
+from src.endpoint.shared import get_templates, render_template
 from src.utils.AppLogging import logger
 
 router = APIRouter()
@@ -170,6 +170,6 @@ async def conveyor_roi_page(request: Request):
             "show_overlay": cfg.conveyor_roi_show_overlay,
         },
     }
-    return templates.TemplateResponse("conveyor_roi_settings.html", context)
+    return render_template(templates, request, "conveyor_roi_settings.html", context)
 
 

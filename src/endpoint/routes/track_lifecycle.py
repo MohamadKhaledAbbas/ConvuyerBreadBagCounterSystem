@@ -17,7 +17,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from src.endpoint.repositories.track_lifecycle_repository import TrackLifecycleRepository
 from src.endpoint.services.track_lifecycle_service import TrackLifecycleService
-from src.endpoint.shared import get_db, get_templates
+from src.endpoint.shared import get_db, get_templates, render_template
 from src.utils.AppLogging import logger
 
 router = APIRouter()
@@ -188,7 +188,7 @@ async def lost_tracks_page(
         }
 
         logger.info(f"[LostTracks] Rendering {len(events)} lost tracks (page {page}/{total_pages}, total={total_count})")
-        return templates.TemplateResponse('lost_tracks_ar.html', context)
+        return render_template(templates, request, 'lost_tracks_ar.html', context)
 
     except HTTPException:
         raise
@@ -271,7 +271,7 @@ async def lost_tracks_browse(
         }
 
         logger.info(f"[LostTracks] Browse {index + 1}/{total_count} (event_id={event['id']}, track_id={event['track_id']})")
-        return templates.TemplateResponse('track_visualization_ar.html', context)
+        return render_template(templates, request, 'track_visualization_ar.html', context)
 
     except HTTPException:
         raise
@@ -456,7 +456,7 @@ async def track_events_page(
         }
 
         logger.info(f"[TrackEvents] Rendering {len(data['events'])} events (page {page})")
-        return templates.TemplateResponse('track_events_ar.html', context)
+        return render_template(templates, request, 'track_events_ar.html', context)
 
     except HTTPException:
         raise
@@ -707,7 +707,7 @@ async def track_visualization_by_event_id(request: Request, event_id: int):
             'name_to_arabic': name_to_arabic
         }
 
-        return templates.TemplateResponse('track_visualization_ar.html', context)
+        return render_template(templates, request, 'track_visualization_ar.html', context)
 
     except HTTPException:
         raise
@@ -744,7 +744,7 @@ async def track_visualization_page(request: Request, track_id: int):
             'name_to_arabic': name_to_arabic
         }
 
-        return templates.TemplateResponse('track_visualization_ar.html', context)
+        return render_template(templates, request, 'track_visualization_ar.html', context)
 
     except HTTPException:
         raise

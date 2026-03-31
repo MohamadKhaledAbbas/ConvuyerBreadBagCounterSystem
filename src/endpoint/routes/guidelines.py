@@ -8,7 +8,7 @@ Provides:
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
-from src.endpoint.shared import get_templates
+from src.endpoint.shared import get_templates, render_template
 from src.utils.AppLogging import logger
 
 router = APIRouter(tags=["guidelines"])
@@ -24,5 +24,5 @@ async def guidelines_page(request: Request):
     """
     logger.debug("[Guidelines] Page requested")
     templates = get_templates()
-    return templates.TemplateResponse("guidelines.html", {"request": request})
+    return render_template(templates, request, "guidelines.html")
 

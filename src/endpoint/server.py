@@ -31,7 +31,7 @@ from src.endpoint.routes import analytics
 from src.endpoint.routes import track_lifecycle
 from src.endpoint.routes import snapshot
 from src.endpoint.routes import counts
-from src.endpoint.shared import init_shared_resources, cleanup_shared_resources, get_templates, get_db
+from src.endpoint.shared import init_shared_resources, cleanup_shared_resources, get_templates, get_db, render_template
 from src.endpoint.pipeline_state import read_state
 from src.utils.AppLogging import logger
 from src.utils.system_info import get_system_info
@@ -130,10 +130,7 @@ async def root(request: Request):
         HTMLResponse: Main dashboard page with navigation cards in Arabic
     """
     templates = get_templates()
-    return templates.TemplateResponse('index_ar.html', {
-        'request': request,
-        'version': APP_VERSION
-    })
+    return render_template(templates, request, 'index_ar.html', {'version': APP_VERSION})
 
 
 @app.get("/endpoints", response_class=HTMLResponse)
@@ -145,9 +142,7 @@ async def endpoints_page(request: Request):
     organized by category. Useful for developers integrating with the system.
     """
     templates = get_templates()
-    return templates.TemplateResponse('endpoints_ar.html', {
-        'request': request,
-    })
+    return render_template(templates, request, 'endpoints_ar.html')
 
 
 @app.get("/health")
@@ -475,10 +470,7 @@ async def health_page(request: Request):
     Auto-refreshes every 30 seconds via JavaScript.
     """
     templates = get_templates()
-    return templates.TemplateResponse('health.html', {
-        'request': request,
-        'version': APP_VERSION
-    })
+    return render_template(templates, request, 'health.html', {'version': APP_VERSION})
 
 
 def setup_static_mounts() -> None:

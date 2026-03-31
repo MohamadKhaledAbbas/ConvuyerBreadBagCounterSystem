@@ -629,10 +629,14 @@ class AnalyticsService:
         def fix_path(path: str) -> str:
             if not path:
                 return ""
-            # Convert filesystem paths to web-accessible paths
-            return (path
-                    .replace(self.config.known_classes_dir + "/", self.config.web_known_classes_path + "/")
-                    .replace(self.config.unknown_classes_dir + "/", self.config.web_unknown_classes_path + "/"))
+            normalized = path.replace("\\", "/")
+            if normalized.startswith("./"):
+                normalized = normalized[2:]
+            return (
+                normalized
+                .replace("data/classes/", f"{self.config.web_known_classes_path}/", 1)
+                .replace("data/unknown/", f"{self.config.web_unknown_classes_path}/", 1)
+            )
 
         # Fix thumb paths in classifications (from bag_types)
         for cls in data.get("data", {}).get("classifications", []):

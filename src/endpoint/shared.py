@@ -1,6 +1,7 @@
 ﻿"""Shared Resources - Updated for V2."""
+import inspect
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any, Dict
 
 from fastapi.templating import Jinja2Templates
 
@@ -40,6 +41,21 @@ def get_templates() -> Jinja2Templates:
     if _templates_instance is None:
         raise RuntimeError("Shared resources not initialized")
     return _templates_instance
+
+
+def render_template(templates: Jinja2Templates, request, name: str, context: Optional[Dict[str, Any]] = None):
+    """Render a template across both older and newer Starlette signatures."""
+    template_context = dict(context or {})
+    template_context.setdefault("request", request)
+
+    parameters = list(inspect.signature(type(templates).TemplateResponse).parameters.values())
+    uses_request_first = len(parameters) > 1 and parameters[1].name == "request"
+
+    if uses_request_first:
+        return templates.TemplateResponse(request, name, template_context)
+
+    return templates.TemplateResponse(name, template_context)
+
 def cleanup_shared_resources():
     global _db_instance, _templates_instance
     if _db_instance:
