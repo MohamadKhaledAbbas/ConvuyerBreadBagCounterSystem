@@ -1,6 +1,7 @@
 # Rsync filter rules for ConveyorBreadBagCounterSystem
-# Usage: rsync -avz --progress --filter="merge rsync.rules" /path/to/local/project/ user@server:/remote/path/
-# Example: rsync -avz --progress --filter="merge rsync.rules" /mnt/c/0001_MyFiles/0016_Projects/0002_ProjectBased/0012_ConvuyerBreadBagCounterSystem/ sunrise@rdkboard:/home/sunrise/ConveyorBreadBag/
+# Usage: run from the project root and sync the directory contents with a trailing slash.
+#        Do not use a shell wildcard like `*` because it skips dotfiles and defeats rsync's directory semantics.
+# Example: rsync -avz --progress --filter="merge rsync.rules" ./ rdkboard:/home/sunrise/ConvuyerBreadCounting/
 
 # =============================================================================
 # EXCLUDE: Development and temporary files (makes sync faster)
