@@ -84,9 +84,8 @@ def _rotator(source: str, dest: str) -> None:
     The previous implementation did synchronous gzip compression while
     holding Python's logging lock.  On slow embedded storage (eMMC /
     SD card / Horizon RDK) that blocked **every** thread calling
-    ``logger.*()`` for 2-4 seconds — including the SpoolRecorder's
-    ROS2 callback and the SpoolProcessor's frame-publishing thread.
-    The result was a 2-3 second gap in frame timestamps and lost tracks.
+    ``logger.*()`` for 2-4 seconds — causing gaps in frame timestamps
+    and lost tracks.
 
     New approach:
     1. Cheaply ``rename`` *source* → intermediate path (microseconds).

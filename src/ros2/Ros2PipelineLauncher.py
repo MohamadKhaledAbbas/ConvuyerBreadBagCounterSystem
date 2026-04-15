@@ -101,8 +101,8 @@ def generate_launch_description():
 
     # Hardware Decoder Node
     # Decodes H.264 to NV12 using RDK hardware decoder
-    # NOTE: Subscribe to /spool_image_ch_0 for spool-based architecture
-    # The spool processor reads from disk and publishes to this topic
+    # Direct pipeline: hobot_rtsp_client → hobot_codec → /nv12_images
+    # (spool recorder/processor removed — no disk I/O in the media path)
     hw_decode_node = Node(
         package='hobot_codec',
         executable='hobot_codec_republish',
@@ -112,8 +112,8 @@ def generate_launch_description():
                 'in_format': 'h264',
                 'out_mode': 'ros',
                 'out_format': 'nv12',
-                'sub_topic': '/spool_image_ch_0',  # Input from spool processor
-                'pub_topic': '/nv12_images',       # Output for detection
+                'sub_topic': '/rtsp_image_ch_0',   # Direct from RTSP client
+                'pub_topic': '/nv12_images',        # Output for detection
                 'dump_output': False,
             }
         ],

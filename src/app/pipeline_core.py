@@ -92,31 +92,22 @@ class PipelineCore:
         )
 
         # ── Evidence ring buffer for lost/invalid track snapshots ────────
-        # Stores the last N annotated frames (with UI overlay), sampled
-        # every ~0.5 s of VIDEO time.  When a track ends as lost/invalid,
-        # ALL frames in the buffer are saved as a filmstrip for post-mortem
-        # review.
+        # Stores the last N detection frames (with UI overlay).  Called
+        # only on detection frames (every detection_interval-th frame,
+        # i.e. every 5th frame at detection_interval=5 → 5 fps at 25 FPS).
+        # When a track is lost/invalid, pre-event frames are snapshotted
+        # and post-event frames are collected before saving to disk.
         #
-        # Default: 10 frames × 0.5 s = 5.0 s coverage.  This gives ~1 s
-        # of context BEFORE the ghost phase starts (ghost timeout = 4 s),
-        # so the bag is visible while still actively tracked.
-        # Memory cost: 10 × (640×360×3 bytes) ≈ 6.6 MB  (frames are stored
-        # at half-resolution to keep it light).
-        #
-        # Sampling is frame-count based (not wall-clock) to keep evidence
-        # frames evenly spaced in VIDEO time even when the pipeline processes
-        # frames faster or slower than real-time.  Using wall-clock time here
-        # caused consecutive evidence frames to jump 3-4 video seconds apart
-        # when the system processed video faster than real-time, making the
-        # on-screen camera clock appear to jump and tracked bags appear to
-        # vanish between evidence frames.
+        # Default: 30 pre + 20 post detection frames at 5 det/sec
+        #        → 6 s before + 4 s after = 10 s total coverage.
+        # The 6 s pre-buffer covers ~2 s of active tracking (last YOLO
+        # detections) plus the full ~4 s ghost timeout, so you can see
+        # exactly when and why the track was last detected.
+        # Memory cost: 30 × (640×360×3 bytes) ≈ 20 MB (half-resolution).
         # ─────────────────────────────────────────────────────────────────
         self._evidence_buffer: deque = deque(maxlen=self._tracking_config.evidence_buffer_size)
-        self._evidence_frame_counter: int = 0
-        _target_fps: float = getattr(self._tracking_config, 'target_fps', 25.0)
-        self._evidence_frames_interval: int = max(
-            1, round(_target_fps * self._tracking_config.evidence_sample_interval)
-        )
+        # Pending deferred evidence saves (collecting post-event frames)
+        self._pending_evidence_saves: list = []
 
         # Ensure classified ROIs directory exists if saving is enabled
         if self._tracking_config.save_classified_rois:
@@ -138,16 +129,29 @@ class PipelineCore:
             # Even if classified ROIs are disabled, start purge thread for lost snapshots
             self._start_purge_thread()
 
-        logger.info("[PipelineCore] Initialized")
+        # ── Skip-N detection counter ─────────────────────────────────────
+        # Counts frames to decide when to run YOLO detection vs tracker-only
+        # prediction.  Detection runs when _detect_frame_counter % interval == 0.
+        self._detect_frame_counter: int = 0
+        self._detection_interval: int = max(1, self._tracking_config.detection_interval)
+
+        logger.info(
+            f"[PipelineCore] Initialized (detection_interval={self._detection_interval})"
+        )
 
     def process_frame(
         self,
         frame: np.ndarray,
         nv12_data: Optional[np.ndarray] = None,
         frame_size: Optional[Tuple[int, int]] = None
-    ) -> Tuple[List[Detection], List[TrackedObject], int]:
+    ) -> Tuple[List[Detection], List[TrackedObject], int, bool]:
         """
         Process a single frame through the pipeline.
+
+        YOLO detection runs every ``detection_interval`` frames.  On
+        intermediate frames the tracker predicts positions using EMA
+        velocity drift (mark_missed), keeping tracks alive without the
+        cost of inference.
 
         Args:
             frame: Input BGR frame (used for ROI extraction and fallback detection)
@@ -157,58 +161,66 @@ class PipelineCore:
                         is provided
 
         Returns:
-            Tuple of (detections, active_tracks, rois_collected)
+            Tuple of (detections, active_tracks, rois_collected, is_detection_frame)
         """
-        # Count every frame processed for evidence sampling interval tracking
-        self._evidence_frame_counter += 1
+        # Decide whether this is a detection frame or tracker-only frame
+        is_detection_frame = (self._detect_frame_counter % self._detection_interval == 0)
+        self._detect_frame_counter += 1
 
-        # 1. Detection - use native NV12 path when available to avoid conversion overhead
-        if (nv12_data is not None
-                and frame_size is not None
-                and hasattr(self.detector, 'detect_nv12')):
-            detections = self.detector.detect_nv12(nv12_data, frame_size)
+        if is_detection_frame:
+            # 1. Detection - use native NV12 path when available to avoid conversion overhead
+            if (nv12_data is not None
+                    and frame_size is not None
+                    and hasattr(self.detector, 'detect_nv12')):
+                detections = self.detector.detect_nv12(nv12_data, frame_size)
+            else:
+                detections = self.detector.detect(frame)
+
+            # 1b. Conveyor ROI filtering — drop detections outside the conveyor zone
+            if self._tracking_config.conveyor_roi_enabled and detections:
+                roi = self._tracking_config
+                before = len(detections)
+                detections = [
+                    d for d in detections
+                    if roi.conveyor_roi_x_min <= d.center[0] <= roi.conveyor_roi_x_max
+                    and roi.conveyor_roi_y_min <= d.center[1] <= roi.conveyor_roi_y_max
+                ]
+                dropped = before - len(detections)
+                if dropped > 0:
+                    logger.debug(f"[ROI_FILTER] Dropped {dropped}/{before} detections outside conveyor zone")
         else:
-            detections = self.detector.detect(frame)
-
-        # 1b. Conveyor ROI filtering — drop detections outside the conveyor zone
-        if self._tracking_config.conveyor_roi_enabled and detections:
-            roi = self._tracking_config
-            before = len(detections)
-            detections = [
-                d for d in detections
-                if roi.conveyor_roi_x_min <= d.center[0] <= roi.conveyor_roi_x_max
-                and roi.conveyor_roi_y_min <= d.center[1] <= roi.conveyor_roi_y_max
-            ]
-            dropped = before - len(detections)
-            if dropped > 0:
-                logger.debug(f"[ROI_FILTER] Dropped {dropped}/{before} detections outside conveyor zone")
+            # Tracker-only frame: no detection, tracker will predict via velocity drift
+            detections = []
 
         # 2. Tracking - cast frame shape to proper type
         frame_h, frame_w = frame.shape[:2]
         active_tracks = self.tracker.update(
             detections,
-            frame_shape=(int(frame_h), int(frame_w))
+            frame_shape=(int(frame_h), int(frame_w)),
+            is_detection_frame=is_detection_frame
         )
 
-        # 3. Collect ROIs for confirmed tracks (non-blocking)
+        # 3. Collect ROIs for confirmed tracks (only on detection frames
+        #    to ensure ROI crops use YOLO-confirmed positions, not drifted)
         rois_collected = 0
-        for track in self.tracker.get_confirmed_tracks():
-            collected = self.roi_collector.collect_roi(
-                track_id=track.track_id,
-                frame=frame,
-                bbox=track.bbox
-            )
-            if collected:
-                rois_collected += 1
-                # Log ROI collection detail to DB
-                self._log_roi_collected(track.track_id, track.bbox)
+        if is_detection_frame:
+            for track in self.tracker.get_confirmed_tracks():
+                collected = self.roi_collector.collect_roi(
+                    track_id=track.track_id,
+                    frame=frame,
+                    bbox=track.bbox
+                )
+                if collected:
+                    rois_collected += 1
+                    # Log ROI collection detail to DB
+                    self._log_roi_collected(track.track_id, track.bbox)
 
         # 4. Handle completed tracks
         completed_events = self.tracker.get_completed_events()
         for event in completed_events:
             self._handle_track_completed(event)
 
-        return detections, active_tracks, rois_collected
+        return detections, active_tracks, rois_collected, is_detection_frame
 
     def _handle_track_completed(self, event: TrackEvent):
         """
@@ -533,35 +545,27 @@ class PipelineCore:
 
     def push_evidence_frame(self, annotated_frame: np.ndarray) -> None:
         """
-        Store an annotated frame in the evidence ring buffer.
+        Store an annotated detection frame in the evidence ring buffer.
 
-        Called by the app layer after each frame is processed and annotated.
-        Frames are sampled every ``_evidence_frames_interval`` **video frames**
-        (computed as ``round(target_fps * evidence_sample_interval)``), which
-        guarantees even coverage in video time regardless of whether the
-        pipeline processes frames faster or slower than real-time.
-
-        Using wall-clock time here caused consecutive evidence frames to jump
-        3-4 video seconds apart when processing a recorded video faster than
-        real-time, making the on-screen camera clock appear to jump and tracked
-        bags appear to vanish between evidence frames.
+        Called by the app layer on detection frames only (every
+        detection_interval-th frame).  Every call stores one frame — no
+        additional subsampling is applied.
 
         The stored frame is immediately downscaled to 50% to reduce memory
-        footprint. When a track is lost/invalid, ALL frames in the buffer
-        are saved to disk as a filmstrip for post-mortem review.
+        footprint.  When a track is lost/invalid, the pre-event frames are
+        captured and post-event frames are collected before saving.
 
         Args:
             annotated_frame: BGR frame with all UI overlays drawn
         """
-        # Sample every N video frames; _evidence_frame_counter is incremented
-        # in process_frame() so it always matches the number of frames seen.
-        if self._evidence_frame_counter % self._evidence_frames_interval != 0:
-            return  # Skip — not yet at the next sample frame
-
         # Downscale immediately to save memory (~640×360 instead of 1280×720)
         h, w = annotated_frame.shape[:2]
         small = cv2.resize(annotated_frame, (w // 2, h // 2))
         self._evidence_buffer.append(small)
+
+        # Feed post-event frames to any pending deferred evidence saves
+        if self._pending_evidence_saves:
+            self._flush_pending_evidence(small)
 
     @staticmethod
     def _write_jpeg_files(items: List[Tuple[str, np.ndarray]], encode_params: Optional[List[int]] = None) -> None:
@@ -586,63 +590,116 @@ class PipelineCore:
 
     def _save_lost_snapshot(self, event: TrackEvent) -> Optional[str]:
         """
-        Save ALL annotated evidence frames when a track is lost or invalid.
+        Save evidence frames around a lost/invalid track event.
 
-        The evidence ring buffer stores the last N annotated frames (with
-        UI overlays) sampled every ~0.5 s of video time (default: 10 frames
-        = 5.0 s).  We save **all** of them so the user can review a filmstrip
-        of keyframes covering the full ghost timeout window plus ~1 s of
-        pre-ghost context.  Frames are ordered oldest → newest.
+        Captures ``evidence_buffer_size`` pre-event frames from the ring
+        buffer and schedules collection of ``evidence_post_count`` post-event
+        frames.  Once enough post-event frames arrive (via
+        ``push_evidence_frame``), the combined filmstrip is written to disk
+        asynchronously.
 
-        Each frame is already at 50 % resolution (downscaled on ingestion)
-        and is saved as JPEG quality 60 (~15-25 KB per image, ~200 KB total
-        for 10 frames).
+        Default: 10 pre + 10 post at 0.5 s interval = 5 s before + 5 s after.
 
-        The file I/O is offloaded to ``_io_executor`` (bounded 2-worker thread
-        pool) so the main processing loop is never stalled.  On slow embedded
-        storage (eMMC, SD card, NFS) a single ``cv2.imwrite()`` can take
-        100–500 ms; writing 10 files synchronously blocked the main loop for
-        up to 4 s, causing the frame-source queue to overflow, live camera
-        frames to be dropped, and a 3–4 second "clock jump" visible in the
-        factory camera view between consecutive processed frames.
+        File I/O is offloaded to ``_io_executor`` so the main loop is never
+        stalled.
 
         Args:
             event: Track lost/invalid event
 
         Returns:
-            JSON-encoded list of filenames, e.g.
-            '["lost_T42_170910000_0.jpg", ..., "lost_T42_170910000_7.jpg"]'
-            or None if the buffer was empty.
+            JSON-encoded list of expected filenames, or None if buffer empty.
         """
         if not self._evidence_buffer:
             return None
 
         try:
             timestamp_ms = int(time.time() * 1000)
-            encode_params = [cv2.IMWRITE_JPEG_QUALITY, 60]
+            pre_frames = list(self._evidence_buffer)  # snapshot current buffer
+            post_target = self._tracking_config.evidence_post_count
+
+            # Generate all filenames upfront (pre + anticipated post)
+            total_expected = len(pre_frames) + post_target
             saved_filenames: List[str] = []
-            # Pair each frame with its destination path.  The frame numpy arrays
-            # are kept alive by this list even after the deque evicts them.
-            frames_to_write: List[Tuple[str, np.ndarray]] = []
-
-            for idx, frame in enumerate(self._evidence_buffer):
+            for idx in range(total_expected):
                 filename = f"lost_T{event.track_id}_{timestamp_ms}_{idx}.jpg"
-                filepath = os.path.join(self._tracking_config.lost_snapshots_dir, filename)
                 saved_filenames.append(filename)
-                frames_to_write.append((filepath, frame))
 
-            # Offload disk writes to the bounded I/O thread pool.  Filenames
-            # are already known, so _log_track_event() can be called immediately.
-            self._io_executor.submit(self._write_jpeg_files, frames_to_write, encode_params)
+            if post_target > 0:
+                # Defer save — collect post-event frames first
+                self._pending_evidence_saves.append({
+                    'track_id': event.track_id,
+                    'timestamp_ms': timestamp_ms,
+                    'pre_frames': pre_frames,
+                    'post_frames': [],
+                    'post_target': post_target,
+                    'filenames': saved_filenames,
+                    'created_at': time.time(),
+                })
+                logger.debug(
+                    f"[PipelineCore] Deferred evidence save for T{event.track_id}: "
+                    f"{len(pre_frames)} pre + {post_target} post frames"
+                )
+            else:
+                # No post-event frames, save immediately
+                encode_params = [cv2.IMWRITE_JPEG_QUALITY, 60]
+                frames_to_write: List[Tuple[str, np.ndarray]] = []
+                for idx, frame in enumerate(pre_frames):
+                    filepath = os.path.join(self._tracking_config.lost_snapshots_dir, saved_filenames[idx])
+                    frames_to_write.append((filepath, frame))
+                self._io_executor.submit(self._write_jpeg_files, frames_to_write, encode_params)
+                logger.debug(
+                    f"[PipelineCore] Saved {len(pre_frames)} evidence frames for T{event.track_id}"
+                )
 
-            logger.debug(
-                f"[PipelineCore] Saved {len(saved_filenames)} evidence frames for T{event.track_id}"
-            )
             return json.dumps(saved_filenames)
 
         except Exception as e:
             logger.error(f"[PipelineCore] Failed to save evidence for T{event.track_id}: {e}")
             return None
+
+    def _flush_pending_evidence(self, frame: np.ndarray) -> None:
+        """Append a post-event frame to pending saves and flush completed ones."""
+        completed = []
+        now = time.time()
+
+        for entry in self._pending_evidence_saves:
+            entry['post_frames'].append(frame.copy())
+            if len(entry['post_frames']) >= entry['post_target']:
+                completed.append(entry)
+            elif (now - entry['created_at']) > 30.0:
+                # Stale entry — flush with whatever post frames we have
+                completed.append(entry)
+                logger.warning(
+                    f"[PipelineCore] Force-flushing stale evidence for T{entry['track_id']} "
+                    f"({len(entry['post_frames'])}/{entry['post_target']} post frames)"
+                )
+
+        for entry in completed:
+            self._pending_evidence_saves.remove(entry)
+            self._write_deferred_evidence(entry)
+
+    def _write_deferred_evidence(self, entry: dict) -> None:
+        """Submit combined pre + post evidence frames for async disk write."""
+        try:
+            encode_params = [cv2.IMWRITE_JPEG_QUALITY, 60]
+            all_frames = entry['pre_frames'] + entry['post_frames']
+            frames_to_write: List[Tuple[str, np.ndarray]] = []
+
+            for idx, frame in enumerate(all_frames):
+                if idx < len(entry['filenames']):
+                    filename = entry['filenames'][idx]
+                else:
+                    filename = f"lost_T{entry['track_id']}_{entry['timestamp_ms']}_{idx}.jpg"
+                filepath = os.path.join(self._tracking_config.lost_snapshots_dir, filename)
+                frames_to_write.append((filepath, frame))
+
+            self._io_executor.submit(self._write_jpeg_files, frames_to_write, encode_params)
+            logger.debug(
+                f"[PipelineCore] Saved {len(entry['pre_frames'])} pre + "
+                f"{len(entry['post_frames'])} post evidence frames for T{entry['track_id']}"
+            )
+        except Exception as e:
+            logger.error(f"[PipelineCore] Failed to write deferred evidence for T{entry['track_id']}: {e}")
 
     def _save_classified_rois(self, track_id: int, rois_with_quality: List[Tuple[np.ndarray, float]]):
         """
@@ -921,6 +978,15 @@ class PipelineCore:
     def cleanup(self):
         """Release pipeline resources."""
         logger.info("[PipelineCore] Cleaning up...")
+
+        # Flush any pending deferred evidence saves before shutting down I/O
+        for entry in self._pending_evidence_saves:
+            logger.debug(
+                f"[PipelineCore] Flushing pending evidence for T{entry['track_id']} on shutdown "
+                f"({len(entry['post_frames'])}/{entry['post_target']} post frames)"
+            )
+            self._write_deferred_evidence(entry)
+        self._pending_evidence_saves.clear()
 
         # Stop purge thread first
         self._stop_purge_thread()

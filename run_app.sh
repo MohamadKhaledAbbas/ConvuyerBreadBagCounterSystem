@@ -30,17 +30,15 @@ echo "[INFO] is_development=$IS_DEVELOPMENT, show_ui_screen=$SHOW_UI_SCREEN, acc
 # --- Clean up stale artifacts from previous runs / unclean shutdown ---
 # Read centralized paths from Python paths module
 TMP_STATUS_DIR=$(python3 -c "from src.config.paths import TMP_STATUS_DIR; print(TMP_STATUS_DIR)" 2>/dev/null || echo "/tmp")
-SPOOL_DIR=$(python3 -c "from src.config.paths import SPOOL_DIR; print(SPOOL_DIR)" 2>/dev/null || echo "/tmp/spool")
 echo "[INFO] Cleaning up stale artifacts from previous runs..."
 rm -f "${TMP_STATUS_DIR}/codec_health_status.json"
-rm -f "${SPOOL_DIR}"/*.tmp 2>/dev/null
 # Clean FastDDS shared memory artifacts that can cause issues after power loss
 rm -f /dev/shm/fastrtps_* /dev/shm/fast_datasharing_* 2>/dev/null
 echo "[INFO] Stale artifact cleanup complete"
 
 # --- Stop all services first for a clean restart/selection ---
 echo "[INFO] Stopping all breadcount services for controlled startup..."
-sudo supervisorctl stop breadcount-ros2 breadcount-main breadcount-uvicorn breadcount-spool-recorder breadcount-spool-processor > /dev/null 2>&1
+sudo supervisorctl stop breadcount-ros2 breadcount-main breadcount-uvicorn > /dev/null 2>&1
 
 # --- Start services based on is_production ---
 if [ "$IS_DEVELOPMENT" = "1" ]; then
@@ -53,13 +51,13 @@ else
 
     echo "[INFO] Starting PRODUCTION services (ROS2, MAIN, UVICORN)..."
     # In production, we assume UI is off (show_ui_screen should be set to 0 in your config utility)
-    sudo supervisorctl start breadcount-ros2 breadcount-main breadcount-uvicorn breadcount-spool-recorder breadcount-spool-processor
+    sudo supervisorctl start breadcount-ros2 breadcount-main breadcount-uvicorn
 
     # You might want to explicitly set the UI flag to 0 in production mode if you rely on the script for configuration
     python3 "$CONFIG_PY" --key show_ui_screen --value 0
 fi
 
 echo "=== Current Service Status ==="
-sudo supervisorctl status breadcount-ros2 breadcount-main breadcount-uvicorn breadcount-spool-recorder breadcount-spool-processor 2>/dev/null || \
+sudo supervisorctl status breadcount-ros2 breadcount-main breadcount-uvicorn 2>/dev/null || \
 sudo supervisorctl status breadcount-ros2 breadcount-main breadcount-uvicorn
 echo "=============================="

@@ -87,6 +87,10 @@ class TrackedObject:
     _smooth_velocity: Optional[Tuple[float, float]] = None
     _velocity_alpha: float = 0.3  # EMA smoothing factor (0-1, higher = more responsive)
 
+    # Frame gap tracking for skip-N detection
+    _frames_since_detection: int = 0  # Total frames since last detection match (skip + miss)
+    _last_update_gap: int = 1  # Actual frame gap between consecutive detection matches
+
     # Timestamps
     created_at: float = field(default_factory=time.time)
     last_seen_at: float = field(default_factory=time.time)
@@ -140,6 +144,10 @@ class TrackedObject:
         """
         Compute instantaneous velocity from last two positions.
 
+        With skip-N detection (detection_interval > 1), consecutive entries in
+        position_history may be N frames apart. The displacement is divided by
+        ``_last_update_gap`` to yield a true per-frame velocity.
+
         Returns:
             Tuple of (vx, vy) pixels per frame or None
         """
@@ -149,9 +157,10 @@ class TrackedObject:
         last_pos = self.position_history[-1]
         prev_pos = self.position_history[-2]
 
+        gap = max(1, self._last_update_gap)
         return (
-            float(last_pos[0] - prev_pos[0]),
-            float(last_pos[1] - prev_pos[1])
+            float(last_pos[0] - prev_pos[0]) / gap,
+            float(last_pos[1] - prev_pos[1]) / gap
         )
 
     def _update_smooth_velocity(self):
@@ -172,12 +181,21 @@ class TrackedObject:
                 alpha * instant_vel[1] + (1 - alpha) * self._smooth_velocity[1]
             )
 
-    def update(self, detection: Detection):
-        """Update track with new detection."""
+    def update(self, detection: Detection, gap: int = 1):
+        """Update track with new detection.
+
+        Args:
+            detection: Matched detection.
+            gap: Number of actual frames elapsed since the previous detection
+                 match (used to normalise velocity).  With detection_interval=5
+                 and no misses, gap=5.
+        """
         self.bbox = detection.bbox
         self.confidence = detection.confidence
         self.hits += 1
         self.time_since_update = 0
+        self._frames_since_detection = 0
+        self._last_update_gap = max(1, gap)
         self.last_seen_at = time.time()
         
         # Store the last detected position (guaranteed to be from actual detection)
@@ -224,7 +242,11 @@ class TrackedObject:
         )
     
     def mark_missed(self):
-        """Mark frame without detection.
+        """Mark frame without detection — called on DETECTION frames only.
+
+        This is invoked when a detection frame runs but the track was not
+        matched to any detection.  Skip-N frames use ``advance_frame()``
+        instead.
 
         ROBUST VELOCITY HANDLING:
         - For individual track drift during active tracking, require minimum hits
@@ -236,6 +258,7 @@ class TrackedObject:
         than individual track velocity.
         """
         self.time_since_update += 1
+        self._frames_since_detection += 1
         self.age += 1
 
         # Constants for robust velocity handling during active tracking
@@ -243,8 +266,8 @@ class TrackedObject:
         MIN_HITS_FOR_VELOCITY = 4  # Need 4+ detections for individual track drift
         MAX_VEL_X = 15.0  # Max horizontal pixels/frame (conveyor mostly vertical)
         MAX_VEL_Y = 50.0  # Max vertical pixels/frame
-        VELOCITY_DECAY = 0.9  # Decay velocity each missed frame
-        MAX_DRIFT_FRAMES = 10  # Stop drifting after this many frames
+        VELOCITY_DECAY = 0.9  # Decay velocity each missed detection frame
+        MAX_DRIFT_DETECTION_MISSES = 10  # Stop drifting after this many detection-frame misses
 
         vel = self.velocity
         if vel is None or len(self.position_history) == 0:
@@ -259,12 +282,12 @@ class TrackedObject:
                 )
             return
 
-        # Stop drifting after too many missed frames
-        if self.time_since_update > MAX_DRIFT_FRAMES:
-            if self.time_since_update == MAX_DRIFT_FRAMES + 1:
+        # Stop drifting after too many missed detection frames
+        if self.time_since_update > MAX_DRIFT_DETECTION_MISSES:
+            if self.time_since_update == MAX_DRIFT_DETECTION_MISSES + 1:
                 logger.info(
                     f"[TRACK_DRIFT] T{self.track_id} STOPPED drifting | "
-                    f"missed={self.time_since_update} > max={MAX_DRIFT_FRAMES}"
+                    f"missed={self.time_since_update} > max={MAX_DRIFT_DETECTION_MISSES}"
                 )
             return
 
@@ -272,7 +295,7 @@ class TrackedObject:
         vx = max(-MAX_VEL_X, min(MAX_VEL_X, vel[0]))
         vy = max(-MAX_VEL_Y, min(MAX_VEL_Y, vel[1]))
 
-        # Apply decay based on how many frames missed
+        # Apply decay based on how many detection frames missed
         decay_factor = VELOCITY_DECAY ** self.time_since_update
         vx *= decay_factor
         vy *= decay_factor
@@ -290,10 +313,45 @@ class TrackedObject:
         # Log drift for debugging
         if self.time_since_update <= 5 or self.time_since_update % 10 == 0:
             logger.info(
-                f"[TRACK_DRIFT] T{self.track_id} frame #{self.time_since_update} | "
+                f"[TRACK_DRIFT] T{self.track_id} detection_miss #{self.time_since_update} | "
                 f"raw_vel=({vel[0]:.1f}, {vel[1]:.1f}) clamped=({vx:.1f}, {vy:.1f}) | "
                 f"center: {self.center}"
             )
+
+    def advance_frame(self):
+        """Advance track position by one frame of velocity (skip-N frame).
+
+        Called on frames where detection is intentionally skipped.  Unlike
+        ``mark_missed()``, this does NOT:
+        - Increment ``time_since_update`` (no detection miss penalty)
+        - Apply velocity decay (skip is intentional, not uncertainty)
+
+        The bbox is moved by the raw (undecayed) per-frame velocity so
+        that visualisation shows smooth movement and the predicted bbox
+        stays close to the actual object position.
+        """
+        self._frames_since_detection += 1
+        self.age += 1
+
+        MIN_HITS_FOR_VELOCITY = 4
+
+        vel = self.velocity
+        if vel is None or self.hits < MIN_HITS_FOR_VELOCITY:
+            return
+
+        # Clamp velocity (same limits as mark_missed)
+        MAX_VEL_X = 15.0
+        MAX_VEL_Y = 50.0
+        vx = max(-MAX_VEL_X, min(MAX_VEL_X, vel[0]))
+        vy = max(-MAX_VEL_Y, min(MAX_VEL_Y, vel[1]))
+
+        x1, y1, x2, y2 = self.bbox
+        self.bbox = (
+            int(x1 + vx),
+            int(y1 + vy),
+            int(x2 + vx),
+            int(y2 + vy)
+        )
 
 
 @dataclass 
@@ -893,14 +951,30 @@ class ConveyorTracker(ITracker):
     def update(
         self,
         detections: List[Detection],
-        frame_shape: Optional[Tuple[int, int]] = None
+        frame_shape: Optional[Tuple[int, int]] = None,
+        is_detection_frame: bool = True
     ) -> List[TrackedObject]:
         """
         Update tracker with new detections.
-        
+
+        With skip-N detection, ``is_detection_frame`` distinguishes between
+        frames where YOLO ran (detection frame) and frames where detection
+        was intentionally skipped (tracker-only frame).
+
+        On **skip frames** (``is_detection_frame=False``):
+        - Existing tracks advance their bbox by one frame of velocity
+          (``advance_frame()``) for smooth visualisation.
+        - ``time_since_update`` is NOT incremented (no detection-miss penalty).
+        - No matching, no new track creation, no completion checks.
+
+        On **detection frames** (``is_detection_frame=True``):
+        - Normal matching, ghost recovery, new track creation, completion
+          checks — the full pipeline.
+
         Args:
-            detections: List of new detections
+            detections: List of new detections (empty on skip frames)
             frame_shape: Optional frame dimensions (height, width)
+            is_detection_frame: True when YOLO detection was run this frame
             
         Returns:
             List of active tracks after update
@@ -908,7 +982,16 @@ class ConveyorTracker(ITracker):
         # Update frame dimensions
         if frame_shape is not None:
             self.frame_height, self.frame_width = frame_shape
-        
+
+        # ── Skip frame: advance positions, no matching ───────────────────
+        if not is_detection_frame:
+            for track in self.tracks.values():
+                track.advance_frame()
+            # Ghosts use wall-clock time; still need to expire them
+            self._update_ghosts()
+            return list(self.tracks.values())
+
+        # ── Detection frame: full matching pipeline ──────────────────────
         # Get list of active tracks
         track_list = list(self.tracks.values())
 
@@ -927,7 +1010,7 @@ class ConveyorTracker(ITracker):
             return list(self.tracks.values())
         
         if not detections:
-            # No detections - mark all tracks as missed
+            # Detection frame with no detections - mark all tracks as missed
             for track in track_list:
                 track.mark_missed()
             
@@ -962,9 +1045,10 @@ class ConveyorTracker(ITracker):
                 unmatched_tracks.discard(track_idx)
                 unmatched_dets.discard(det_idx)
 
-        # Update matched tracks
+        # Update matched tracks (pass frame gap for velocity normalisation)
         for track_idx, det_idx in matches:
-            track_list[track_idx].update(detections[det_idx])
+            gap = track_list[track_idx]._frames_since_detection + 1
+            track_list[track_idx].update(detections[det_idx], gap=gap)
         
         # Mark unmatched tracks as missed
         for track_idx in unmatched_tracks:
@@ -1186,7 +1270,9 @@ class ConveyorTracker(ITracker):
 
         for track_id, track in self.tracks.items():
             # Check if track exceeded max age (lost)
-            if track.time_since_update > self.config.max_frames_without_detection:
+            # Use _frames_since_detection which counts ALL frames (skip + detection misses)
+            # so timing semantics remain the same regardless of detection_interval.
+            if track._frames_since_detection > self.config.max_frames_without_detection:
                 tracks_to_ghost.append(track_id)
             # Check if track is exiting frame and has been tracked long enough
             elif (
@@ -1610,7 +1696,8 @@ class ConveyorTracker(ITracker):
             if best_det_idx is not None:
                 # Re-associate: restore ghost as active track
                 det = detections[best_det_idx]
-                ghost_track.update(det)
+                gap = ghost_track._frames_since_detection + 1
+                ghost_track.update(det, gap=gap)
                 ghost_track.ghost_recovery_count += 1
                 ghost_track.occlusion_events.append({
                     'lost_at_y': ghost_info['predicted_pos'][1],
@@ -2086,7 +2173,8 @@ class ConveyorTracker(ITracker):
                         shadow = track.shadow_tracks.pop(shadow_id)
 
                         # Restore as active track
-                        shadow.update(det)
+                        gap = shadow._frames_since_detection + 1
+                        shadow.update(det, gap=gap)
                         shadow.shadow_of = None
                         self.tracks[shadow_id] = shadow
                         unmatched_dets.discard(det_idx)

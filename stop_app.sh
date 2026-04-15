@@ -10,16 +10,16 @@ echo "====================="
 # Stop services safely using supervisorctl
 echo "[INFO] Stopping all breadcount services via Supervisor..."
 # Stopping the services in one command is generally fastest
-sudo supervisorctl stop breadcount-uvicorn breadcount-main breadcount-ros2 breadcount-spool-recorder breadcount-spool-processor 2>/dev/null
+sudo supervisorctl stop breadcount-uvicorn breadcount-main breadcount-ros2 2>/dev/null
 
 # Check status using supervisorctl
 echo "[INFO] Checking service status..."
 
 # Retrieve the full status report
-SERVICE_STATUS=$(sudo supervisorctl status breadcount-ros2 breadcount-main breadcount-uvicorn breadcount-spool-recorder breadcount-spool-processor 2>/dev/null)
+SERVICE_STATUS=$(sudo supervisorctl status breadcount-ros2 breadcount-main breadcount-uvicorn 2>/dev/null)
 
 # Define the list of services to check
-SERVICES=("breadcount-ros2" "breadcount-main" "breadcount-uvicorn" "breadcount-spool-recorder" "breadcount-spool-processor")
+SERVICES=("breadcount-ros2" "breadcount-main" "breadcount-uvicorn")
 
 # Check status for each service
 for service in "${SERVICES[@]}"; do

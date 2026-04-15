@@ -3,7 +3,7 @@ Health status endpoints for system diagnostics.
 
 Provides API endpoints for checking the health of various system components
 including the codec health monitor, frame processing, ROS2 pipeline,
-spool recorder/processor throughput, and monitoring logs.
+and monitoring logs.
 
 Architecture Note:
     main.py and the FastAPI server (run_endpoint.py) run as SEPARATE processes.
@@ -13,9 +13,6 @@ Architecture Note:
 
     Cross-process status files:
       /tmp/codec_health_status.json      ← codec health monitor (main.py)
-      /tmp/spool_processor_status.json   ← SpoolProcessorNode
-      /tmp/spool_recorder_status.json    ← SpoolRecorderNode
-      /tmp/pipeline_throttle.json        ← ConveyorCounterApp (throttle mode)
       data/pipeline_state.json           ← ConveyorCounterApp (counts, FPS, etc.)
 
     WARNING/ERROR/CRITICAL log messages are captured by a DB-backed handler
@@ -43,15 +40,12 @@ router = APIRouter(prefix="/api/health", tags=["health"])
 # Imported from the single-source-of-truth paths module.
 from src.config.paths import (
     CODEC_HEALTH_STATUS_FILE,
-    SPOOL_PROCESSOR_STATUS_FILE,
-    SPOOL_RECORDER_STATUS_FILE,
-    PIPELINE_THROTTLE_STATE_FILE,
 )
 
 
 class RecoverRequest(BaseModel):
     """Request body for manual pipeline recovery."""
-    stage: int = Field(..., ge=1, le=4, description="Recovery stage (1-4)")
+    stage: int = Field(..., ge=1, le=3, description="Recovery stage (1-3)")
 
 
 # ── Status file readers ──────────────────────────────────────────────
@@ -82,132 +76,7 @@ def _read_status_file() -> Optional[dict]:
     return _read_json_status(CODEC_HEALTH_STATUS_FILE, staleness_s=60.0)
 
 
-def _read_spool_processor_status() -> Optional[dict]:
-    """Read spool processor status (written every ~5 s)."""
-    return _read_json_status(SPOOL_PROCESSOR_STATUS_FILE, staleness_s=30.0)
-
-
-def _read_spool_recorder_status() -> Optional[dict]:
-    """Read spool recorder status (written every ~5 s)."""
-    return _read_json_status(SPOOL_RECORDER_STATUS_FILE, staleness_s=30.0)
-
-
-def _read_throttle_state() -> Optional[dict]:
-    """Read pipeline throttle coordination file (written by ConveyorCounterApp)."""
-    return _read_json_status(PIPELINE_THROTTLE_STATE_FILE, staleness_s=120.0)
-
-
 # ── Dedicated component endpoints ────────────────────────────────────
-
-@router.get("/spool")
-async def get_spool_processor_health() -> JSONResponse:
-    """
-    Get the health status of the spool processor.
-
-    Reads from a shared status file written by SpoolProcessorNode
-    running in the breadcount-spool-processor process.
-
-    Includes:
-    - current_fps: Rolling 10-second FPS throughput
-    - time_behind_recorder_s: Estimated seconds behind the live RTSP feed
-    - segments_behind: Number of unprocessed segments on disk
-    - sentinel_active: Whether the processor is in power-save sentinel mode
-    - sentinel_frames_sent: Total sentinel probe frames published
-
-    Returns:
-        JSON with spool processor statistics and health info.
-    """
-    status = _read_spool_processor_status()
-
-    if status is not None:
-        is_stale = status.get("stale", False)
-        sentinel = status.get("sentinel_active", False)
-        time_behind = status.get("time_behind_recorder_s", 0)
-
-        # Healthy if: not stale AND (sentinel mode OR time behind < 30s)
-        healthy = not is_stale and (sentinel or time_behind < 30.0)
-
-        return JSONResponse(
-            content={
-                "healthy": healthy,
-                "current_fps": status.get("current_fps", 0),
-                "avg_fps": status.get("avg_fps", 0),
-                "time_behind_recorder_s": time_behind,
-                "segments_behind": status.get("segments_behind", 0),
-                "segments_on_disk": status.get("segments_on_disk", 0),
-                "sentinel_active": sentinel,
-                "sentinel_frames_sent": status.get("sentinel_frames_sent", 0),
-                "frames_published": status.get("frames_published", 0),
-                "segments_processed": status.get("segments_processed", 0),
-                "last_processed_segment": status.get("last_processed_segment", -1),
-                "latest_recorder_segment": status.get("latest_recorder_segment", -1),
-                "age_seconds": status.get("age_seconds"),
-                "stale": is_stale,
-            },
-            status_code=200,
-        )
-
-    return JSONResponse(
-        content={
-            "healthy": None,
-            "reason": "Spool processor status file not found. Is breadcount-spool-processor running?",
-        },
-        status_code=200,
-    )
-
-
-@router.get("/recorder")
-async def get_spool_recorder_health() -> JSONResponse:
-    """
-    Get the health status of the spool recorder (RTSP ingestion).
-
-    Reads from a shared status file written by SpoolRecorderNode
-    running in the breadcount-spool-recorder process.
-
-    Includes:
-    - avg_fps: Average RTSP frames received per second
-    - frames_received: Total frames ingested from camera
-    - segments_completed: Total disk segments written
-    - write_queue_size: Current write-buffer depth
-    - write_queue_hwm: Peak write-buffer depth (high-water mark)
-
-    Returns:
-        JSON with spool recorder statistics and health info.
-    """
-    status = _read_spool_recorder_status()
-
-    if status is not None:
-        is_stale = status.get("stale", False)
-        avg_fps = status.get("avg_fps", 0)
-        # Healthy if: not stale AND receiving frames (fps > 1)
-        healthy = not is_stale and avg_fps > 1.0
-
-        return JSONResponse(
-            content={
-                "healthy": healthy,
-                "avg_fps": avg_fps,
-                "frames_received": status.get("frames_received", 0),
-                "idr_count": status.get("idr_count", 0),
-                "segments_completed": status.get("segments_completed", 0),
-                "total_bytes_written": status.get("total_bytes_written", 0),
-                "elapsed_seconds": status.get("elapsed_seconds", 0),
-                "write_queue_size": status.get("write_queue_size", 0),
-                "write_queue_hwm": status.get("write_queue_hwm", 0),
-                "write_queue_capacity": status.get("write_queue_capacity", 0),
-                "age_seconds": status.get("age_seconds"),
-                "stale": is_stale,
-            },
-            status_code=200,
-        )
-
-    return JSONResponse(
-        content={
-            "healthy": None,
-            "reason": "Spool recorder status file not found. Is breadcount-spool-recorder running?",
-        },
-        status_code=200,
-    )
-
 
 @router.get("/codec")
 async def get_codec_health() -> JSONResponse:
@@ -310,17 +179,14 @@ async def get_pipeline_health() -> JSONResponse:
     Comprehensive pipeline health — the single endpoint for full system status.
 
     Aggregates every cross-process status file and the pipeline state into
-    one response covering all five supervisord services:
+    one response covering the supervisord services:
 
       1. **rtsp** — RTSP camera ingest (from codec health checkpoints)
-      2. **spool_recorder** — Disk segment writer (frames received, FPS)
-      3. **spool_processor** — Segment reader / publisher (FPS, time behind, sentinel)
-      4. **codec** — hobot_codec VPU decoder (state, restarts)
-      5. **app** — ConveyorCounterApp detection/tracking (FPS, active tracks)
+      2. **codec** — hobot_codec VPU decoder (state, restarts)
+      3. **app** — ConveyorCounterApp detection/tracking (FPS, active tracks)
 
     Also provides:
       - **throughput**: end-to-end FPS at each pipeline stage
-      - **power_save**: throttle mode, idle %, sentinel status
       - **recovery**: current recovery stage and escalation count
       - overall **status**: "healthy" | "degraded"
 
@@ -331,7 +197,6 @@ async def get_pipeline_health() -> JSONResponse:
         "status": "healthy",
         "components": {},
         "throughput": {},
-        "power_save": {},
     }
 
     # ── 1. Codec & checkpoint-based components ────────────────────
@@ -351,17 +216,8 @@ async def get_pipeline_health() -> JSONResponse:
         if not codec_healthy:
             health["status"] = "degraded"
 
-        # Spool health from checkpoints
-        checkpoints = codec_status.get("health_checkpoints", {})
-        spool_cp = checkpoints.get("spool_input", {})
-        health["components"]["spool_input"] = {
-            "healthy": spool_cp.get("alive", False) if spool_cp else None,
-            "reason": spool_cp.get("reason") if spool_cp else "no_data",
-        }
-        if spool_cp and not spool_cp.get("alive", False):
-            health["status"] = "degraded"
-
         # RTSP health from checkpoints
+        checkpoints = codec_status.get("health_checkpoints", {})
         rtsp_cp = checkpoints.get("rtsp_ingest", {})
         health["components"]["rtsp"] = {
             "healthy": rtsp_cp.get("alive", False) if rtsp_cp else None,
@@ -382,7 +238,6 @@ async def get_pipeline_health() -> JSONResponse:
                 "state": "unknown",
                 "reason": "Status file not found — main.py may not be running"
             }
-            health["components"]["spool_input"] = {"healthy": None, "reason": "no_data"}
             health["components"]["rtsp"] = {"healthy": None, "reason": "no_data"}
             health["status"] = "degraded"
         else:
@@ -392,60 +247,7 @@ async def get_pipeline_health() -> JSONResponse:
             }
         health["recovery"] = {"stage": 1, "escalation_count": 0}
 
-    # ── 2. Spool recorder (RTSP → disk) ──────────────────────────
-    rec = _read_spool_recorder_status()
-    if rec is not None:
-        rec_stale = rec.get("stale", False)
-        rec_fps = rec.get("avg_fps", 0)
-        rec_healthy = not rec_stale and rec_fps > 1.0
-
-        health["components"]["spool_recorder"] = {
-            "healthy": rec_healthy,
-            "avg_fps": rec_fps,
-            "frames_received": rec.get("frames_received", 0),
-            "segments_completed": rec.get("segments_completed", 0),
-            "write_queue_size": rec.get("write_queue_size", 0),
-            "write_queue_hwm": rec.get("write_queue_hwm", 0),
-            "write_queue_capacity": rec.get("write_queue_capacity", 0),
-            "stale": rec_stale,
-        }
-        if not rec_healthy:
-            health["status"] = "degraded"
-        health["throughput"]["recorder_fps"] = rec_fps
-    else:
-        health["components"]["spool_recorder"] = {"healthy": None, "reason": "no_data"}
-
-    # ── 3. Spool processor (disk → codec) ────────────────────────
-    proc = _read_spool_processor_status()
-    if proc is not None:
-        sp_stale = proc.get("stale", False)
-        sp_sentinel = proc.get("sentinel_active", False)
-        sp_time_behind = proc.get("time_behind_recorder_s", 0)
-        sp_fps = proc.get("current_fps", 0)
-        sp_healthy = not sp_stale and (sp_sentinel or sp_time_behind < 30.0)
-
-        health["components"]["spool_processor"] = {
-            "healthy": sp_healthy,
-            "current_fps": sp_fps,
-            "avg_fps": proc.get("avg_fps", 0),
-            "time_behind_recorder_s": sp_time_behind,
-            "segments_behind": proc.get("segments_behind", 0),
-            "segments_on_disk": proc.get("segments_on_disk", 0),
-            "frames_published": proc.get("frames_published", 0),
-            "segments_processed": proc.get("segments_processed", 0),
-            "sentinel_active": sp_sentinel,
-            "sentinel_frames_sent": proc.get("sentinel_frames_sent", 0),
-            "stale": sp_stale,
-        }
-        if not sp_healthy:
-            health["status"] = "degraded"
-        health["throughput"]["processor_fps"] = sp_fps
-        health["throughput"]["time_behind_recorder_s"] = sp_time_behind
-        health["throughput"]["segments_behind"] = proc.get("segments_behind", 0)
-    else:
-        health["components"]["spool_processor"] = {"healthy": None, "reason": "no_data"}
-
-    # ── 4. App metrics (detection / tracking / classification) ───
+    # ── 2. App metrics (detection / tracking / classification) ───
     pipeline = read_pipeline_state()
     app_metrics = pipeline.get("app_metrics", {})
     app_fps = app_metrics.get("fps", 0)
@@ -468,24 +270,6 @@ async def get_pipeline_health() -> JSONResponse:
         health["status"] = "degraded"
     health["throughput"]["app_fps"] = app_fps
 
-    # ── 5. Power-save / frame throttle ───────────────────────────
-    frame_throttle = pipeline.get("frame_throttle", {})
-    throttle_file = _read_throttle_state()
-
-    health["power_save"] = {
-        "mode": frame_throttle.get("mode", "unknown"),
-        "enabled": frame_throttle.get("enabled", False),
-        "idle_seconds": frame_throttle.get("idle_seconds", 0),
-        "idle_percent": frame_throttle.get("idle_percent", 0),
-        "time_until_degrade_s": frame_throttle.get("time_until_degrade_s"),
-        "degraded_since_seconds": frame_throttle.get("degraded_since_seconds"),
-        "degraded_transitions": frame_throttle.get("degraded_transitions", 0),
-        "wake_transitions": frame_throttle.get("wake_transitions", 0),
-        "last_wake_signal": frame_throttle.get("last_wake_signal"),
-        "sentinel_active": (proc.get("sentinel_active", False) if proc else False),
-        "throttle_file_stale": throttle_file.get("stale", True) if throttle_file else True,
-    }
-
     status_code = 200 if health["status"] == "healthy" else 503
     return JSONResponse(content=health, status_code=status_code)
 
@@ -493,13 +277,12 @@ async def get_pipeline_health() -> JSONResponse:
 @router.post("/pipeline/recover")
 async def trigger_pipeline_recovery(body: RecoverRequest) -> JSONResponse:
     """
-    Manually trigger pipeline recovery at a specified stage (1-4).
+    Manually trigger pipeline recovery at a specified stage (1-3).
 
     Stages:
         1 - Restart hobot_codec only
-        2 - Restart spool_processor + ros2
-        3 - Restart full media stack (ros2 + spool-processor + spool-recorder)
-        4 - Restart all services except uvicorn
+        2 - Restart breadcount-ros2
+        3 - Restart all services except uvicorn
 
     Returns:
         JSON with recovery result.
@@ -513,9 +296,8 @@ async def trigger_pipeline_recovery(body: RecoverRequest) -> JSONResponse:
     stage = body.stage
     stage_commands = {
         1: None,  # handled specially below
-        2: "sudo supervisorctl restart breadcount-ros2 breadcount-spool-processor",
-        3: "sudo supervisorctl restart breadcount-ros2 breadcount-spool-processor breadcount-spool-recorder",
-        4: "sudo supervisorctl restart breadcount-ros2 breadcount-spool-processor breadcount-spool-recorder breadcount-main",
+        2: "sudo supervisorctl restart breadcount-ros2",
+        3: "sudo supervisorctl restart breadcount-ros2 breadcount-main",
     }
 
     try:

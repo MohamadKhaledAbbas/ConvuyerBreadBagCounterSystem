@@ -121,7 +121,6 @@ def _empty_state() -> Dict[str, Any]:
         "transition_history": [],
         "last_count_timestamp": 0,
         "work_started_timestamp": 0,
-        "frame_throttle": {},
         "app_metrics": {
             "fps": 0.0,
             "frame_count": 0,

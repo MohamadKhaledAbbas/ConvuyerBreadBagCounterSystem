@@ -322,25 +322,7 @@
             <div class="label"><i class="fa-solid fa-percent"></i> نسبة التنعيم</div>
             <div class="value eng" id="smoothingRate">—</div>
         </div>
-        <div class="info-card" id="throttleCard">
-            <div class="label"><i class="fa-solid fa-bolt"></i> وضع المعالجة</div>
-            <div class="value" id="throttleMode">—</div>
-            <!-- idle / degraded-since progress bar -->
-            <div id="throttleTimerBar" style="margin-top:6px;display:none;">
-                <div style="position:relative;height:4px;border-radius:2px;background:rgba(255,255,255,.08);overflow:hidden;">
-                    <div id="throttleTimerFill" style="height:100%;border-radius:2px;width:0%;transition:width .5s;"></div>
-                </div>
-                <div style="display:flex;justify-content:space-between;margin-top:3px;font-size:.65rem;color:var(--text-muted);font-family:'Inter',monospace;direction:ltr;">
-                    <span id="throttleTimerLeft"></span>
-                    <span id="throttleTimerRight"></span>
-                </div>
-            </div>
-            <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px;" id="throttleDetail"></div>
-        </div>
     </div>
-
-    <!-- Degraded reasons -->
-    <div class="degraded-pills" id="degradedReasons" style="display:none;"></div>
 
     <!-- Pipeline components health -->
     <div class="section-title"><i class="fa-solid fa-cubes"></i> مكونات خط الإنتاج</div>
@@ -351,71 +333,10 @@
     <!-- Throughput Pipeline -->
     <div class="section-title"><i class="fa-solid fa-gauge-high"></i> إنتاجية خط المعالجة</div>
     <div class="throughput-bar" id="throughputBar">
-        <div class="tp-stage tp-na" id="tpRecorder">
-            <div class="tp-label">📼 المسجّل</div>
-            <div class="tp-value" id="tpRecFps">—</div>
-            <div class="tp-sub">إطار/ث</div>
-        </div>
-        <div class="tp-stage tp-na" id="tpProcessor">
-            <div class="tp-label">⚙️ المعالج</div>
-            <div class="tp-value" id="tpProcFps">—</div>
-            <div class="tp-sub" id="tpProcSub">إطار/ث</div>
-        </div>
         <div class="tp-stage tp-na" id="tpApp">
             <div class="tp-label">🧠 التطبيق</div>
             <div class="tp-value" id="tpAppFps">—</div>
             <div class="tp-sub" id="tpAppSub">إطار/ث</div>
-        </div>
-    </div>
-
-    <!-- ── Behind Real-Time & Media Pipeline Details ── -->
-    <div id="behindSection" style="display:none; margin-bottom:2rem;">
-        <!-- Row 1: time-behind hero card + segments + on-disk + sentinel -->
-        <div class="info-grid" style="margin-bottom:.8rem;">
-            <div class="info-card" id="timeBehindCard">
-                <div class="label"><i class="fa-solid fa-clock-rotate-left"></i> التأخر عن الوقت الحقيقي</div>
-                <div class="value eng" id="timeBehindVal" style="font-size:1.8rem;line-height:1.1;">—</div>
-                <div style="position:relative;height:5px;border-radius:3px;background:rgba(255,255,255,.08);overflow:hidden;margin-top:7px;">
-                    <div id="timeBehindBar" style="height:100%;border-radius:3px;width:0%;transition:width .6s ease;background:var(--accent-success);"></div>
-                </div>
-                <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px;" id="timeBehindDetail">—</div>
-            </div>
-            <div class="info-card">
-                <div class="label"><i class="fa-solid fa-film"></i> مقاطع في الانتظار</div>
-                <div class="value eng" id="segsBehindVal">—</div>
-                <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px;" id="segsBehindDetail">—</div>
-            </div>
-            <div class="info-card">
-                <div class="label"><i class="fa-solid fa-hard-drive"></i> مقاطع على القرص</div>
-                <div class="value eng primary" id="segsOnDiskVal">—</div>
-            </div>
-            <div class="info-card">
-                <div class="label"><i class="fa-solid fa-shield-halved"></i> وضع الحارس</div>
-                <div class="value" id="sentinelModeVal">—</div>
-                <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px;" id="sentinelDetail">—</div>
-            </div>
-        </div>
-        <!-- Row 2: spool recorder + processor quick stats -->
-        <div class="info-grid">
-            <div class="info-card">
-                <div class="label"><i class="fa-solid fa-circle-dot" style="color:#f87171;"></i> معدل المسجّل (RTSP)</div>
-                <div class="value eng" id="srFps">—</div>
-                <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px;" id="srDetail">—</div>
-            </div>
-            <div class="info-card">
-                <div class="label"><i class="fa-solid fa-boxes-stacked"></i> مقاطع مكتملة (المسجّل)</div>
-                <div class="value eng primary" id="srSegments">—</div>
-            </div>
-            <div class="info-card">
-                <div class="label"><i class="fa-solid fa-layer-group"></i> طابور كتابة المسجّل</div>
-                <div class="value eng" id="srQueue">—</div>
-                <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px;" id="srQueueDetail">—</div>
-            </div>
-            <div class="info-card">
-                <div class="label"><i class="fa-solid fa-forward-fast"></i> مقاطع المعالج</div>
-                <div class="value eng primary" id="spSegmentsProcessed">—</div>
-                <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px;" id="spDetail">—</div>
-            </div>
         </div>
     </div>
 
@@ -501,16 +422,8 @@
             <div class="value eng muted" id="pathDb" style="font-size:.85rem;word-break:break-all;text-align:right;">—</div>
         </div>
         <div class="info-card" style="flex-direction:row;justify-content:space-between;align-items:center;gap:1rem;">
-            <div class="label" style="white-space:nowrap;"><i class="fa-solid fa-film"></i> البكرة</div>
-            <div class="value eng muted" id="pathSpool" style="font-size:.85rem;word-break:break-all;text-align:right;">—</div>
-        </div>
-        <div class="info-card" style="flex-direction:row;justify-content:space-between;align-items:center;gap:1rem;">
             <div class="label" style="white-space:nowrap;"><i class="fa-solid fa-camera"></i> لقطات الشاشة</div>
             <div class="value eng muted" id="pathSnapshot" style="font-size:.85rem;word-break:break-all;text-align:right;">—</div>
-        </div>
-        <div class="info-card" style="flex-direction:row;justify-content:space-between;align-items:center;gap:1rem;">
-            <div class="label" style="white-space:nowrap;"><i class="fa-solid fa-video"></i> التسجيلات</div>
-            <div class="value eng muted" id="pathRecording" style="font-size:.85rem;word-break:break-all;text-align:right;">—</div>
         </div>
     </div>
 
@@ -547,9 +460,8 @@ function esc(str) {
 let countdown = 30;
 let countdownInterval;
 let uptimeSeconds = null;
-let throttleTimerState = null;   // live-tick snapshot for the timer card
 
-// Helper: format seconds → HH:MM:SS or MM:SS  (module scope so tickThrottleTimers can use it)
+// Helper: format seconds → HH:MM:SS or MM:SS
 function fmtSec(s) {
     if (s == null) return '—';
     s = Math.max(0, Math.round(s));
@@ -559,31 +471,6 @@ function fmtSec(s) {
     const mm = String(m).padStart(2, '0');
     const ss = String(sc).padStart(2, '0');
     return h > 0 ? String(h).padStart(2, '0') + ':' + mm + ':' + ss : mm + ':' + ss;
-}
-
-// Tick the throttle timer labels every second (between API polls)
-function tickThrottleTimers() {
-    if (!throttleTimerState) return;
-    const s = throttleTimerState;
-    s.idleSec = (s.idleSec || 0) + 1;
-
-    if (s.mode === 'degraded') {
-        s.degradedSec = (s.degradedSec || 0) + 1;
-        const pct = Math.min(100, (s.idleSec / (s.timeoutSec || 900)) * 100);
-        $('throttleTimerFill').style.width = pct.toFixed(1) + '%';
-        $('throttleTimerLeft').textContent  = 'في وضع التوفير: ' + fmtSec(s.degradedSec);
-        $('throttleTimerRight').textContent = 'غير نشط منذ: '    + fmtSec(s.idleSec);
-    } else {
-        // full mode
-        if (s.untilSec != null) s.untilSec = Math.max(0, s.untilSec - 1);
-        const remaining = s.untilSec != null ? s.untilSec : Math.max(0, (s.timeoutSec || 900) - s.idleSec);
-        const idlePct   = Math.min(100, (s.idleSec / (s.timeoutSec || 900)) * 100);
-        const barColor  = idlePct >= 80 ? 'var(--accent-warning)' : idlePct >= 50 ? '#fb923c' : 'var(--accent-success)';
-        $('throttleTimerFill').style.width      = idlePct.toFixed(1) + '%';
-        $('throttleTimerFill').style.background = barColor;
-        $('throttleTimerLeft').textContent  = 'غير نشط: '     + fmtSec(s.idleSec);
-        $('throttleTimerRight').textContent = 'يتوقف بعد: '   + fmtSec(remaining);
-    }
 }
 
 function formatUptime(secs) {
@@ -599,35 +486,18 @@ setInterval(() => {
         uptimeSeconds++;
         $('uptime').textContent = formatUptime(uptimeSeconds);
     }
-    tickThrottleTimers();
 }, 1000);
 
 // ── Component names map ──
 const compLabels = {
     database:        'قاعدة البيانات',
     codec:           'وحدة فك الترميز',
-    spool:           'مدخل التسجيل',
     rtsp:            'بث الكاميرا',
-    frame_throttle:  'وضع المعالجة',
 };
 
-function renderComponents(components, frameThrottle) {
+function renderComponents(components) {
     const grid = $('compGrid');
-    // Build a merged dict: real components + synthetic throttle entry
     const allComps = Object.assign({}, components);
-    if (frameThrottle && frameThrottle.enabled !== undefined) {
-        const isDegraded = frameThrottle.mode === 'degraded';
-        const lastSignal = frameThrottle.last_wake_signal || '';
-        const signalLabel = lastSignal === 'detection' ? ' (كشف مبدئي)'
-                          : lastSignal === 'confirmed_track' ? ' (مسار مؤكد)' : '';
-        let statusText = isDegraded ? 'توفير الطاقة' : 'معالجة كاملة';
-        if (!isDegraded && signalLabel) statusText += signalLabel;
-        allComps['frame_throttle'] = {
-            healthy: true,   // throttle itself is always healthy — it's informational
-            status:  statusText,
-            _isDegraded: isDegraded,
-        };
-    }
 
     if (!allComps || Object.keys(allComps).length === 0) {
         grid.innerHTML = '<div class="comp-card"><div class="comp-dot gray"></div><div><div class="comp-name">لا تتوفر بيانات</div></div></div>';
@@ -638,13 +508,7 @@ function renderComponents(components, frameThrottle) {
         if (key === 'recovery_stage' || key === 'escalation_count') continue;
         const label = esc(compLabels[key] || key);
         const healthy = val.healthy;
-        // Throttle: yellow dot when degraded (informational, not an error)
-        let dot;
-        if (key === 'frame_throttle') {
-            dot = val._isDegraded ? 'yellow' : 'green';
-        } else {
-            dot = healthy === true ? 'green' : healthy === false ? 'red' : 'yellow';
-        }
+        const dot = healthy === true ? 'green' : healthy === false ? 'red' : 'yellow';
         const detail = esc(val.state || val.reason || val.status || '');
         html += '<div class="comp-card">'
               + '<div class="comp-dot ' + dot + '"></div>'
@@ -653,16 +517,6 @@ function renderComponents(components, frameThrottle) {
               + '</div></div>';
     }
     grid.innerHTML = html || '<div class="comp-card"><div class="comp-dot gray"></div><div><div class="comp-name">لا تتوفر بيانات</div></div></div>';
-}
-
-function renderDegradedReasons(reasons) {
-    const el = $('degradedReasons');
-    if (!reasons || reasons.length === 0) {
-        el.style.display = 'none';
-        return;
-    }
-    el.innerHTML = reasons.map(r => '<span class="degraded-pill">' + esc(r) + '</span>').join(' ');
-    el.style.display = 'block';
 }
 
 function tempColor(val) {
@@ -683,9 +537,7 @@ function renderStoragePaths(sp) {
     setPath('pathData',      sp.data_dir);
     setPath('pathLog',       sp.log_dir);
     setPath('pathDb',        sp.db_path);
-    setPath('pathSpool',     sp.spool_dir);
     setPath('pathSnapshot',  sp.snapshot_dir);
-    setPath('pathRecording', sp.recording_dir);
 }
 
 function renderSystemInfo(si) {
@@ -799,9 +651,7 @@ async function checkHealth() {
     try {
         const t0 = performance.now();
         // cache: 'no-store' ensures every poll hits the server directly,
-        // bypassing any browser HTTP cache.  The power-mode card must always
-        // reflect the live throttle state (FULL vs DEGRADED) which changes
-        // independently of any user-visible activity.
+        // bypassing any browser HTTP cache.
         const res = await fetch('/health', { cache: 'no-store' });
         const latency = Math.round(performance.now() - t0);
         const data = await res.json();
@@ -894,79 +744,6 @@ async function checkHealth() {
         // ── Smoothing rate ──
         $('smoothingRate').textContent = p.smoothing_rate != null ? (p.smoothing_rate * 100).toFixed(1) + '%' : '—';
 
-        // ── Frame Throttle / Processing mode ──
-        const ft = p.frame_throttle || {};
-        const throttleModeEl   = $('throttleMode');
-        const throttleDetailEl = $('throttleDetail');
-        const throttleCard     = $('throttleCard');
-        const timerBar         = $('throttleTimerBar');
-        const timerFill        = $('throttleTimerFill');
-        const timerLeft        = $('throttleTimerLeft');
-        const timerRight       = $('throttleTimerRight');
-
-
-        if (!ft.enabled) {
-            throttleModeEl.textContent = 'دائماً كامل';
-            throttleModeEl.className   = 'value success';
-            throttleDetailEl.textContent = 'وضع توفير الطاقة معطّل';
-            throttleCard.style.borderColor = '';
-            timerBar.style.display = 'none';
-        } else if (ft.mode === 'degraded') {
-            const degradedS  = ft.degraded_since_seconds;
-            const idleS      = ft.idle_seconds || 0;
-            const wakes      = ft.wake_transitions || 0;
-
-            throttleModeEl.innerHTML = '<span style="color:var(--accent-warning);font-weight:700;">⚡ توفير الطاقة</span>';
-            throttleModeEl.className = 'value warning';
-            throttleCard.style.borderColor = 'rgba(251,191,36,0.35)';
-
-            // Progress bar: idle ratio (filled = time spent idle / threshold)
-            const pct = Math.min(100, (idleS / (ft.idle_timeout_s || 900)) * 100);
-            timerFill.style.width = pct.toFixed(1) + '%';
-            timerFill.style.background = 'var(--accent-warning)';
-            timerLeft.textContent  = 'في وضع التوفير: ' + fmtSec(degradedS);
-            timerRight.textContent = 'غير نشط منذ: ' + fmtSec(idleS);
-            timerBar.style.display = 'block';
-
-            // Sentinel mode: spool processor is the sole rate limiter (1 probe frame/sec)
-            throttleDetailEl.innerHTML =
-                'إطار حارس / ثانية'
-                + ' · استيقاظ <b class="eng">' + esc(String(wakes)) + '</b>';
-            // Snapshot for per-second tick
-            throttleTimerState = { mode: 'degraded', idleSec: idleS, degradedSec: degradedS || 0, timeoutSec: ft.idle_timeout_s || 900 };
-        } else {
-            // FULL mode
-            const idleSec    = ft.idle_seconds || 0;
-            const timeoutSec = ft.idle_timeout_s || 900;
-            const untilSec   = ft.time_until_degrade_s;   // from backend
-            const idlePct    = ft.idle_percent || 0;
-            const lastWake   = ft.last_wake_signal || '';
-            const wakeLabel  = lastWake === 'detection'       ? 'كشف مبدئي'
-                             : lastWake === 'confirmed_track' ? 'مسار مؤكد' : '';
-
-            throttleModeEl.innerHTML = '<span style="color:var(--accent-success);font-weight:700;">✓ معالجة كاملة</span>';
-            throttleModeEl.className = 'value success';
-
-            // Idle progress bar: green → orange as idleness grows
-            const barColor = idlePct >= 80 ? 'var(--accent-warning)'
-                           : idlePct >= 50 ? '#fb923c'
-                           : 'var(--accent-success)';
-            timerFill.style.width      = idlePct.toFixed(1) + '%';
-            timerFill.style.background = barColor;
-            timerLeft.textContent  = 'غير نشط: ' + fmtSec(idleSec);
-            timerRight.textContent = 'يتوقف بعد: ' + fmtSec(untilSec != null ? untilSec : Math.max(0, timeoutSec - idleSec));
-            timerBar.style.display = 'block';
-
-            let detailText = idleSec > 0
-                ? 'التوفير يبدأ بعد ' + fmtSec(untilSec != null ? untilSec : Math.max(0, timeoutSec - idleSec))
-                : 'الخط نشط';
-            if (wakeLabel) detailText += ' · آخر تنبيه: ' + wakeLabel;
-            throttleDetailEl.textContent = detailText;
-            throttleCard.style.borderColor = 'rgba(45,212,191,0.2)';
-            // Snapshot for per-second tick
-            throttleTimerState = { mode: 'full', idleSec: idleSec, untilSec: untilSec, timeoutSec: timeoutSec };
-        }
-
         // ── Throughput pipeline bar ──
         const tp = data.throughput || {};
         function setTpStage(elId, fps, subText) {
@@ -982,142 +759,10 @@ async function checkHealth() {
             }
             if (subEl && subText) subEl.textContent = subText;
         }
-        setTpStage('tpRecorder',  tp.recorder_fps,  'إطار/ث');
-        const behindS   = tp.time_behind_recorder_s;
-        const segBehind = tp.segments_behind;
-        // Read sentinel flag early (spoolProc const is declared below this block)
-        // so the throughput-bar sub-text reflects power-save mode correctly.
-        const isSentinel = !!(data.spool_processor && data.spool_processor.available
-                               && data.spool_processor.sentinel_active);
-        let procSub = 'إطار/ث';
-        if (isSentinel) {
-            // In sentinel mode time_behind / segments_behind are 0 by design.
-            // Show an explicit label instead of the trivially-true "0.0ث تأخر".
-            procSub = 'إطار/ث · ⚡ وضع الحارس';
-        } else if (behindS != null && behindS > 0) {
-            const behindFmt = behindS < 60
-                ? behindS.toFixed(1) + 'ث تأخر'
-                : Math.floor(behindS / 60) + 'د ' + Math.round(behindS % 60) + 'ث تأخر';
-            procSub = 'إطار/ث · ' + behindFmt;
-            if (segBehind != null && segBehind > 0) procSub += ' · ' + segBehind + ' مقطع';
-        }
-        setTpStage('tpProcessor', tp.processor_fps, procSub);
         const appSub = tp.app_fps != null && data.app_metrics
             ? 'إطار/ث · ' + (data.app_metrics.processing_time_ms || 0).toFixed(1) + 'ms'
             : 'إطار/ث';
-        setTpStage('tpApp',       tp.app_fps,       appSub);
-
-        // ── Behind Real-time & spool component details ──
-        const spoolRec  = data.spool_recorder  || {};
-        const spoolProc = data.spool_processor || {};
-        const behindSection = $('behindSection');
-        if (spoolProc.available || spoolRec.available) {
-            behindSection.style.display = '';
-
-            // ── Time-behind card ──
-            // In sentinel mode time_behind_recorder_s is forced to 0 on the
-            // backend (idle segments are not a processing backlog).  Render
-            // an explicit power-save label so the card is informative rather
-            // than the ambiguous "0.0 ث / يعمل في الوقت الفعلي".
-            const behind     = (spoolProc.available && spoolProc.time_behind_recorder_s != null)
-                               ? spoolProc.time_behind_recorder_s : null;
-            const behindEl   = $('timeBehindVal');
-            const behindBar  = $('timeBehindBar');
-            const behindCard = $('timeBehindCard');
-            if (spoolProc.available && spoolProc.sentinel_active) {
-                behindEl.innerHTML   = '<span style="font-size:1.1rem;">⚡</span>';
-                behindEl.className   = 'value eng warning';
-                behindBar.style.width      = '0%';
-                behindBar.style.background = 'var(--accent-warning)';
-                behindCard.style.borderColor = 'rgba(251,191,36,0.3)';
-                $('timeBehindDetail').textContent = 'وضع توفير الطاقة — معالجة مُعلَّقة';
-            } else if (behind != null) {
-                const MAX_BEHIND_S = 120;   // full-bar threshold
-                const pct = Math.min(100, (behind / MAX_BEHIND_S) * 100);
-                const barColor = behind < 5 ? 'var(--accent-success)'
-                               : behind < 30 ? 'var(--accent-warning)' : '#f87171';
-                // Format: < 60 s → "2.3 ث", >= 60 s → "1د 12ث"
-                if (behind < 60) {
-                    behindEl.textContent = behind.toFixed(1) + ' ث';
-                } else {
-                    const m = Math.floor(behind / 60);
-                    const s = Math.round(behind % 60);
-                    behindEl.textContent = m + 'د ' + String(s).padStart(2,'0') + 'ث';
-                }
-                behindEl.className = 'value eng ' + (behind < 5 ? 'success' : behind < 30 ? 'warning' : 'danger');
-                behindBar.style.width      = pct.toFixed(1) + '%';
-                behindBar.style.background = barColor;
-                behindCard.style.borderColor = behind >= 30 ? 'rgba(248,113,113,0.4)'
-                                             : behind >= 5  ? 'rgba(251,191,36,0.35)' : '';
-                $('timeBehindDetail').textContent = behind >= 30 ? '⚠ النظام متأخر بشكل ملحوظ'
-                                                 : behind >= 5  ? '↻ تأخر طفيف — قيد اللحاق'
-                                                 : '✓ يعمل في الوقت الفعلي';
-            } else {
-                behindEl.textContent = '—';
-                behindEl.className   = 'value eng muted';
-                behindBar.style.width = '0%';
-                $('timeBehindDetail').textContent = 'غير متاح';
-            }
-
-            // ── Segments behind ──
-            if (spoolProc.available) {
-                if (spoolProc.sentinel_active) {
-                    // segments_behind = 0 by design in sentinel mode (idle segments
-                    // are not a backlog).  Show on-disk count with sentinel context
-                    // so the operator understands these are wake-up buffers, not queue.
-                    const onDisk = spoolProc.segments_on_disk || 0;
-                    $('segsBehindVal').innerHTML  = '⚡ <span class="eng">' + onDisk.toLocaleString('en') + '</span>';
-                    $('segsBehindVal').className  = 'value warning';
-                    $('segsBehindDetail').textContent = 'وضع الحارس — ' + onDisk + ' مقطع خامل للاستيقاظ';
-                } else {
-                    const segs = spoolProc.segments_behind || 0;
-                    $('segsBehindVal').textContent = segs.toLocaleString('en');
-                    $('segsBehindVal').className   = 'value eng ' + (segs > 10 ? 'danger' : segs > 3 ? 'warning' : 'success');
-                    $('segsBehindDetail').textContent = segs > 0
-                        ? segs + ' مقطع في انتظار المعالجة'
-                        : '✓ لا يوجد تراكم';
-                }
-
-                // ── Segments on disk ──
-                $('segsOnDiskVal').textContent = (spoolProc.segments_on_disk || 0).toLocaleString('en');
-
-                // ── Sentinel mode ──
-                const sentinelEl     = $('sentinelModeVal');
-                const sentinelDetEl  = $('sentinelDetail');
-                if (spoolProc.sentinel_active) {
-                    sentinelEl.innerHTML     = '<span style="color:var(--accent-warning);font-weight:700;">⚡ نشط</span>';
-                    sentinelDetEl.textContent = 'إطارات مُرسلة: ' + (spoolProc.sentinel_frames_sent || 0).toLocaleString('en');
-                } else {
-                    sentinelEl.innerHTML     = '<span style="color:var(--accent-success);font-weight:700;">✓ غير نشط</span>';
-                    sentinelDetEl.textContent = 'بث مستمر عبر التسجيل';
-                }
-
-                // ── Spool processor: segments processed ──
-                $('spSegmentsProcessed').textContent = (spoolProc.segments_processed || 0).toLocaleString('en');
-                $('spDetail').textContent = 'إطارات مرسلة: ' + (spoolProc.frames_published || 0).toLocaleString('en');
-            }
-
-            // ── Spool recorder details ──
-            if (spoolRec.available) {
-                const srFpsVal = spoolRec.avg_fps || 0;
-                $('srFps').textContent = srFpsVal.toFixed(1) + ' fps';
-                $('srFps').className   = 'value eng ' + (srFpsVal >= 20 ? 'success' : srFpsVal >= 5 ? 'warning' : 'danger');
-                $('srDetail').textContent = 'إطارات: ' + (spoolRec.frames_received || 0).toLocaleString('en')
-                                          + '  ·  IDR: ' + (spoolRec.idr_count || 0).toLocaleString('en');
-
-                $('srSegments').textContent = (spoolRec.segments_completed || 0).toLocaleString('en');
-
-                const qSize = spoolRec.write_queue_size     || 0;
-                const qCap  = spoolRec.write_queue_capacity || 1;
-                const qHwm  = spoolRec.write_queue_hwm      || 0;
-                const qPct  = Math.round(qSize / qCap * 100);
-                $('srQueue').textContent = qSize + ' / ' + qCap + '  (' + qPct + '%)';
-                $('srQueue').className   = 'value eng ' + (qPct >= 80 ? 'danger' : qPct >= 50 ? 'warning' : 'success');
-                $('srQueueDetail').textContent = 'الذروة: ' + qHwm;
-            }
-        } else {
-            behindSection.style.display = 'none';
-        }
+        setTpStage('tpApp', tp.app_fps, appSub);
 
         // ── App metrics ──
         const am = data.app_metrics || {};
@@ -1138,10 +783,7 @@ async function checkHealth() {
               v => parseFloat(v) >= 200 ? 'warning' : 'success');
 
         // Components
-        renderComponents(data.components || {}, p.frame_throttle || {});
-
-        // Degraded reasons
-        renderDegradedReasons(data.degraded_reasons || []);
+        renderComponents(data.components || {});
 
         // System info
         renderSystemInfo(data.system_info || {});
@@ -1153,8 +795,7 @@ async function checkHealth() {
         titleEl.textContent = 'الاتصال منقطع';
         subEl.textContent = 'تعذر الوصول إلى الخادم — تحقق من الشبكة';
         $('dbStatus').textContent = '—';
-        renderComponents({}, {});
-        renderDegradedReasons([]);
+        renderComponents({});
     }
 
     // Update last check time

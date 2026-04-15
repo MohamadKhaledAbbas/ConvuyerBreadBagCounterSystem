@@ -39,13 +39,10 @@ from src.utils.system_info import get_system_info
 from src.config.settings import AppConfig
 from src.config.paths import (
     CODEC_HEALTH_STATUS_FILE,
-    SPOOL_PROCESSOR_STATUS_FILE,
-    SPOOL_RECORDER_STATUS_FILE,
     ROOT_SSD_DRIVE,
     DATA_DIR,
     LOG_DIR,
     DB_PATH,
-    SPOOL_DIR,
     SNAPSHOT_DIR,
     RECORDING_DIR,
 )
@@ -151,15 +148,12 @@ async def health() -> JSONResponse:
     Enhanced health check endpoint with system diagnostics.
 
     Returns version, uptime, DB connectivity, live pipeline metrics,
-    per-component pipeline health, end-to-end throughput (FPS at each
-    stage, time behind real-time), power-save status, and a 24-hour
+    per-component pipeline health, end-to-end throughput, and a 24-hour
     monitoring log summary so the UI and external monitors get a
     complete picture of the entire system.
 
     Cache-Control: no-store is set explicitly so that browsers and any
-    intermediate proxies never serve a stale snapshot.  The frame-throttle
-    power-mode card on the health page must always reflect the current mode
-    (FULL vs DEGRADED), which changes independently of any HTTP activity.
+    intermediate proxies never serve a stale snapshot.
     """
     now = time.time()
     uptime_seconds = now - _SERVER_START_TIME
@@ -235,7 +229,7 @@ async def health() -> JSONResponse:
         overall_status = "degraded"
         degraded_reasons.append("قاعدة البيانات غير متصلة")
 
-    # Codec / spool / RTSP from shared status file
+    # Codec / RTSP from shared status file
     codec_status_file = CODEC_HEALTH_STATUS_FILE
     codec_data = None
     try:
@@ -268,16 +262,6 @@ async def health() -> JSONResponse:
 
         # Checkpoints
         checkpoints = codec_data.get("health_checkpoints", {})
-        spool_cp = checkpoints.get("spool_input", {})
-        if spool_cp:
-            spool_alive = spool_cp.get("alive", False)
-            components["spool"] = {
-                "healthy": spool_alive,
-                "reason": spool_cp.get("reason", ""),
-            }
-            if not spool_alive:
-                overall_status = "degraded"
-                degraded_reasons.append("مدخل التسجيل متوقف")
 
         rtsp_cp = checkpoints.get("rtsp_ingest", {})
         if rtsp_cp:
@@ -302,69 +286,12 @@ async def health() -> JSONResponse:
             overall_status = "degraded"
             degraded_reasons.append("مراقب فك الترميز غير متصل")
 
-    # ── Spool recorder stats (RTSP → disk, cross-process) ──
-    spool_recorder: Dict[str, Any] = {"available": False}
-    try:
-        _rec_path = SPOOL_RECORDER_STATUS_FILE
-        if os.path.exists(_rec_path):
-            import json
-            with open(_rec_path, "r") as _f:
-                _rec = json.load(_f)
-            _rec_ts = _rec.get("timestamp", 0)
-            _rec_age = (now - _rec_ts) if _rec_ts else 0
-            spool_recorder = {
-                "available": True,
-                "healthy": _rec_age < 30 and _rec.get("avg_fps", 0) > 1.0,
-                "avg_fps": _rec.get("avg_fps", 0),
-                "frames_received": _rec.get("frames_received", 0),
-                "segments_completed": _rec.get("segments_completed", 0),
-                "write_queue_size": _rec.get("write_queue_size", 0),
-                "write_queue_hwm": _rec.get("write_queue_hwm", 0),
-                "write_queue_capacity": _rec.get("write_queue_capacity", 0),
-                "age_seconds": round(_rec_age, 1),
-            }
-    except Exception:
-        pass
-
-    # ── Spool processor stats (disk → codec, cross-process) ──
-    spool_processor: Dict[str, Any] = {"available": False}
-    try:
-        _proc_path = SPOOL_PROCESSOR_STATUS_FILE
-        if os.path.exists(_proc_path):
-            import json
-            with open(_proc_path, "r") as _f:
-                _proc = json.load(_f)
-            _proc_ts = _proc.get("timestamp", 0)
-            _proc_age = (now - _proc_ts) if _proc_ts else 0
-            _proc_sentinel = _proc.get("sentinel_active", False)
-            _proc_behind = _proc.get("time_behind_recorder_s", 0)
-            spool_processor = {
-                "available": True,
-                "healthy": _proc_age < 30 and (_proc_sentinel or _proc_behind < 30.0),
-                "current_fps": _proc.get("current_fps", 0),
-                "avg_fps": _proc.get("avg_fps", 0),
-                "time_behind_recorder_s": _proc_behind,
-                "segments_behind": _proc.get("segments_behind", 0),
-                "segments_on_disk": _proc.get("segments_on_disk", 0),
-                "sentinel_active": _proc_sentinel,
-                "sentinel_frames_sent": _proc.get("sentinel_frames_sent", 0),
-                "frames_published": _proc.get("frames_published", 0),
-                "segments_processed": _proc.get("segments_processed", 0),
-                "age_seconds": round(_proc_age, 1),
-            }
-    except Exception:
-        pass
-
     # ── App-level processing metrics ──
     app_metrics = pipeline.get("app_metrics", {})
 
     # ── End-to-end throughput summary ──
     throughput = {
-        "recorder_fps": spool_recorder.get("avg_fps", 0) if spool_recorder.get("available") else None,
-        "processor_fps": spool_processor.get("current_fps", 0) if spool_processor.get("available") else None,
         "app_fps": app_metrics.get("fps", 0),
-        "time_behind_recorder_s": spool_processor.get("time_behind_recorder_s", 0) if spool_processor.get("available") else None,
-        "segments_behind": spool_processor.get("segments_behind", 0) if spool_processor.get("available") else None,
     }
 
     # ── Monitoring log summary (24h) ──
@@ -389,7 +316,6 @@ async def health() -> JSONResponse:
         "data_dir": DATA_DIR,
         "log_dir": LOG_DIR,
         "db_path": DB_PATH,
-        "spool_dir": SPOOL_DIR,
         "snapshot_dir": SNAPSHOT_DIR,
         "recording_dir": RECORDING_DIR,
     }
@@ -416,14 +342,10 @@ async def health() -> JSONResponse:
             "work_active": work_active,           # True when last bag < 5 minutes ago
             "last_count_datetime": last_count_dt, # "yyyy/mm/dd - HH:MM" of the last counted bag
             "idle_minutes": line_idle_minutes,    # minutes since last bag was counted
-            # Adaptive frame throttle (power-saving idle mode)
-            "frame_throttle": pipeline.get("frame_throttle", {}),
         },
         # ── NEW: per-stage throughput and media pipeline stats ──
         "throughput": throughput,
         "app_metrics": app_metrics,
-        "spool_recorder": spool_recorder,
-        "spool_processor": spool_processor,
         "components": components,
         "degraded_reasons": degraded_reasons,
         "monitoring_log_summary": log_summary,
@@ -432,8 +354,7 @@ async def health() -> JSONResponse:
     }
 
     # Return with explicit Cache-Control header so browsers and any reverse-
-    # proxies never serve a stale snapshot.  The frame-throttle card must
-    # always show the live mode (FULL vs DEGRADED).
+    # proxies never serve a stale snapshot.
     return JSONResponse(
         content=payload,
         headers={"Cache-Control": "no-store, no-cache, must-revalidate"},

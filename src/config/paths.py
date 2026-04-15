@@ -10,7 +10,6 @@ instead of hardcoding strings.
 Environment variables override every path:
     ROOT_SSD_DRIVE     → mounted SSD/USB root used to build DATA_DIR
     DATA_DIR            → base for db, recordings, pipeline state, classes
-    SPOOL_DIR           → video segment spool files
     LOG_DIR             → application log files
     TMP_STATUS_DIR      → cross-process IPC JSON status files
                           (default: /tmp on RDK for RAM-backed speed)
@@ -121,7 +120,7 @@ DATA_DIR: str = os.getenv(
     DEFAULT_DATA_DIR,
 )
 
-# Spool: video segment files + processor state.
+# Spool directory (retained for lost_snapshots sub-directory)
 SPOOL_DIR: str = os.getenv(
     "SPOOL_DIR",
     os.path.join(DATA_DIR, "spool"),
@@ -142,20 +141,10 @@ DB_DIR: str = os.path.join(DATA_DIR, "db")
 DB_PATH: str = os.getenv("DB_PATH", os.path.join(DB_DIR, "bag_events.db"))
 
 # ============================================================================
-# Spool-derived paths
-# ============================================================================
-
-SPOOL_PROCESSOR_STATE_FILE: str = os.path.join(SPOOL_DIR, "processor_state.json")
-SPOOL_TMP_PATTERN: str = os.path.join(SPOOL_DIR, "*.tmp")
-
-# ============================================================================
 # Cross-process status files (IPC via JSON on disk)
 # ============================================================================
 
 CODEC_HEALTH_STATUS_FILE: str = os.path.join(TMP_STATUS_DIR, "codec_health_status.json")
-SPOOL_PROCESSOR_STATUS_FILE: str = os.path.join(TMP_STATUS_DIR, "spool_processor_status.json")
-SPOOL_RECORDER_STATUS_FILE: str = os.path.join(TMP_STATUS_DIR, "spool_recorder_status.json")
-PIPELINE_THROTTLE_STATE_FILE: str = os.path.join(TMP_STATUS_DIR, "pipeline_throttle.json")
 
 # ============================================================================
 # Other data paths

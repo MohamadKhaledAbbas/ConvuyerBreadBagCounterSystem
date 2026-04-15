@@ -1,19 +1,17 @@
 """
 Codec Health Monitor – Multi-Point Media Pipeline Recovery.
 
-Monitors the full media pipeline (RTSP → spool → codec → app) and
-performs staged recovery when components stall.
+Monitors the media pipeline (RTSP → codec → app) and performs staged
+recovery when components stall.
 
 Data flow monitored:
     RTSP camera
       → hobot_rtsp_client  (/rtsp_image_ch_0)
-      → spool_recorder     (disk)
-      → spool_processor    (/spool_image_ch_0)
       → hobot_codec        (/nv12_images)
       → ConveyorCounterApp
 
 Recovery stages escalate from targeted codec restart up through full
-media stack restart, keeping spool_record alive as long as possible.
+media stack restart.
 
 Root Cause Context:
     The RDK's hobot_codec uses the hardware VPU for H.264 decoding. The VPU
@@ -67,17 +65,15 @@ class HealthState(Enum):
 class HealthCheckpoint(Enum):
     """Individual health check points along the media pipeline."""
     RTSP_INGEST = "rtsp_ingest"         # /rtsp_image_ch_0
-    SPOOL_INPUT = "spool_input"         # /spool_image_ch_0
     CODEC_OUTPUT = "codec_output"       # /nv12_images
 
 
 class RecoveryStage(Enum):
     """Staged recovery escalation levels."""
     CODEC_ONLY = 1          # Stage 1: restart hobot_codec only
-    MEDIA_CONSUMERS = 2     # Stage 2: restart spool_processor + ros2
-    FULL_MEDIA_STACK = 3    # Stage 3: restart ros2 + spool-processor + spool-recorder
-    BROAD_SERVICES = 4      # Stage 4: all services except uvicorn
-    REBOOT_RECOMMENDED = 5  # Stage 5: log recommendation; don't actually reboot
+    MEDIA_STACK = 2         # Stage 2: restart breadcount-ros2
+    BROAD_SERVICES = 3      # Stage 3: all services except uvicorn
+    REBOOT_RECOMMENDED = 4  # Stage 4: log recommendation; don't actually reboot
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +87,6 @@ class RecoveryEvent:
     stage: int
     action: str
     success: bool
-    spool_record_alive: bool
     details: str = ""
 
     def to_dict(self) -> dict:
@@ -101,7 +96,6 @@ class RecoveryEvent:
             "stage": self.stage,
             "action": self.action,
             "success": self.success,
-            "spool_record_alive": self.spool_record_alive,
             "details": self.details,
         }
 
@@ -113,8 +107,7 @@ class MonitorConfig:
     # Topic to monitor (codec output)
     topic: str = "/nv12_images"
 
-    # Additional topics for multi-point monitoring
-    spool_input_topic: str = "/spool_image_ch_0"
+    # Additional topic for multi-point monitoring
     rtsp_topic: str = "/rtsp_image_ch_0"
 
     # How long to wait for a message before considering the topic stalled
@@ -184,7 +177,7 @@ class MonitorStats:
 # Shared status file (cross-process communication)
 # ---------------------------------------------------------------------------
 
-from src.config.paths import CODEC_HEALTH_STATUS_FILE, SPOOL_TMP_PATTERN
+from src.config.paths import CODEC_HEALTH_STATUS_FILE
 
 
 def read_codec_health_status() -> Optional[dict]:
@@ -234,7 +227,6 @@ def perform_startup_cleanup() -> dict:
 
     Cleans:
       - /tmp/codec_health_status.json
-      - /tmp/spool/*.tmp
       - /dev/shm/fastrtps_*  and  /dev/shm/fast_datasharing_*
 
     Returns:
@@ -252,17 +244,7 @@ def perform_startup_cleanup() -> dict:
             cleaned["errors"].append(str(e))
             logger.warning(f"[StartupCleanup] Failed to remove {CODEC_HEALTH_STATUS_FILE}: {e}")
 
-    # 2. Stale spool tmp files
-    for path in glob_module.glob(SPOOL_TMP_PATTERN):
-        try:
-            os.remove(path)
-            cleaned["files_removed"].append(path)
-            logger.info(f"[StartupCleanup] Removed stale spool tmp: {path}")
-        except OSError as e:
-            cleaned["errors"].append(str(e))
-            logger.warning(f"[StartupCleanup] Failed to remove {path}: {e}")
-
-    # 3. FastDDS shared memory artifacts
+    # 2. FastDDS shared memory artifacts
     for pattern in ("/dev/shm/fastrtps_*", "/dev/shm/fast_datasharing_*"):
         for path in glob_module.glob(pattern):
             try:
@@ -576,14 +558,6 @@ class CodecHealthMonitor:
             "alive": alive, "reason": reason
         }
 
-        # Spool input
-        alive_s, reason_s = self._check_topic_alive(
-            self.config.spool_input_topic, timeout=self.config.message_timeout_sec
-        )
-        results[HealthCheckpoint.SPOOL_INPUT.value] = {
-            "alive": alive_s, "reason": reason_s
-        }
-
         # RTSP ingest
         alive_r, reason_r = self._check_topic_alive(
             self.config.rtsp_topic, timeout=self.config.message_timeout_sec
@@ -710,22 +684,6 @@ class CodecHealthMonitor:
         return True
 
     # ------------------------------------------------------------------
-    # spool_record helper
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _is_spool_record_alive() -> bool:
-        """Check whether the spool-recorder supervisor process is running."""
-        try:
-            result = subprocess.run(
-                ["supervisorctl", "status", "breadcount-spool-recorder"],
-                capture_output=True, text=True, timeout=5
-            )
-            return "RUNNING" in result.stdout
-        except Exception:
-            return False
-
-    # ------------------------------------------------------------------
     # Recovery event tracking
     # ------------------------------------------------------------------
 
@@ -737,7 +695,6 @@ class CodecHealthMonitor:
             stage=stage.value,
             action=action,
             success=success,
-            spool_record_alive=self._is_spool_record_alive(),
             details=details,
         )
         with self._lock:
@@ -761,20 +718,16 @@ class CodecHealthMonitor:
             self.stats.state = HealthState.RECOVERING
             self.stats.current_recovery_stage = stage
 
-        spool_alive_before = self._is_spool_record_alive()
         success = False
 
         if stage == RecoveryStage.CODEC_ONLY:
             success = self._recovery_stage_1()
 
-        elif stage == RecoveryStage.MEDIA_CONSUMERS:
+        elif stage == RecoveryStage.MEDIA_STACK:
             success = self._recovery_stage_2()
 
-        elif stage == RecoveryStage.FULL_MEDIA_STACK:
-            success = self._recovery_stage_3()
-
         elif stage == RecoveryStage.BROAD_SERVICES:
-            success = self._recovery_stage_4()
+            success = self._recovery_stage_3()
 
         elif stage == RecoveryStage.REBOOT_RECOMMENDED:
             logger.critical(
@@ -789,11 +742,7 @@ class CodecHealthMonitor:
                 self.stats.state = HealthState.ESCALATING
             return False
 
-        spool_alive_after = self._is_spool_record_alive()
-        detail_msg = (
-            f"spool_record: before={spool_alive_before} after={spool_alive_after}"
-        )
-        self._record_recovery_event(stage, stage.name, success, detail_msg)
+        self._record_recovery_event(stage, stage.name, success)
 
         if success:
             with self._lock:
@@ -804,7 +753,6 @@ class CodecHealthMonitor:
 
             logger.info(
                 f"[CodecHealthMonitor] Recovery stage {stage.name} succeeded | "
-                f"spool_record_alive={spool_alive_after} | "
                 f"total_restarts={self.stats.restarts_total}"
             )
 
@@ -819,7 +767,7 @@ class CodecHealthMonitor:
     # -- Individual stage implementations --------------------------------
 
     def _recovery_stage_1(self) -> bool:
-        """Stage 1: Gracefully terminate/restart hobot_codec only (keep spool_record alive)."""
+        """Stage 1: Gracefully terminate/restart hobot_codec only."""
         logger.warning("[CodecHealthMonitor] Stage 1: Restarting hobot_codec only")
 
         proc_info = self._get_codec_process_info()
@@ -848,13 +796,13 @@ class CodecHealthMonitor:
             return False
 
     def _recovery_stage_2(self) -> bool:
-        """Stage 2: Restart spool_processor + ros2 (keep spool_record alive)."""
+        """Stage 2: Restart breadcount-ros2 (full media stack)."""
         logger.warning(
-            "[CodecHealthMonitor] Stage 2: Restarting breadcount-spool-processor + breadcount-ros2"
+            "[CodecHealthMonitor] Stage 2: Restarting breadcount-ros2"
         )
         try:
             result = subprocess.run(
-                "sudo supervisorctl restart breadcount-ros2 breadcount-spool-processor",
+                "sudo supervisorctl restart breadcount-ros2",
                 shell=True,
                 executable="/bin/bash",
                 capture_output=True, text=True, timeout=30,
@@ -870,14 +818,13 @@ class CodecHealthMonitor:
             return False
 
     def _recovery_stage_3(self) -> bool:
-        """Stage 3: Restart full media stack (ros2 + spool-processor + spool-recorder)."""
+        """Stage 3: Restart broader services (all except uvicorn)."""
         logger.warning(
-            "[CodecHealthMonitor] Stage 3: Restarting full media stack "
-            "(ros2 + spool-processor + spool-recorder)"
+            "[CodecHealthMonitor] Stage 3: Restarting all services except uvicorn"
         )
         try:
             result = subprocess.run(
-                "sudo supervisorctl restart breadcount-ros2 breadcount-spool-processor breadcount-spool-recorder",
+                "sudo supervisorctl restart breadcount-ros2 breadcount-main",
                 shell=True,
                 executable="/bin/bash",
                 capture_output=True, text=True, timeout=30,
@@ -890,29 +837,6 @@ class CodecHealthMonitor:
             return ok
         except Exception as e:
             logger.error(f"[CodecHealthMonitor] Stage 3 failed: {e}")
-            return False
-
-    def _recovery_stage_4(self) -> bool:
-        """Stage 4: Restart broader services (all except uvicorn)."""
-        logger.warning(
-            "[CodecHealthMonitor] Stage 4: Restarting all services except uvicorn"
-        )
-        try:
-            result = subprocess.run(
-                "sudo supervisorctl restart breadcount-ros2 breadcount-spool-processor "
-                "breadcount-spool-recorder breadcount-main",
-                shell=True,
-                executable="/bin/bash",
-                capture_output=True, text=True, timeout=30,
-            )
-            ok = result.returncode == 0
-            if not ok:
-                logger.error(
-                    f"[CodecHealthMonitor] Stage 4 supervisorctl failed: {result.stderr.strip()}"
-                )
-            return ok
-        except Exception as e:
-            logger.error(f"[CodecHealthMonitor] Stage 4 failed: {e}")
             return False
 
     # ------------------------------------------------------------------
@@ -1104,7 +1028,6 @@ def main():
     # Configure from environment
     config = MonitorConfig(
         topic=os.getenv("CODEC_MONITOR_TOPIC", "/nv12_images"),
-        spool_input_topic=os.getenv("CODEC_MONITOR_SPOOL_TOPIC", "/spool_image_ch_0"),
         rtsp_topic=os.getenv("CODEC_MONITOR_RTSP_TOPIC", "/rtsp_image_ch_0"),
         message_timeout_sec=float(os.getenv("CODEC_MONITOR_TIMEOUT", "10")),
         check_interval_sec=float(os.getenv("CODEC_MONITOR_INTERVAL", "15")),

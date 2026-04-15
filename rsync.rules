@@ -60,15 +60,9 @@
 + requirements.rdk.txt
 + requirements.windows.txt
 + cyclonedds.xml
-+ diagnose_spool_qos.py
 + check_ros2_topics.py
 + test_message_types.py
-+ restart_spool_recorder.sh
-+ restart_spool_pipeline.sh
 + deploy_and_restart.sh
-+ SPOOL_QOS_FIX.md
-+ PIPELINE_QOS_CONFIG.md
-+ SPOOL_PERFORMANCE_TUNING.md
 + ROS2_FRAMESERVER_FIX.md
 
 # =============================================================================

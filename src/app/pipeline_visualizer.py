@@ -40,6 +40,7 @@ class PipelineVisualizer:
         'detection': (255, 140, 40),       # Soft blue for detections
         'track_tentative': (80, 200, 255), # Warm orange for tentative tracks
         'track_confirmed': (80, 220, 80),  # Soft green for confirmed tracks
+        'track_predicted': (0, 165, 255),   # Orange for tracker-predicted frames
         'track_lost': (80, 80, 255),       # Soft red for lost tracks
 
         # Panel backgrounds (with transparency support)
@@ -232,7 +233,8 @@ class PipelineVisualizer:
         total_counted: int,
         counts_by_class: Dict[str, int],
         debug_info: Optional[Dict] = None,
-        ghost_tracks: Optional[List[Dict]] = None
+        ghost_tracks: Optional[List[Dict]] = None,
+        is_detection_frame: bool = True
     ) -> np.ndarray:
         """
         Draw all annotations on frame including debug panel.
@@ -247,6 +249,8 @@ class PipelineVisualizer:
             counts_by_class: Count per class (CONFIRMED)
             debug_info: Optional debug information dict including tentative counts
             ghost_tracks: Optional list of ghost track info for visualization
+            is_detection_frame: True if YOLO detection ran this frame (green),
+                                False if tracker-only prediction (orange)
 
         Returns:
             Annotated frame
@@ -262,7 +266,7 @@ class PipelineVisualizer:
         self._draw_detections(annotated, detections)
 
         # Draw tracks (colored boxes with IDs and info)
-        self._draw_tracks(annotated, tracks)
+        self._draw_tracks(annotated, tracks, is_detection_frame)
 
         # Draw ghost tracks (predicted positions with dashed lines)
         if ghost_tracks:
@@ -391,8 +395,13 @@ class PipelineVisualizer:
                 (255, 255, 255), self.FONT_WEIGHT_NORMAL
             )
 
-    def _draw_tracks(self, frame: np.ndarray, tracks: List[TrackedObject]):
-        """Draw tracking boxes with modern styling."""
+    def _draw_tracks(self, frame: np.ndarray, tracks: List[TrackedObject], is_detection_frame: bool = True):
+        """Draw tracking boxes with modern styling.
+        
+        On detection frames, confirmed tracks are drawn in green.
+        On tracker-only frames, confirmed tracks are drawn in orange
+        to visually distinguish YOLO-confirmed vs velocity-predicted positions.
+        """
         for track in tracks:
             x1, y1, x2, y2 = track.bbox
 
@@ -406,7 +415,11 @@ class PipelineVisualizer:
                 state_str = f"LOST +{track.time_since_update}"
                 thickness = self.BOX_THICKNESS_NORMAL
             elif confirmed:
-                color = self.COLORS['track_confirmed']
+                # Green on detection frames, orange on tracker-predicted frames
+                if is_detection_frame:
+                    color = self.COLORS['track_confirmed']
+                else:
+                    color = self.COLORS['track_predicted']
                 state_icon = "✓"
                 state_str = "CONFIRMED"
                 thickness = self.BOX_THICKNESS_THICK

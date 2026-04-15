@@ -39,9 +39,7 @@ except ImportError:
     HAS_PSUTIL = False
 
 # Import modular pipeline components
-from src.app.adaptive_frame_throttle import AdaptiveFrameThrottle
 from src.app.pipeline_core import PipelineCore
-from src.app.pipeline_throttle_state import write_throttle_state, cleanup_throttle_state
 from src.app.pipeline_visualizer import PipelineVisualizer
 from src.classifier.BaseClassifier import BaseClassifier
 from src.classifier.ClassificationWorker import ClassificationWorker
@@ -264,9 +262,6 @@ class ConveyorCounterApp:
         # Codec health monitor (RDK only) - auto-recovers from VPU decoder stalls
         self._codec_health_monitor = None
 
-        # Adaptive frame throttle (idle power-saving)
-        self._throttle: Optional[AdaptiveFrameThrottle] = None
-
         # ROI cache for saving by class (track_id -> best_roi)
         self._roi_cache: Dict[int, np.ndarray] = {}
 
@@ -294,9 +289,9 @@ class ConveyorCounterApp:
         self._memory_log_interval: float = 60.0  # Log memory every 60 seconds
 
         # Periodic pipeline-state file refresh (independent of classification events).
-        # Ensures the frame-throttle mode (FULL / DEGRADED) is always visible to the
-        # health page and counts SSE even when the belt is idle and no classifications
-        # are happening.  15-second interval is fine: the health page polls every 30 s.
+        # Ensures the pipeline state is always visible to the health page and counts
+        # SSE even when the belt is idle and no classifications are happening.
+        # 25-second interval is fine: the health page polls every 30 s.
         self._last_state_publish_time: float = 0.0
         self._state_publish_interval_s: float = 25.0
 
@@ -307,10 +302,10 @@ class ConveyorCounterApp:
         # start from zero — as if the app had been freshly restarted.
         #
         # Timer design: _last_activity_for_reset is updated every frame when
-        # confirmed tracks or ghost tracks exist (same signal as the frame
-        # throttle's Signal B).  When it's been > _IDLE_SESSION_RESET_SECONDS
-        # since the last activity, the reset fires.  After reset the timestamp
-        # is zeroed so it won't fire again until new tracks appear and go idle.
+        # confirmed tracks or ghost tracks exist.  When it's been
+        # > _IDLE_SESSION_RESET_SECONDS since the last activity, the reset
+        # fires.  After reset the timestamp is zeroed so it won't fire again
+        # until new tracks appear and go idle.
         self._IDLE_SESSION_RESET_SECONDS: float = 2 * 60 * 60  # 2 hours
         self._last_activity_for_reset: float = 0.0  # 0 = no activity yet
 
@@ -366,17 +361,12 @@ class ConveyorCounterApp:
         """
         Publish the pipeline state file at a fixed wall-clock interval.
 
-        Called on every iteration of the main frame loop — including frames
-        that are skipped by the throttle in DEGRADED mode — so that consumers
-        (health page, counts SSE, etc.) always see up-to-date throttle data
+        Called on every iteration of the main frame loop so that consumers
+        (health page, counts SSE, etc.) always see up-to-date state data
         even when the belt is idle and no classification events are firing.
 
-        Also refreshes the cross-process throttle state file as a heartbeat,
-        so the SpoolProcessor's staleness timeout (120 s) never fires while
-        the main app is healthy.
-
-        Interval: ``_state_publish_interval_s`` (default 15 s).  The health
-        page polls every 30 s, so a 15 s write interval guarantees at most
+        Interval: ``_state_publish_interval_s`` (default 25 s).  The health
+        page polls every 30 s, so a 25 s write interval guarantees at most
         one stale poll before the fresh value is visible.
         """
         now = time.perf_counter()
@@ -388,18 +378,6 @@ class ConveyorCounterApp:
         except Exception as e:
             # Never let a state-write error crash the main loop.
             logger.debug(f"[ConveyorCounterApp] Periodic state publish failed: {e}")
-
-        # Heartbeat: refresh the cross-process throttle state file so the
-        # SpoolProcessor knows the main app is still alive and doesn't
-        # revert to full-speed processing due to staleness timeout.
-        if self._throttle is not None:
-            try:
-                write_throttle_state(
-                    mode=self._throttle.mode,
-                    sentinel_interval_s=self.tracking_config.frame_throttle_sentinel_interval_s,
-                )
-            except Exception:
-                pass  # Non-critical — staleness fallback to "full" is safe
 
     def _check_idle_session_reset(self) -> None:
         """
@@ -673,34 +651,6 @@ class ConveyorCounterApp:
 
         logger.info("[ConveyorCounterApp] Components initialized with modular architecture")
 
-        # Adaptive Frame Throttle (idle power-saving)
-        # The on_mode_change callback writes the throttle mode to a shared
-        # state file (/tmp/pipeline_throttle.json) so that the SpoolProcessor
-        # (separate process) can switch to sentinel mode in DEGRADED, saving
-        # VPU/CPU across the entire media pipeline.
-        sentinel_interval_s = self.tracking_config.frame_throttle_sentinel_interval_s
-
-        def _on_throttle_mode_change(new_mode: str):
-            """Write throttle mode to shared state file for cross-process coordination."""
-            write_throttle_state(
-                mode=new_mode,
-                sentinel_interval_s=sentinel_interval_s,
-            )
-
-        self._throttle = AdaptiveFrameThrottle(
-            enabled=self.tracking_config.frame_throttle_enabled,
-            idle_timeout_s=self.tracking_config.frame_throttle_idle_timeout_s,
-            hysteresis_s=self.tracking_config.frame_throttle_hysteresis_s,
-            on_mode_change=_on_throttle_mode_change,
-        )
-
-        # Write initial "full" state so the SpoolProcessor knows the mode
-        # even before any transition has occurred.
-        write_throttle_state(
-            mode="full",
-            sentinel_interval_s=sentinel_interval_s,
-        )
-
     def _process_frame(self, frame: np.ndarray) -> np.ndarray:
         """
         Process a single frame through the modular pipeline.
@@ -726,66 +676,16 @@ class ConveyorCounterApp:
             nv12_data, frame_size = self._frame_source.get_last_nv12_data()
 
         # Use PipelineCore for all processing
-        detections, active_tracks, rois_collected = self._pipeline_core.process_frame(
+        detections, active_tracks, rois_collected, is_detection_frame = self._pipeline_core.process_frame(
             frame, nv12_data=nv12_data, frame_size=frame_size
         )
 
-        # ── Adaptive Frame Throttle: two-signal design ────────────────
-        #
-        # Signal A (report_detection) — FAST wake, does NOT reset idle timer.
-        # Only detections whose center falls WITHIN the conveyor ROI are used.
-        # This is a hard rule regardless of whether the pipeline's own ROI
-        # filter (conveyor_roi_enabled) is active: outside-belt detections
-        # (hands, table edges, reflections) must never wake the throttle or
-        # affect the idle timer.
-        #
-        #   • When conveyor_roi_enabled=True  → pipeline already dropped
-        #     outside-ROI hits, so `detections` is pre-filtered; we reuse it.
-        #   • When conveyor_roi_enabled=False → pipeline passed all detections
-        #     through (debug mode), so we apply the ROI bounds here explicitly.
-        #
-        # Worst-case wake latency equals one sentinel probe interval (~1 s).
-        #
-        # Signal B (report_activity) — Noise-filtered, DOES reset idle timer.
-        # Based on confirmed tracks and ghost tracks only.  Tracks are created
-        # from ROI-filtered detections (ROI filter runs BEFORE the tracker in
-        # PipelineCore), so no extra spatial filtering is needed here.
-        if self._throttle is not None:
-            # Signal A: in-ROI detection → immediate wake from DEGRADED
-            if detections:
-                tc = self.tracking_config
-                if tc.conveyor_roi_enabled:
-                    # PipelineCore already dropped outside-ROI detections;
-                    # the list is clean — use it directly.
-                    roi_detections = detections
-                else:
-                    # Pipeline ROI filter is off (test / debug mode).
-                    # Still apply spatial bounds for the throttle so that
-                    # outside-belt objects don't cause spurious wakes.
-                    roi_detections = [
-                        d for d in detections
-                        if (tc.conveyor_roi_x_min <= d.center[0] <= tc.conveyor_roi_x_max
-                            and tc.conveyor_roi_y_min <= d.center[1] <= tc.conveyor_roi_y_max)
-                    ]
-                if roi_detections:
-                    self._throttle.report_detection()
-
-            # Signal B: confirmed or ghost tracks → reset idle timer.
-            # Tracks are already ROI-scoped (they derive from ROI-filtered
-            # detections), so no spatial check is needed.
-            tracker = self._pipeline_core.tracker
-            confirmed_tracks = tracker.get_confirmed_tracks()
-            ghosts_active = len(tracker.ghost_tracks) > 0
-            if confirmed_tracks or ghosts_active:
-                self._throttle.report_activity()
-                self._last_activity_for_reset = time.time()
-        else:
-            # Throttle disabled — still need confirmed-track check for idle reset
-            tracker = self._pipeline_core.tracker
-            confirmed_tracks = tracker.get_confirmed_tracks()
-            ghosts_active = hasattr(tracker, 'ghost_tracks') and len(tracker.ghost_tracks) > 0
-            if confirmed_tracks or ghosts_active:
-                self._last_activity_for_reset = time.time()
+        # ── Activity tracking for idle session reset ──────────────────
+        tracker = self._pipeline_core.tracker
+        confirmed_tracks = tracker.get_confirmed_tracks()
+        ghosts_active = hasattr(tracker, 'ghost_tracks') and len(tracker.ghost_tracks) > 0
+        if confirmed_tracks or ghosts_active:
+            self._last_activity_for_reset = time.time()
 
         # ── Idle session reset (2-hour inactivity) ────────────────────
         # Runs every frame — cheap single timestamp comparison.
@@ -819,7 +719,7 @@ class ConveyorCounterApp:
             'tentative_total': self.state.tentative_total,
             'tentative_counts': self.state.get_tentative_snapshot(),
             'lost_track_count': self.state.lost_track_count,
-            'throttle_mode': self._throttle.mode if self._throttle else 'full',
+            'is_detection_frame': is_detection_frame,
         }
 
         # Add tracker statistics if available
@@ -869,24 +769,21 @@ class ConveyorCounterApp:
                 total_counted=self.state.total_counted,
                 counts_by_class=self.state.get_counts_snapshot(),
                 debug_info=debug_info,
-                ghost_tracks=ghost_tracks
+                ghost_tracks=ghost_tracks,
+                is_detection_frame=is_detection_frame
             )
 
-            # Push annotated frame into evidence buffer (already annotated).
-            # Guard uses frame count (not wall clock) to avoid unnecessary calls.
-            pc = self._pipeline_core
-            if pc._evidence_frame_counter % pc._evidence_frames_interval == 0:
+            # Push annotated frame into evidence buffer on detection frames only.
+            # Detection frames have YOLO-confirmed positions, not drifted predictions.
+            if is_detection_frame:
+                pc = self._pipeline_core
                 pc.push_evidence_frame(frame)
         elif self._pipeline_visualizer:
-            # Headless mode: annotate a frame ONLY when the evidence buffer
-            # is due to sample (every N video frames at target_fps).
-            # At 25 FPS with a 0.5 s interval that means every 12 frames
-            # (~2 frames/sec, ~8% of frames) — negligible CPU overhead.
-            #
-            # annotate_frame() copies the frame internally, so we pass the
-            # original without an extra .copy() to avoid a double-allocation.
-            pc = self._pipeline_core
-            if pc._evidence_frame_counter % pc._evidence_frames_interval == 0:
+            # Headless mode: annotate a frame ONLY on detection frames for
+            # the evidence buffer.  With detection_interval=5 at 20 FPS this
+            # means ~4 annotated frames/sec — negligible CPU overhead.
+            if is_detection_frame:
+                pc = self._pipeline_core
                 ghost_tracks = None
                 if hasattr(pc, 'tracker') and pc.tracker:
                     ghost_tracks = pc.tracker.get_ghost_tracks_for_visualization()
@@ -899,7 +796,8 @@ class ConveyorCounterApp:
                     total_counted=self.state.total_counted,
                     counts_by_class=self.state.get_counts_snapshot(),
                     debug_info=debug_info,
-                    ghost_tracks=ghost_tracks
+                    ghost_tracks=ghost_tracks,
+                    is_detection_frame=is_detection_frame
                 )
                 pc.push_evidence_frame(evidence_frame)
 
@@ -958,7 +856,7 @@ class ConveyorCounterApp:
         # Stable batch type from rolling window majority
         # Only reliable, non-Rejected classifications inform the batch type
         # so a single misclassification doesn't cause the display to flicker.
-        min_trusted_rois = 3
+        min_trusted_rois = 2
         if non_rejected_rois >= min_trusted_rois and class_name != 'Rejected':
             self._batch_type_window.append(class_name)
             if len(self._batch_type_window) > self._batch_type_window_size:
@@ -1256,7 +1154,6 @@ class ConveyorCounterApp:
                 "transition_history": transition_history,
                 "last_count_timestamp": self.state.last_count_time,
                 "work_started_timestamp": self.state.first_count_time,
-                "frame_throttle": self._throttle.get_state() if self._throttle else {},
                 # ── App-level processing metrics for health endpoint ──
                 "app_metrics": {
                     "fps": round(self.state.fps, 1),
@@ -1320,6 +1217,7 @@ class ConveyorCounterApp:
                     ghost_tracks = self._pipeline_core.tracker.get_ghost_tracks_for_visualization()
 
                 # Create annotated frame on-demand
+                is_det = self._last_debug_info.get('is_detection_frame', True) if self._last_debug_info else True
                 frame_with_overlay = self._pipeline_visualizer.annotate_frame(
                     frame=frame.copy(),  # Copy to avoid modifying original
                     detections=self._last_detections,
@@ -1329,7 +1227,8 @@ class ConveyorCounterApp:
                     total_counted=self.state.total_counted,
                     counts_by_class=self.state.get_counts_snapshot(),
                     debug_info=self._last_debug_info,
-                    ghost_tracks=ghost_tracks
+                    ghost_tracks=ghost_tracks,
+                    is_detection_frame=is_det
                 )
 
             # Capture snapshot
@@ -1400,7 +1299,6 @@ class ConveyorCounterApp:
                 "last_decision": None,
             },
             "transition_history": [],
-            "frame_throttle": self._throttle.get_state() if self._throttle else {},
         }
         write_pipeline_state(initial_state)
         logger.info("[ConveyorCounterApp] Pipeline state reset - counts page will show today's data only")
@@ -1422,21 +1320,10 @@ class ConveyorCounterApp:
                 
                 self._frame_count += 1
 
-                # ── Adaptive Frame Throttle ──────────────────────────────
-                # Check whether the idle timeout has elapsed (FULL → DEGRADED).
-                # In DEGRADED mode only every Nth frame is processed; the rest
-                # are skipped but still drained from the source queue to prevent
-                # buffer overflows and keep the camera feed alive.
-                self._throttle.check_timeout()
-
                 # ── Periodic state-file publish ──────────────────────────
-                # Runs on EVERY frame (including DEGRADED-mode skips) so that
-                # the health page and counts SSE always see the current throttle
-                # mode, confirmed totals, and smoother state even when no
-                # classifications have fired recently.  _publish_pipeline_state()
-                # is otherwise only called from _on_classification_completed(),
-                # which means the frame_throttle card on the health page would
-                # show stale data whenever the belt goes idle.
+                # Runs periodically so the health page and counts SSE always
+                # see up-to-date confirmed totals and smoother state even
+                # when no classifications have fired recently.
                 self._maybe_publish_state_periodic()
 
                 # Process frame through modular pipeline
@@ -1507,14 +1394,6 @@ class ConveyorCounterApp:
             except Exception as e:
                 logger.warning(f"[ConveyorCounterApp] Codec health monitor stop error (ignored): {e}")
 
-        # Write "full" to cross-process throttle state file so the
-        # SpoolProcessor resumes full-speed processing immediately
-        # (doesn't have to wait for the staleness timeout).
-        try:
-            cleanup_throttle_state()
-        except Exception:
-            pass  # Best-effort — staleness fallback is the safety net
-
         # Shutdown ROS2 context if initialized
         if self._ros_executor is not None:
             try:
@@ -1546,14 +1425,6 @@ class ConveyorCounterApp:
         if self._smoother is not None:
             stats = self._smoother.get_statistics()
             logger.info(f"  Smoothing rate: {stats['smoothing_rate']:.1%}")
-
-        if self._throttle is not None:
-            ts = self._throttle.get_state()
-            logger.info(
-                f"  Frame throttle: mode={ts['mode']}, "
-                f"degraded_transitions={ts['degraded_transitions']}, "
-                f"wake_transitions={ts['wake_transitions']}"
-            )
         
         logger.info("=" * 50)
     

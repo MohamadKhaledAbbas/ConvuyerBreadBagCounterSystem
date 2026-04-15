@@ -38,7 +38,6 @@ def main():
     logger.info(f"    Data dir       : {_paths.DATA_DIR}")
     logger.info(f"    Database       : {_paths.DB_PATH}")
     logger.info(f"    Logs           : {_paths.LOG_DIR}")
-    logger.info(f"    Spool          : {_paths.SPOOL_DIR}")
     logger.info(f"    Recordings     : {_paths.RECORDING_DIR}")
     logger.info(f"    Pipeline state : {_paths.PIPELINE_STATE_FILE}")
     logger.info(f"    IPC status     : {_paths.TMP_STATUS_DIR}/")

@@ -117,7 +117,8 @@ class ITracker(ABC):
     def update(
         self,
         detections: List[Detection],
-        frame_shape: Optional[Tuple[int, int]] = None
+        frame_shape: Optional[Tuple[int, int]] = None,
+        is_detection_frame: bool = True
     ) -> List[TrackedObject]:
         """
         Update tracker with new detections.
@@ -125,6 +126,9 @@ class ITracker(ABC):
         Args:
             detections: List of detections from current frame
             frame_shape: Optional frame dimensions (height, width)
+            is_detection_frame: True when YOLO detection was actually run
+                this frame.  False on skip-N frames where detection is
+                intentionally skipped and only tracker prediction is used.
 
         Returns:
             List of active tracked objects

@@ -13,7 +13,6 @@ This allows for simpler tracking logic without complex state machines.
 import os
 from dataclasses import dataclass
 
-from src.config.paths import SPOOL_DIR as _DEFAULT_SPOOL_DIR
 from src.config.paths import ROI_CANDIDATES_DIR as _DEFAULT_ROI_CANDIDATES_DIR
 from src.config.paths import CLASSIFIED_ROIS_DIR as _DEFAULT_CLASSIFIED_ROIS_DIR
 from src.config.paths import LOST_SNAPSHOTS_DIR as _DEFAULT_LOST_SNAPSHOTS_DIR
@@ -72,6 +71,20 @@ class TrackingConfig:
     target_fps: float = _parse_float_env("TARGET_FPS", 25.0)
     """Target frames per second for processing."""
     
+    # ==========================================================================
+    # Detection Interval (Skip-N + Tracker Prediction)
+    # ==========================================================================
+
+    detection_interval: int = _parse_int_env("DETECTION_INTERVAL", 5)
+    """
+    Run YOLO detection every Nth frame; on intermediate frames the tracker
+    predicts positions using EMA velocity drift (mark_missed).
+    
+    At 20 fps with interval=5, detection runs at 4 fps.  Max delay for
+    new-bag detection is ~200 ms (acceptable for typical conveyor speed).
+    Set to 1 to detect every frame (original behaviour).
+    """
+
     # ==========================================================================
     # Detection Thresholds
     # ==========================================================================
@@ -494,61 +507,6 @@ class TrackingConfig:
     """
 
     # ==========================================================================
-    # Adaptive Frame Throttle (Idle Power-Saving)
-    # ==========================================================================
-    # When the production line is idle (no detections for a period), the system
-    # switches to DEGRADED mode.  In DEGRADED mode the SpoolProcessorNode
-    # publishes one sentinel probe frame per second — the sole rate limiter.
-    # The app processes every frame it receives; no app-side frame skipping.
-    #   Signal A (report_detection)  — fast wake from any in-ROI detection
-    #   Signal B (report_activity)   — confirmed/ghost tracks reset idle timer
-
-    frame_throttle_enabled: bool = _parse_bool_env("FRAME_THROTTLE_ENABLED", True)
-    """
-    Master switch for the adaptive frame throttle.
-    When True, the system switches to sentinel probe mode after the conveyor
-    has been idle for `frame_throttle_idle_timeout_s` seconds.
-    When False, the spool processor always runs at full rate.
-    """
-
-    frame_throttle_idle_timeout_s: float = _parse_float_env("FRAME_THROTTLE_IDLE_TIMEOUT_S", 900.0)
-    """
-    Seconds of zero confirmed-track activity (Signal B) before switching
-    to degraded (power-saving) mode.
-    Default: 900 (15 minutes).  Raw detections alone (Signal A) do NOT
-    reset this timer — only confirmed tracks (hits >= 5) or ghost tracks do.
-    """
-
-
-    frame_throttle_hysteresis_s: float = _parse_float_env("FRAME_THROTTLE_HYSTERESIS_S", 60.0)
-    """
-    After waking from degraded mode back to full processing, stay in full
-    mode for at least this many seconds before allowing degradation again.
-    Prevents rapid oscillation from single spurious detections.
-    Default: 60 seconds.
-    """
-
-    frame_throttle_sentinel_interval_s: float = _parse_float_env("FRAME_THROTTLE_SENTINEL_INTERVAL_S", 1.0)
-    """
-    Seconds between sentinel (probe) frames when in DEGRADED mode.
-    In pipeline-wide power-save, the SpoolProcessor skips to the latest
-    segment and publishes just 1 frame every this many seconds.  The codec
-    only decodes sentinel frames and the app runs detection on them.
-    If a bag is detected on a sentinel frame → instant wake to FULL mode.
-    Default: 1.0 second — gives ~1 s worst-case detection latency while
-    reducing VPU/CPU to ~6% of full-rate usage.
-    """
-
-    frame_throttle_wake_buffer_segments: int = _parse_int_env("FRAME_THROTTLE_WAKE_BUFFER_SEGMENTS", 3)
-    """
-    When waking from DEGRADED sentinel mode to FULL, keep this many recent
-    segments before the wake point for catch-up processing.  All older idle
-    segments are skipped (deleted by retention).
-    Default: 3 segments ≈ 15 seconds of video buffer.  Ensures any bag that
-    appeared just before the sentinel detected it is fully captured.
-    """
-
-    # ==========================================================================
     # Bidirectional Smoothing Parameters (legacy — used when smoothing_algorithm='window')
     # ==========================================================================
     
@@ -589,34 +547,6 @@ class TrackingConfig:
     
     sharpness_weight_scale: float = _parse_float_env("SHARPNESS_WEIGHT_SCALE", 100.0)
     """Scale factor for sharpness in trust calculation."""
-    
-    # ==========================================================================
-    # Spool Configuration (from original system)
-    # ==========================================================================
-    
-    spool_dir: str = _parse_str_env(
-        "SPOOL_DIR",
-        _DEFAULT_SPOOL_DIR
-    )
-    """Directory for spool segment files."""
-    
-    spool_segment_duration: float = _parse_float_env("SPOOL_SEGMENT_DURATION", 5.0)
-    """Target segment duration in seconds."""
-    
-    spool_max_segment_duration: float = _parse_float_env("SPOOL_MAX_SEGMENT_DURATION", 10.0)
-    """Maximum segment duration before forced rotation."""
-    
-    spool_retention_seconds: float = _parse_float_env("SPOOL_RETENTION_SECONDS", 180.0)
-    """Maximum age of spool segments before deletion."""
-    
-    spool_recorder_queue_size: int = _parse_int_env("SPOOL_RECORDER_QUEUE_SIZE", 100)
-    """Frame queue size for spool recorder."""
-    
-    spool_recorder_stats_interval: float = _parse_float_env("SPOOL_RECORDER_STATS_INTERVAL", 10.0)
-    """Interval for recorder statistics logging."""
-    
-    spool_processor_target_fps: float = _parse_float_env("SPOOL_PROCESSOR_TARGET_FPS", 30.0)
-    """Target FPS for spool processor."""
     
     # ==========================================================================
     # ROI Saving for Debug/Analysis
@@ -685,26 +615,25 @@ class TrackingConfig:
 
     # ── Evidence ring buffer settings ──────────────────────────────────────
 
-    evidence_buffer_size: int = _parse_int_env("EVIDENCE_BUFFER_SIZE", 10)
+    evidence_buffer_size: int = _parse_int_env("EVIDENCE_BUFFER_SIZE", 30)
     """
-    Number of annotated frames to keep in the evidence ring buffer.
-    When a track is lost/invalid, ALL buffered frames are saved as a
-    filmstrip for post-mortem review.
-    Default: 10 frames (5 seconds at 0.5 s sample interval).
-    This gives ~1 s of context BEFORE the ghost phase starts (ghost
-    timeout = 4 s), so the bag is visible while still actively tracked.
-    Memory cost: 10 × (640×360×3) ≈ 6.6 MB.
+    Number of detection frames to keep in the evidence ring buffer (pre-event).
+    When a track is lost/invalid, these frames are captured as the "before"
+    filmstrip.  Combined with evidence_post_count frames collected after
+    the event for a full pre+post review.
+    Frames are stored on every detection frame (every detection_interval-th
+    frame).  At detection_interval=5 and 25 FPS → 5 detection frames/sec.
+    Default: 30 → 6.0 s before the lost event.  Since ghost timeout is ~4 s,
+    this captures ~2 s of active tracking (last YOLO detections) plus the
+    full ghost period.  Memory cost: 30 × (640×360×3) ≈ 20 MB.
     """
 
-    evidence_sample_interval: float = _parse_float_env("EVIDENCE_SAMPLE_INTERVAL", 0.5)
+    evidence_post_count: int = _parse_int_env("EVIDENCE_POST_COUNT", 20)
     """
-    Video-time interval in seconds between evidence frame samples.
-    Converted to a frame count as ``round(target_fps * evidence_sample_interval)``
-    so that sampling stays evenly spaced in video time regardless of whether the
-    pipeline processes frames faster or slower than real-time.
-    Lower values give denser coverage but more memory/disk usage.
-    Default: 0.5 s → at 25 FPS, sample every 12 frames; 10 frames covers 5.0 s
-    (ghost timeout + 1 s pre-ghost context).
+    Number of detection frames to collect AFTER a lost/invalid track event.
+    At 5 detection frames/sec (detection_interval=5, 25 FPS), 20 frames = 4.0 s.
+    Set to 0 to disable post-event collection (save immediately).
+    Default: 20.
     """
 
     @property
