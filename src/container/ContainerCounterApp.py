@@ -132,8 +132,11 @@ class _LinearPredictor:
     - Minimal memory: O(N) where N = number of distinct QR values (≤ 5)
     """
 
-    # Max consecutive frames without a real detection before dropping prediction
-    MAX_PRED_FRAMES = 10   # at detect_interval=5 → 50 frames (~2.5 s @ 20 fps)
+    # Max consecutive predict() calls without a real detection before dropping.
+    # At detect_interval=3 this gives 4 calls ≈ 2 missed detect cycles ≈ 0.3 s @20 fps.
+    # Kept small deliberately: a real exit means the QR leaves the decoder's view
+    # immediately; generous prediction budgets only produce ghost overlays.
+    MAX_PRED_FRAMES = 4
 
     def __init__(self, detect_interval: int = 5,
                  frame_w: int = 1280, frame_h: int = 720):
@@ -189,10 +192,11 @@ class _LinearPredictor:
                 continue
             proj = entry.advance(step)
             if proj is None:
-                # Predicted outside frame — stop predicting but keep entry
-                # (a real detection may bring it back into frame)
+                # Projected outside frame → container has left the field of view.
+                # Remove immediately so downstream consumers see no ghost overlay.
+                expired.append(qr_val)
                 logger.debug(
-                    f"[Predictor] QR{qr_val} projected outside frame at step {step}, skipping"
+                    f"[Predictor] QR{qr_val} projected outside frame at step {step}, removing"
                 )
                 continue
             cx, cy, bbox_xywh = proj
@@ -223,13 +227,13 @@ class ContainerConfig:
     
     # Frame source
     video_source: str = ""  # For development mode
-    fps: int = 30
+    fps: int = 20
     
     # Tracking
     exit_zone_ratio: float = 0.15
     lost_timeout: float = 2.0
     min_displacement_ratio: float = 0.3
-    detect_interval: int = 3  # Run QR detection every N-th frame
+    detect_interval: int = 4  # Run QR detection every N-th frame
     # False-positive gate: a track must accumulate this many *real* QR
     # detections before it can emit an event.  Drops single-frame decoder
     # glitches that would otherwise count as containers.
@@ -282,6 +286,18 @@ class ContainerConfig:
     #   "content" -> use the content camera recorder when available;
     #                fall back to QR frames otherwise.
     event_video_source: str = "qr"
+
+    # ---- Automatic data retention (mirrors pipeline_core.py pattern) ----
+    # QR-camera event clip directories (data/container_snapshots/).
+    snapshots_retention_hours: float = 72.0      # delete dirs older than N hours
+    snapshots_max_count: int = 500               # hard cap; oldest deleted first
+    # Content-camera MP4 files (data/container_content_videos/).
+    content_videos_retention_hours: float = 72.0
+    content_videos_max_count: int = 200
+    # container_events DB rows.
+    db_events_retention_hours: float = 168.0     # 7 days
+    # How often the purge thread wakes up.
+    purge_interval_minutes: float = 60.0
 
     @classmethod
     def from_database(
@@ -395,7 +411,36 @@ class ContainerConfig:
             config.enable_display = (
                 db.get_config(constants.container_enable_display_key, '0') == '1'
             )
-        
+
+        # ---- Retention settings ----
+        try:
+            config.snapshots_retention_hours = max(0.0, float(
+                db.get_config(constants.container_snapshots_retention_hours,
+                              str(config.snapshots_retention_hours))
+            ))
+            config.snapshots_max_count = max(0, int(
+                db.get_config(constants.container_snapshots_max_count,
+                              str(config.snapshots_max_count))
+            ))
+            config.content_videos_retention_hours = max(0.0, float(
+                db.get_config(constants.container_content_videos_retention_hours,
+                              str(config.content_videos_retention_hours))
+            ))
+            config.content_videos_max_count = max(0, int(
+                db.get_config(constants.container_content_videos_max_count,
+                              str(config.content_videos_max_count))
+            ))
+            config.db_events_retention_hours = max(0.0, float(
+                db.get_config(constants.container_db_events_retention_hours,
+                              str(config.db_events_retention_hours))
+            ))
+            config.purge_interval_minutes = max(1.0, float(
+                db.get_config(constants.container_purge_interval_minutes,
+                              str(config.purge_interval_minutes))
+            ))
+        except ValueError:
+            pass
+
         return config
 
 
@@ -569,7 +614,20 @@ class ContainerCounterApp:
         # interrupts time.sleep / cap.read / cv2.waitKey rather than waiting
         # for the current sleep to finish (PEP 475 behaviour).
         signal.signal(signal.SIGTERM, self._signal_handler)
-        
+
+        # Background purge thread for old event clips and DB rows.
+        # Started after _init_components() so config values are loaded from DB.
+        self._purge_thread: Optional[threading.Thread] = None
+        self._purge_stop_event = threading.Event()
+
+        # Cached active-tracks snapshot from the last _process_frame call.
+        # Reused by _annotate_frame to avoid a third get_active_tracks() dict copy.
+        self._current_tracks: Dict[int, object] = {}
+
+        # Time of the last DB poll for on-demand snapshot requests.
+        # Throttled to 1 Hz so the hot frame loop is not blocked by SQLite reads.
+        self._last_snapshot_check: float = 0.0
+
         logger.info(f"[ContainerCounterApp] Initialized on {PLATFORM_NAME}")
     
     def _signal_handler(self, signum, frame):
@@ -784,9 +842,12 @@ class ContainerCounterApp:
         try:
             self._init_components()
             self._running = True
-            
+
             # Start snapshot save thread
             self._start_snapshot_thread()
+
+            # Start background purge thread (uses DB-loaded retention config).
+            self._start_purge_thread()
             
             fps = self.config.fps or 25
             frame_interval = 1.0 / fps
@@ -820,9 +881,12 @@ class ContainerCounterApp:
                         f"| QR detections={self.state.qr_detections}"
                     )
                 
-                # Create annotated frame (for display or on-demand snapshot)
-                annotated = self._annotate_frame(frame)
-                
+                # Annotate only when needed: display is on, OR this is a snapshot
+                # check frame.  At detect_interval=3 and 20 fps this skips ~67% of
+                # annotation work in headless production mode.
+                need_annotated = self.enable_display or (self.state.frame_count % 5 == 0)
+                annotated = self._annotate_frame(frame) if need_annotated else frame
+
                 # Check on-demand snapshot request
                 self._maybe_capture_snapshot(frame, annotated)
                 
@@ -934,10 +998,13 @@ class ContainerCounterApp:
             if step == 0:
                 step = self._detect_interval
 
-            active = self.tracker.get_active_tracks()
+            current_tracks = self.tracker.get_active_tracks()  # single call; reused below
             for qr_val, center, bbox_xywh in self._linear_predictor.predict(step):
-                # Only predict for QR values that have an active track
-                if qr_val not in active:
+                # Only predict for QR values that have an active track.
+                # If the track was silently dropped (FP gate, etc.) remove the
+                # orphaned predictor entry so it doesn't linger until MAX_PRED_FRAMES.
+                if qr_val not in current_tracks:
+                    self._linear_predictor.remove(qr_val)
                     continue
 
                 pred_det = _PredictedDetection(qr_val, center, bbox_xywh)
@@ -990,7 +1057,10 @@ class ContainerCounterApp:
         # The :class:`EventFrameBuffer` throttles to ``event_video_fps`` and
         # overwrites frames with minimal positional change, so memory is bounded.
         # ``half`` was already computed above for the pre-roll buffer.
-        current_tracks = self.tracker.get_active_tracks()
+        # Detect frames: fetch post-update snapshot here (tracks may have been added/removed).
+        # Predict frames: current_tracks was already captured at the start of the predict branch.
+        if is_detect_frame:
+            current_tracks = self.tracker.get_active_tracks()
         if current_tracks:
             for qr_val, track in current_tracks.items():
                 buf = self._track_buffers.get(qr_val)
@@ -1034,10 +1104,24 @@ class ContainerCounterApp:
                         f"recording QR={q} event_id={eid}"
                     )
 
+        # Cache for _annotate_frame (avoids a third dict copy per annotated frame).
+        self._current_tracks = current_tracks
+
         # Update state
         self.state.active_tracks = len(current_tracks)
         self.state.pending_snapshots = self._snapshot_queue.qsize()
         self.state.processing_time_ms = (time.time() - start_time) * 1000
+
+        # Warn when a single frame takes longer than its time budget (× 1.2 headroom).
+        # This is the earliest signal that the pipeline is falling behind real-time
+        # and frames are beginning to queue up in the frame server.
+        _budget_ms = 1000.0 / max(1, self.config.fps)
+        if self.state.processing_time_ms > _budget_ms * 1.2:
+            logger.warning(
+                f"[ContainerCounterApp] Frame over budget: "
+                f"{self.state.processing_time_ms:.1f} ms > {_budget_ms:.0f} ms "
+                f"(frame #{self.state.frame_count})"
+            )
     
     def _annotate_frame(self, frame):
         """
@@ -1059,7 +1143,7 @@ class ContainerCounterApp:
         annotated = self._visualizer.annotate_frame(
             frame=annotated,
             detection=self._last_detection,
-            active_tracks=self.tracker.get_active_tracks(),
+            active_tracks=self._current_tracks,
             fps=self.state.fps,
             total_positive=self.state.total_positive,
             total_negative=self.state.total_negative,
@@ -1076,15 +1160,17 @@ class ContainerCounterApp:
     def _maybe_capture_snapshot(self, frame, annotated_frame) -> None:
         """
         Check if on-demand snapshot is requested via DB flag and capture.
-        
+
         This enables /snapshot?camera=container in the web UI.
-        Throttled to every 5th frame to avoid excessive DB reads.
+        Throttled to 1 Hz (time-based) to avoid excessive DB reads.
         """
         if self.db is None or self._snapshot_writer is None:
             return
-        
-        if self.state.frame_count % 5 != 0:
+
+        now = time.time()
+        if now - self._last_snapshot_check < 1.0:
             return
+        self._last_snapshot_check = now
         
         try:
             requested = self.db.get_config(constants.container_snapshot_requested_key, "0")
@@ -1123,7 +1209,7 @@ class ContainerCounterApp:
             return  # already started for this track
         if self._content_recorder is None or not self._content_recorder.is_available():
             return
-        track = self.tracker._tracks.get(qr_value)
+        track = self.tracker.get_track(qr_value)
         if track is None:
             return
         if track.detection_count != self.tracker.min_detections_for_event:
@@ -1164,6 +1250,7 @@ class ContainerCounterApp:
         content_event_id: Optional[str] = None
         content_already_started = False
         was_capped = False
+        elapsed = 0.0  # time from begin_event_recording → end call (content cam only)
         if content_entry and self._content_recorder is not None:
             content_event_id, begin_mono = content_entry
             self._content_recorder.end_event_recording(content_event_id)
@@ -1226,6 +1313,23 @@ class ContainerCounterApp:
             content_already_started=content_already_started,
         )
 
+        # Compute the actual video clip duration so the UI shows the real
+        # video length rather than the shorter QR-tracking transit time.
+        if content_already_started and not (video_result and video_result.fallback):
+            # Content camera begin/end model.
+            if was_capped:
+                clip_duration_seconds: float = self.config.content_max_recording_seconds
+            else:
+                clip_duration_seconds = min(
+                    elapsed + self.config.content_post_event_seconds,
+                    self.config.content_max_recording_seconds,
+                )
+        elif len(all_entries) >= 2:
+            # QR camera (primary or fallback): measure actual buffered span.
+            clip_duration_seconds = all_entries[-1][0] - all_entries[0][0]
+        else:
+            clip_duration_seconds = event.duration_seconds
+
         # Determine recording status for operator monitoring:
         #   "ok"       — full transit successfully captured
         #   "capped"   — container dwelled > max_recording_seconds (video truncated)
@@ -1247,6 +1351,7 @@ class ContainerCounterApp:
             is_lost=is_lost,
             video_result=video_result,
             recording_status=recording_status,
+            clip_duration_seconds=clip_duration_seconds,
         )
 
         # Clear linear predictor for this QR so it doesn't ghost-predict.
@@ -1263,6 +1368,7 @@ class ContainerCounterApp:
             'camera': video_result.camera if video_result else None,
             'fallback': bool(video_result.fallback) if video_result else False,
             'recording_status': recording_status,
+            'clip_duration_seconds': round(clip_duration_seconds, 1),
         }
         self.state.add_event(event_dict)
 
@@ -1361,6 +1467,7 @@ class ContainerCounterApp:
         is_lost: bool = False,
         video_result=None,
         recording_status: str = "ok",
+        clip_duration_seconds: float = 0.0,
     ) -> None:
         """Record event to database."""
         try:
@@ -1390,6 +1497,9 @@ class ContainerCounterApp:
                 'fallback': fallback,
                 'video_relpath': video_relpath,
                 'recording_status': recording_status,
+                # Actual video clip length (pre-roll + transit + post-roll).
+                # Distinct from duration_seconds which is QR tracking time only.
+                'clip_duration_seconds': round(clip_duration_seconds, 1),
             })
 
             # Insert into database (entry_y/exit_y columns store X positions
@@ -1515,32 +1625,256 @@ class ContainerCounterApp:
                 )
             except queue.Empty:
                 continue
-    
+
+    # ------------------------------------------------------------------
+    # Automatic data-retention / purge
+    # ------------------------------------------------------------------
+
+    def _start_purge_thread(self) -> None:
+        """Start background data-retention thread.
+
+        Mirrors the ``_start_purge_thread`` pattern in ``pipeline_core.py``.
+        Safe to call multiple times — does nothing if thread already running.
+        """
+        if self._purge_thread is not None and self._purge_thread.is_alive():
+            return
+        self._purge_stop_event.clear()
+        self._purge_thread = threading.Thread(
+            target=self._purge_loop,
+            name="ContainerPurger",
+            daemon=True,
+        )
+        self._purge_thread.start()
+        logger.info(
+            f"[ContainerPurger] Started "
+            f"(snap_ret={self.config.snapshots_retention_hours}h "
+            f"snap_max={self.config.snapshots_max_count} "
+            f"vid_ret={self.config.content_videos_retention_hours}h "
+            f"vid_max={self.config.content_videos_max_count} "
+            f"db_ret={self.config.db_events_retention_hours}h "
+            f"interval={self.config.purge_interval_minutes}min)"
+        )
+
+    def _purge_loop(self) -> None:
+        """Periodic purge loop — runs in its own daemon thread."""
+        interval = self.config.purge_interval_minutes * 60.0
+        while not self._purge_stop_event.is_set():
+            try:
+                if self._purge_stop_event.wait(timeout=interval):
+                    break
+                self._purge_container_snapshots()
+                self._purge_content_videos()
+                self._purge_db_events()
+            except Exception as e:
+                logger.error(f"[ContainerPurger] Unhandled error: {e}", exc_info=True)
+        logger.info("[ContainerPurger] Stopped")
+
+    def _purge_container_snapshots(self) -> None:
+        """Delete old QR-camera event-clip directories (data/container_snapshots/).
+
+        Two-phase:
+        1. Time-based  — remove dirs older than ``snapshots_retention_hours``.
+        2. Count-based — if still over ``snapshots_max_count``, delete oldest first.
+        """
+        import glob
+        import shutil
+        snap_dir = self.config.snapshot_dir
+        if not os.path.isdir(snap_dir):
+            return
+        try:
+            # Each event lives in its own sub-directory named after event_id.
+            entries = [
+                (p, os.path.getmtime(p))
+                for p in (os.path.join(snap_dir, d) for d in os.listdir(snap_dir))
+                if os.path.isdir(p)
+            ]
+        except OSError as e:
+            logger.warning(f"[ContainerPurger] Cannot list {snap_dir}: {e}")
+            return
+        if not entries:
+            return
+
+        initial = len(entries)
+        deleted_time = deleted_count = 0
+
+        # Phase 1 – time-based
+        ret_h = self.config.snapshots_retention_hours
+        if ret_h > 0:
+            cutoff = time.time() - ret_h * 3600
+            keep = []
+            for path, mtime in entries:
+                if mtime < cutoff:
+                    try:
+                        shutil.rmtree(path, ignore_errors=True)
+                        deleted_time += 1
+                    except Exception as exc:
+                        logger.warning(f"[ContainerPurger] rmtree {path}: {exc}")
+                else:
+                    keep.append((path, mtime))
+            entries = keep
+
+        # Phase 2 – count-based
+        max_c = self.config.snapshots_max_count
+        if max_c > 0 and len(entries) > max_c:
+            entries.sort(key=lambda x: x[1])   # oldest first
+            for path, _ in entries[:len(entries) - max_c]:
+                try:
+                    shutil.rmtree(path, ignore_errors=True)
+                    deleted_count += 1
+                except Exception as exc:
+                    logger.warning(f"[ContainerPurger] rmtree {path}: {exc}")
+
+        total = deleted_time + deleted_count
+        if total:
+            logger.info(
+                f"[ContainerPurger] Snapshots: "
+                f"time={deleted_time} count={deleted_count} "
+                f"remaining={initial - total}"
+            )
+
+    def _purge_content_videos(self) -> None:
+        """Delete old content-camera MP4 files (data/container_content_videos/).
+
+        Two-phase time + count purge, same algorithm as ``_purge_container_snapshots``.
+        """
+        try:
+            from src.config.paths import CONTAINER_CONTENT_VIDEOS_DIR
+        except ImportError:
+            return
+        vid_dir = CONTAINER_CONTENT_VIDEOS_DIR
+        if not os.path.isdir(vid_dir):
+            return
+        try:
+            entries = [
+                (p, os.path.getmtime(p))
+                for p in (
+                    os.path.join(vid_dir, f)
+                    for f in os.listdir(vid_dir)
+                    if f.endswith('.mp4')
+                )
+                if os.path.isfile(p)
+            ]
+        except OSError as e:
+            logger.warning(f"[ContainerPurger] Cannot list {vid_dir}: {e}")
+            return
+        if not entries:
+            return
+
+        initial = len(entries)
+        deleted_time = deleted_count = 0
+
+        # Phase 1 – time-based
+        ret_h = self.config.content_videos_retention_hours
+        if ret_h > 0:
+            cutoff = time.time() - ret_h * 3600
+            keep = []
+            for path, mtime in entries:
+                if mtime < cutoff:
+                    try:
+                        os.remove(path)
+                        deleted_time += 1
+                        # Remove companion metadata JSON if present
+                        meta = path[:-4] + '.json'
+                        if os.path.isfile(meta):
+                            os.remove(meta)
+                    except OSError as exc:
+                        logger.warning(f"[ContainerPurger] unlink {path}: {exc}")
+                else:
+                    keep.append((path, mtime))
+            entries = keep
+
+        # Phase 2 – count-based
+        max_c = self.config.content_videos_max_count
+        if max_c > 0 and len(entries) > max_c:
+            entries.sort(key=lambda x: x[1])
+            for path, _ in entries[:len(entries) - max_c]:
+                try:
+                    os.remove(path)
+                    deleted_count += 1
+                    meta = path[:-4] + '.json'
+                    if os.path.isfile(meta):
+                        os.remove(meta)
+                except OSError as exc:
+                    logger.warning(f"[ContainerPurger] unlink {path}: {exc}")
+
+        total = deleted_time + deleted_count
+        if total:
+            logger.info(
+                f"[ContainerPurger] Content videos: "
+                f"time={deleted_time} count={deleted_count} "
+                f"remaining={initial - total}"
+            )
+
+    def _purge_db_events(self) -> None:
+        """Delete old rows from the ``container_events`` table.
+
+        Uses a time-based cutoff only (no count cap — the table is indexed
+        and row overhead is small).  Runs asynchronously via ``enqueue_write``
+        so the main loop is never blocked.
+        """
+        if self.db is None:
+            return
+        ret_h = self.config.db_events_retention_hours
+        if ret_h <= 0:
+            return
+        try:
+            from datetime import timedelta as _td, timezone as _tz
+            cutoff_dt = datetime.now(_tz.utc) - _td(hours=ret_h)
+            cutoff_iso = cutoff_dt.strftime("%Y-%m-%dT%H:%M:%S")
+            # Count before delete (non-blocking read for stats only)
+            row = self.db.fetchone(
+                "SELECT COUNT(*) FROM container_events WHERE timestamp < ?",
+                (cutoff_iso,),
+            )
+            count = row[0] if row else 0
+            if count > 0:
+                self.db.enqueue_write(
+                    "DELETE FROM container_events WHERE timestamp < ?",
+                    (cutoff_iso,),
+                )
+                logger.info(
+                    f"[ContainerPurger] DB events: queued delete of {count} rows "
+                    f"older than {ret_h:.0f}h (cutoff={cutoff_iso})"
+                )
+        except Exception as e:
+            logger.error(f"[ContainerPurger] DB purge error: {e}", exc_info=True)
+
     def stop(self) -> None:
         """Stop the application gracefully."""
         logger.info("[ContainerCounterApp] Stopping...")
         self._running = False
         self._stop_event.set()
-    
+
     def _cleanup(self) -> None:
         """Clean up resources."""
         logger.info("[ContainerCounterApp] Cleaning up...")
-        
+
         # Publish final state
         self._publish_state()
-        
+
+        # Stop background purge thread first so it doesn't re-open the DB
+        # after we close it below.
+        if self._purge_thread is not None and self._purge_thread.is_alive():
+            self._purge_stop_event.set()
+            self._purge_thread.join(timeout=5.0)
+            self._purge_thread = None
+
         # Wait for snapshot thread
         if self._snapshot_thread and self._snapshot_thread.is_alive():
             self._snapshot_thread.join(timeout=5.0)
-        
+
+        # Drain pending snapshot I/O futures (non-blocking cancel for tasks not
+        # yet started; allow already-running writes to finish).
+        self._snapshot_io.shutdown(wait=False, cancel_futures=False)
+
         # Clean up visualizer
         if self._visualizer:
             self._visualizer.cleanup()
-        
+
         # Close display windows
         if self.enable_display:
             cv2.destroyAllWindows()
-        
+
         # Clean up frame server
         if self.frame_server and hasattr(self.frame_server, 'destroy_node'):
             self.frame_server.destroy_node()
@@ -1552,7 +1886,7 @@ class ContainerCounterApp:
             except Exception as e:
                 logger.error(f"[ContainerCounterApp] Content recorder stop failed: {e}")
             self._content_recorder = None
-        
+
         # Clean up ROS2 context if on RDK
         if IS_RDK:
             try:
@@ -1565,7 +1899,7 @@ class ContainerCounterApp:
         if self.db is not None:
             self.db.close()
             self.db = None
-        
+
         logger.info("[ContainerCounterApp] Cleanup complete")
     
     def get_state(self) -> Dict:

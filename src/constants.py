@@ -59,6 +59,15 @@ content_video_fps = "content_video_fps"                       # Default: 20 (out
 content_rtsp_subtype = "content_rtsp_subtype"                 # 0=main stream (720p), 1=sub-stream (360p, higher fps)
 content_max_recording_seconds = "content_max_recording_seconds" # Default: 15.0 (safety cap for begin/end recordings)
 
+# Container data retention / automatic purge
+# Mirrors the pattern used by pipeline_core.py for classified ROIs.
+container_snapshots_retention_hours   = "container_snapshots_retention_hours"   # Default: 72  (3 days)
+container_snapshots_max_count         = "container_snapshots_max_count"         # Default: 500
+container_content_videos_retention_hours = "container_content_videos_retention_hours"  # Default: 72 (3 days)
+container_content_videos_max_count    = "container_content_videos_max_count"    # Default: 200
+container_db_events_retention_hours   = "container_db_events_retention_hours"   # Default: 168 (7 days)
+container_purge_interval_minutes      = "container_purge_interval_minutes"      # Default: 60
+
 CONFIG_KEYS = [
     is_development_key,
     rtsp_username,

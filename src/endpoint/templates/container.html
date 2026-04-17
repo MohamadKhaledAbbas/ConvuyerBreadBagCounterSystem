@@ -549,7 +549,7 @@
                         <th>الوقت</th>
                         <th>الحاوية</th>
                         <th>الاتجاه</th>
-                        <th>المدة</th>
+                        <th title="مدة مقطع الفيديو">مدة الفيديو</th>
                         <th>سجل التسجيل</th>
                         <th>لقطات</th>
                     </tr>
@@ -672,9 +672,14 @@
             const time = e.timestamp ? new Date(e.timestamp).toLocaleTimeString('en-GB', {hour12: false}) : '—';
             const dirLabel = e.direction === 'positive' ? 'خروج ↑' : e.direction === 'negative' ? 'عودة ↓' : 'غير محدد';
             const dirClass = e.direction || 'unknown';
-            const duration = e.duration_seconds !== null && e.duration_seconds !== undefined
-                ? e.duration_seconds.toFixed(1) + 's'
-                : '—';
+            const meta = e.metadata || {};
+            const clipDur = meta.clip_duration_seconds != null
+                ? meta.clip_duration_seconds.toFixed(1) + 's'
+                : (e.duration_seconds != null ? e.duration_seconds.toFixed(1) + 's' : '—');
+            const transitTitle = e.duration_seconds != null
+                ? `مدة العبور: ${e.duration_seconds.toFixed(1)}s`
+                : '';
+            const duration = `<span class="numbers" title="${esc(transitTitle)}">${esc(clipDur)}</span>`;
             const eventId = getEventIdFromPath(e.snapshot_path || '');
             const snapBtn = eventId
                 ? `<button class="snap-btn" onclick="openFootage(${idx})"><i class="fa-solid fa-play"></i> عرض</button>`
@@ -697,7 +702,7 @@
                 <td class="numbers">${esc(time)}</td>
                 <td class="numbers">${e.qr_code_value}</td>
                 <td><div class="event-flags"><span class="dir-badge ${esc(dirClass)}">${dirLabel}</span>${statusBadge}</div></td>
-                <td class="numbers">${esc(duration)}</td>
+                <td>${duration}</td>
                 <td>${recBadge}</td>
                 <td>${snapBtn}</td>
             </tr>`;
@@ -720,7 +725,12 @@
             content.innerHTML = '<div class="modal-error"><i class="fa-solid fa-video-slash"></i> لا يوجد مقطع محفوظ</div>';
         } else {
             const time = event.timestamp ? new Date(event.timestamp).toLocaleString('en-GB', {hour12: false}) : '';
-            const dur = event.duration_seconds != null ? event.duration_seconds.toFixed(1) + 's' : '';
+            const evMeta = event.metadata || {};
+            const clipDurSec = evMeta.clip_duration_seconds != null ? evMeta.clip_duration_seconds : event.duration_seconds;
+            const clipDurStr = clipDurSec != null ? clipDurSec.toFixed(1) + 's' : '';
+            const transitStr = event.duration_seconds != null ? event.duration_seconds.toFixed(1) + 's' : '';
+            const durDisplay = clipDurStr
+                + (transitStr && transitStr !== clipDurStr ? ` <span style="font-size:0.8em;color:var(--text-muted);">عبور: ${esc(transitStr)}</span>` : '');
             content.innerHTML = `
                 <div style="display:flex; flex-direction:column; height:100%;">
                     <div style="flex:1 1 0; min-height:0; display:flex; align-items:center; justify-content:center; background:#000; border-radius:10px; overflow:hidden;">
@@ -733,7 +743,7 @@
                     </div>
                     <div style="margin-top:0.7rem; display:flex; justify-content:space-between; gap:1rem; flex-wrap:wrap; font-size:0.85rem; color:var(--text-secondary);">
                         <span class="numbers">${esc(time)}</span>
-                        <span class="numbers">${esc(dur)}</span>
+                        <span class="numbers">${durDisplay}</span>
                     </div>
                 </div>`;
         }

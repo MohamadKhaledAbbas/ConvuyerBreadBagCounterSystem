@@ -1046,7 +1046,11 @@ function renderEventCard(event, idx) {
     const meta = event.metadata || {};
     const cameraChip = renderCameraChip(event);
     const canOpen = Boolean(videoUrl);
-    const durationLabel = formatDuration(event.duration_seconds);
+    const clipSec = meta.clip_duration_seconds != null ? meta.clip_duration_seconds : event.duration_seconds;
+    const durationLabel = formatDuration(clipSec);
+    const transitLabel = (meta.clip_duration_seconds != null && event.duration_seconds != null)
+        ? `عبور: ${formatDuration(event.duration_seconds)}`
+        : null;
 
     const previewBlock = videoUrl
         ? `
@@ -1179,6 +1183,13 @@ function openFootage(event) {
     const videoUrl = getVideoUrl(event);
     viewerEvent = event;
 
+    const meta = event.metadata || {};
+    const clipSec = meta.clip_duration_seconds != null ? meta.clip_duration_seconds : event.duration_seconds;
+    const durationLabel = formatDuration(clipSec);
+    const transitLabel = (meta.clip_duration_seconds != null && event.duration_seconds != null)
+        ? `عبور: ${formatDuration(event.duration_seconds)}`
+        : null;
+
     document.getElementById('modalTitle').textContent = `رحلة الحاوية ${event.qr_code_value}`;
     document.getElementById('modalSubtitle').textContent = `التتبع T${event.track_id} · ${getCompletionLabel(event)}`;
     document.getElementById('modalStateBadge').innerHTML = [
@@ -1206,7 +1217,7 @@ function openFootage(event) {
                 <div class="preview-caption" style="margin-top: 0.8rem; display:flex; justify-content:space-between; gap:1rem; flex-wrap:wrap;">
                     <div>
                         <div class="title">${esc(formatDateTime(event.timestamp))}</div>
-                        <div class="subtitle numbers">${directionLabel} · ${formatDuration(event.duration_seconds)}</div>
+                        <div class="subtitle numbers">${directionLabel} · ${durationLabel}${transitLabel ? ` <span style="opacity:0.65">(${esc(transitLabel)})</span>` : ''}</div>
                     </div>
                     <div class="numbers" style="color: var(--text-secondary);">
                         entry_x=${event.entry_x ?? '—'} → exit_x=${event.exit_x ?? '—'}

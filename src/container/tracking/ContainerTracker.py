@@ -500,6 +500,14 @@ class ContainerTracker:
     def get_active_tracks(self) -> Dict[int, TrackedContainer]:
         """Get all currently active tracks."""
         return self._tracks.copy()
+
+    def get_track(self, qr_value: int) -> Optional['TrackedContainer']:
+        """Return the active track for *qr_value*, or ``None`` if not present.
+
+        Prefer this over accessing ``_tracks`` directly so call-sites are
+        insulated from internal data-structure changes.
+        """
+        return self._tracks.get(qr_value)
     
     def get_stats(self) -> dict:
         """Get tracker statistics."""
