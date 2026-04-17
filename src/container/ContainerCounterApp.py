@@ -28,7 +28,7 @@ import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import cv2
 
@@ -230,12 +230,25 @@ class ContainerConfig:
     lost_timeout: float = 2.0
     min_displacement_ratio: float = 0.3
     detect_interval: int = 3  # Run QR detection every N-th frame
-    
+    # False-positive gate: a track must accumulate this many *real* QR
+    # detections before it can emit an event.  Drops single-frame decoder
+    # glitches that would otherwise count as containers.
+    min_detections_for_event: int = 3
+
     # Snapshots
     pre_event_seconds: float = 5.0
     post_event_seconds: float = 5.0
     snapshot_dir: str = "data/container_snapshots"
     save_video: bool = False
+
+    # QR-camera event video (used as primary when event_video_source="qr"
+    # and as fallback when the content camera is unavailable).
+    # These are **independent of** ``detect_interval`` \u2014 the event video
+    # is sampled from every frame for smooth playback, not from detection
+    # ticks.
+    event_video_fps: int = 20            # sampling + output fps for QR video
+    event_video_max_seconds: float = 5.0  # hard cap on per-track buffered history
+    event_video_stationary_px: int = 5    # overwrite last frame if QR barely moved
     
     # State publishing
     state_file: str = "data/container_pipeline_state.json"
@@ -254,10 +267,15 @@ class ContainerConfig:
     content_rtsp_port: str = "554"
     content_rtsp_username: str = ""
     content_rtsp_password: str = ""
+    # 0 = main stream (typically 720p, may deliver fewer fps)
+    # 1 = sub-stream  (typically 360p, more stable fps)
+    content_rtsp_subtype: int = 0
     content_pre_event_seconds: float = 3.0
     content_post_event_seconds: float = 2.0
     content_buffer_seconds: float = 5.0
-    content_video_fps: int = 15
+    content_video_fps: int = 10    # every 2nd frame from 20fps source ≈ 150 frames/15s max
+    # Safety cap: auto-finalize any begin/end recording longer than this.
+    content_max_recording_seconds: float = 15.0
 
     # Event video source:
     #   "qr"      -> always use the overhead camera's buffered frames
@@ -289,6 +307,33 @@ class ContainerConfig:
         try:
             config.detect_interval = max(1, int(
                 db.get_config(constants.container_detect_interval, str(config.detect_interval))
+            ))
+        except ValueError:
+            pass
+
+        try:
+            config.min_detections_for_event = max(1, int(
+                db.get_config(
+                    constants.container_min_detections_for_event,
+                    str(config.min_detections_for_event),
+                )
+            ))
+        except ValueError:
+            pass
+
+        # ---- Event video (QR-camera side) settings ----
+        try:
+            config.event_video_fps = max(1, int(
+                db.get_config(constants.container_event_video_fps,
+                              str(config.event_video_fps))
+            ))
+            config.event_video_max_seconds = max(0.5, float(
+                db.get_config(constants.container_event_video_max_seconds,
+                              str(config.event_video_max_seconds))
+            ))
+            config.event_video_stationary_px = max(0, int(
+                db.get_config(constants.container_event_video_stationary_px,
+                              str(config.event_video_stationary_px))
             ))
         except ValueError:
             pass
@@ -326,6 +371,14 @@ class ContainerConfig:
                 db.get_config(constants.content_video_fps,
                               str(config.content_video_fps))
             ))
+            config.content_rtsp_subtype = max(0, int(
+                db.get_config(constants.content_rtsp_subtype,
+                              str(config.content_rtsp_subtype))
+            ))
+            config.content_max_recording_seconds = float(
+                db.get_config(constants.content_max_recording_seconds,
+                              str(config.content_max_recording_seconds))
+            )
         except ValueError:
             pass
 
@@ -478,12 +531,34 @@ class ContainerCounterApp:
         self._linear_predictor = _LinearPredictor(detect_interval=self._detect_interval)
         self._frame_size: tuple = (1280, 720)  # updated on first frame
         
-        # Per-track frame buffer: stores half-resolution frames while track is active.
-        # Key = qr_value, Value = list of (half-res BGR frame, (cx, cy) center)
-        # Max 10 seconds at effective fps — hard cap on buffered frames per track.
-        self._track_frames: Dict[int, list] = {}
-        self._TRACK_SNAPSHOT_MAX_SEC: float = 10.0
+        # Per-track rolling buffer for event-video frames.  Decoupled
+        # from ``detect_interval`` so the final clip can run at full fps.
+        # The buffer automatically throttles to ``event_video_fps`` and
+        # overwrites stationary frames to handle "parked container" edge
+        # cases without overflowing.  See
+        # :class:`src.container.content.EventFrameBuffer`.
+        from src.container.content import EventFrameBuffer, EventFrameBufferConfig  # noqa: F401
+        self._EventFrameBuffer = EventFrameBuffer
+        self._EventFrameBufferConfig = EventFrameBufferConfig
+        self._track_buffers: Dict[int, EventFrameBuffer] = {}
         self._TRACK_SNAPSHOT_QUALITY: int = 60        # JPEG quality (passed to coordinator)
+
+        # Global pre-roll ring buffer for the QR camera.  Stores the last
+        # few seconds of half-res frames *regardless* of whether a track
+        # exists.  When the QR camera is the fallback video source, these
+        # frames are prepended to give a ~3 s lead-in that the per-track
+        # EventFrameBuffer alone cannot provide (it only starts recording
+        # when the track is created).
+        self._qr_preroll = EventFrameBuffer(EventFrameBufferConfig(
+            target_fps=float(self.config.event_video_fps),
+            max_seconds=3.0,
+            stationary_px=0,   # global buffer — no positional dedup
+        ))
+
+        # Maps qr_value → (event_id, begin_monotonic) for content-camera
+        # recordings started at QR-detection-threshold time (begin/end model).
+        # begin_monotonic is used to detect whether the safety cap fired.
+        self._active_content_events: Dict[int, Tuple[str, float]] = {}
         
         # Async I/O for snapshot saving (never blocks the main loop)
         from concurrent.futures import ThreadPoolExecutor
@@ -535,6 +610,7 @@ class ContainerCounterApp:
             exit_zone_ratio=self.config.exit_zone_ratio,
             lost_timeout=self.config.lost_timeout,
             min_displacement_ratio=self.config.min_displacement_ratio,
+            min_detections_for_event=self.config.min_detections_for_event,
         )
         
         # Ring Buffer Snapshotter
@@ -627,9 +703,10 @@ class ContainerCounterApp:
             pwd = self.config.content_rtsp_password or ""
             host = self.config.content_rtsp_host or "192.168.2.128"
             port = self.config.content_rtsp_port or "554"
+            subtype = self.config.content_rtsp_subtype  # 0=main, 1=sub-stream
             rtsp_url = (
                 f"rtsp://{user}:{pwd}@{host}:{port}"
-                f"/cam/realmonitor?channel=1&subtype=0"
+                f"/cam/realmonitor?channel=1&subtype={subtype}"
             )
 
             rc_cfg = ContentRecorderConfig(
@@ -639,6 +716,7 @@ class ContainerCounterApp:
                 pre_event_seconds=self.config.content_pre_event_seconds,
                 post_event_seconds=self.config.content_post_event_seconds,
                 target_fps=self.config.content_video_fps,
+                max_recording_seconds=self.config.content_max_recording_seconds,
             )
             self._content_recorder = ContentCameraRecorder(rc_cfg)
             self._content_recorder.start()
@@ -673,7 +751,7 @@ class ContainerCounterApp:
             os.path.basename(content_dir.rstrip("/"))
         )
 
-        effective_fps = self.config.fps / max(1, self._detect_interval)
+        effective_fps = float(self.config.event_video_fps)
         self._event_video = EventVideoCoordinator(
             source_preference=self.config.event_video_source,
             content_recorder=self._content_recorder,
@@ -687,7 +765,11 @@ class ContainerCounterApp:
         logger.info(
             f"[ContainerCounterApp] Event video coordinator ready "
             f"source={self.config.event_video_source} "
-            f"qr_fps={effective_fps:.2f} content={'yes' if self._content_recorder else 'no'}"
+            f"qr_fps={effective_fps:.1f} "
+            f"buffer={self.config.event_video_max_seconds:.1f}s "
+            f"stationary_px={self.config.event_video_stationary_px} "
+            f"min_detections={self.config.min_detections_for_event} "
+            f"content={'yes' if self._content_recorder else 'no'}"
         )
     
     def run(self, max_frames: Optional[int] = None) -> None:
@@ -807,23 +889,11 @@ class ContainerCounterApp:
         # Add frame to ring buffer for snapshots
         self.snapshotter.add_frame(frame)
 
-        # Buffer half-res frames for all active tracks (track-lifetime capture).
-        # Only buffer every _detect_interval-th frame to limit memory (~4fps).
-        active_tracks = self.tracker.get_active_tracks()
-        if (self.state.frame_count - 1) % self._detect_interval == 0:
-            h, w = frame.shape[:2]
-            small = cv2.resize(frame, (w // 2, h // 2))
-            max_buf = int(self._TRACK_SNAPSHOT_MAX_SEC *
-                          (self.config.fps / self._detect_interval))
-            for qr_val, track in active_tracks.items():
-                buf = self._track_frames.get(qr_val)
-                if buf is None:
-                    self._track_frames[qr_val] = [(small, track.last_x)]
-                    continue
-                # Hard cap: if at limit, drop second-oldest (keep first frame)
-                if len(buf) >= max_buf:
-                    buf.pop(1)
-                buf.append((small, track.last_x))
+        # Always compute half-res frame for the global pre-roll and
+        # per-track event-video buffers.  cv2.resize at 720p→360p is
+        # <1 ms so the overhead is negligible.
+        half = cv2.resize(frame, (w // 2, h // 2))
+        self._qr_preroll.add(half, center_x=0)
 
         is_detect_frame = ((self.state.frame_count - 1) % self._detect_interval == 0)
         self._frame_detections = []   # reset per-frame viz list
@@ -844,6 +914,11 @@ class ContainerCounterApp:
                 )
                 if event:
                     self._handle_container_event(event)
+                else:
+                    # Check if this detection just reached the QR-threshold.
+                    # If so, start content-camera recording immediately so
+                    # the full transit is captured (begin/end model).
+                    self._maybe_begin_content_recording(detection.qr_number)
 
                 # Update linear predictor with real detection
                 bbox_rect = cv2.boundingRect(detection.bbox)  # (x, y, w, h)
@@ -868,10 +943,13 @@ class ContainerCounterApp:
                 pred_det = _PredictedDetection(qr_val, center, bbox_xywh)
                 self._frame_detections.append((pred_det, True))  # True = predicted
 
-                # Feed predicted centre to container tracker
+                # Feed predicted centre to container tracker.
+                # is_prediction=True so the tracker does NOT count this
+                # toward its false-positive min-detections gate.
                 event = self.tracker.update(
                     qr_value=qr_val,
                     center=center,
+                    is_prediction=True,
                 )
                 if event:
                     self._handle_container_event(event)
@@ -906,8 +984,58 @@ class ContainerCounterApp:
             except queue.Full:
                 logger.warning("[ContainerCounterApp] Snapshot queue full, dropping capture")
 
+        # Per-track event-video buffering — every frame, after tracker has been
+        # updated for this frame so ``track.last_x`` reflects the current
+        # detection or prediction (not the previous frame's stale value).
+        # The :class:`EventFrameBuffer` throttles to ``event_video_fps`` and
+        # overwrites frames with minimal positional change, so memory is bounded.
+        # ``half`` was already computed above for the pre-roll buffer.
+        current_tracks = self.tracker.get_active_tracks()
+        if current_tracks:
+            for qr_val, track in current_tracks.items():
+                buf = self._track_buffers.get(qr_val)
+                if buf is None:
+                    buf = self._EventFrameBuffer(self._EventFrameBufferConfig(
+                        target_fps=float(self.config.event_video_fps),
+                        max_seconds=float(self.config.event_video_max_seconds),
+                        stationary_px=int(self.config.event_video_stationary_px),
+                    ))
+                    self._track_buffers[qr_val] = buf
+                buf.add(half, center_x=track.last_x)
+
+        # Reclaim buffers whose track ended (FP gate drop, normal exit, or lost).
+        # ``current_tracks`` was just fetched so it reflects this frame's state.
+        if self._track_buffers:
+            stale = [q for q in self._track_buffers if q not in current_tracks]
+            for q in stale:
+                dead = self._track_buffers.pop(q, None)
+                if dead is not None and len(dead) > 0:
+                    logger.debug(
+                        f"[ContainerCounterApp] Discarded buffer for QR={q} "
+                        f"(track ended, frames={len(dead)})"
+                    )
+
+        # Clean up orphaned content-camera recordings whose tracks were
+        # silently dropped by the FP gate (detection_count < min) before
+        # an exit event could fire.  Without this, begin_event_recording
+        # would never receive a matching end_event_recording call.
+        if self._active_content_events:
+            stale_content = [
+                q for q in self._active_content_events
+                if q not in current_tracks
+            ]
+            for q in stale_content:
+                entry = self._active_content_events.pop(q, None)
+                if entry and self._content_recorder is not None:
+                    eid, _begin = entry
+                    self._content_recorder.end_event_recording(eid)
+                    logger.debug(
+                        f"[ContainerCounterApp] Cleaned up orphan content "
+                        f"recording QR={q} event_id={eid}"
+                    )
+
         # Update state
-        self.state.active_tracks = len(self.tracker.get_active_tracks())
+        self.state.active_tracks = len(current_tracks)
         self.state.pending_snapshots = self._snapshot_queue.qsize()
         self.state.processing_time_ms = (time.time() - start_time) * 1000
     
@@ -984,6 +1112,32 @@ class ContainerCounterApp:
             except Exception:
                 pass
     
+    def _maybe_begin_content_recording(self, qr_value: int) -> None:
+        """Start content-camera recording when QR detection threshold is first met.
+
+        Called on every real detection that does NOT fire an exit event.
+        Only triggers once per track: when ``detection_count`` first
+        reaches ``min_detections_for_event``.
+        """
+        if qr_value in self._active_content_events:
+            return  # already started for this track
+        if self._content_recorder is None or not self._content_recorder.is_available():
+            return
+        track = self.tracker._tracks.get(qr_value)
+        if track is None:
+            return
+        if track.detection_count != self.tracker.min_detections_for_event:
+            return
+        event_id = f"qr{qr_value}_{datetime.now():%Y%m%d_%H%M%S_%f}"
+        self._content_recorder.begin_event_recording(
+            event_id, track.entry_time_monotonic,
+        )
+        self._active_content_events[qr_value] = (event_id, time.monotonic())
+        logger.info(
+            f"[ContainerCounterApp] Content recording started: "
+            f"QR={qr_value} event_id={event_id}"
+        )
+
     def _handle_container_event(
         self,
         event: ContainerEvent,
@@ -1005,33 +1159,94 @@ class ContainerCounterApp:
         if is_lost:
             self.state.total_lost += 1
 
-        # Pop buffered QR-camera frames for this track (possibly used as the
-        # video source itself, or as the fallback when the content camera is
-        # unavailable).
-        track_frames_with_pos = self._track_frames.pop(event.qr_value, [])
-        track_frames = [entry[0] for entry in track_frames_with_pos]
+        # ── End content-camera recording if one was started at threshold ──
+        content_entry = self._active_content_events.pop(event.qr_value, None)
+        content_event_id: Optional[str] = None
+        content_already_started = False
+        was_capped = False
+        if content_entry and self._content_recorder is not None:
+            content_event_id, begin_mono = content_entry
+            self._content_recorder.end_event_recording(content_event_id)
+            content_already_started = True
+            # If elapsed time hit the safety cap the recording was truncated
+            # before the container exited — flag it for operator monitoring.
+            elapsed = time.monotonic() - begin_mono
+            was_capped = elapsed >= (self.config.content_max_recording_seconds - 0.5)
 
-        # Generate a stable event id for both the DB snapshot_path and any
-        # video file (QR or content).
-        event_id = self._make_event_id(event)
+        # ── Build QR fallback frame list (pre-roll + track buffer) ──
+        buf = self._track_buffers.pop(event.qr_value, None)
+        track_entries = buf.snapshot_frames() if buf is not None else []
 
-        # Dispatch video capture to the coordinator.  It picks the camera,
-        # handles the content->QR fallback, and does all encoding in the
-        # snapshot_io thread pool.
+        # Prepend frames from the global QR pre-roll ring buffer that
+        # predate this track's entry time.  This gives the QR fallback
+        # clip a ~3 s lead-in (matching what the content camera provides).
+        if event.entry_time_monotonic > 0.0:
+            preroll = [
+                e for e in self._qr_preroll.snapshot_frames()
+                if e[0] < event.entry_time_monotonic
+            ]
+        else:
+            preroll = []
+
+        all_entries = preroll + track_entries
+        track_frames = [frame for _, frame, _ in all_entries]
+
+        # Compute measured sampling rate from the combined timestamps so
+        # the video writer uses the correct playback fps.
+        qr_measured_fps: Optional[float] = None
+        if len(all_entries) >= 2:
+            span = all_entries[-1][0] - all_entries[0][0]
+            if span > 0:
+                mfps = len(all_entries) / span
+                qr_measured_fps = max(1.0, min(
+                    float(self.config.event_video_fps), mfps
+                ))
+
+        if buf is not None:
+            logger.debug(
+                f"[ContainerCounterApp] Track buffer QR={event.qr_value}: "
+                f"{buf.stats()} preroll_frames={len(preroll)} "
+                f"total={len(all_entries)} measured_fps="
+                f"{f'{qr_measured_fps:.1f}' if qr_measured_fps else 'n/a'}"
+            )
+
+        # Use the threshold-time event_id for content recordings so the
+        # DB record, content video file, and QR fallback all share the
+        # same identifier.  For pure-QR events (no content started),
+        # generate the event_id at exit time (original behaviour).
+        event_id = content_event_id if content_event_id else self._make_event_id(event)
+
+        # Dispatch video capture to the coordinator.
         video_result = self._capture_event_video(
             event_id=event_id,
             event=event,
             track_frames=track_frames,
+            qr_measured_fps=qr_measured_fps,
             is_lost=is_lost,
+            content_already_started=content_already_started,
         )
 
-        # Record the event (DB).  ``snapshot_path`` points to whichever
-        # directory actually has the clip so the listing/viewer can find it.
+        # Determine recording status for operator monitoring:
+        #   "ok"       — full transit successfully captured
+        #   "capped"   — container dwelled > max_recording_seconds (video truncated)
+        #   "fallback" — content camera unavailable; QR camera used instead
+        #   "no_video" — no clip produced
+        if video_result is None or video_result.video_relpath is None:
+            recording_status = "no_video"
+        elif video_result.fallback:
+            recording_status = "fallback"
+        elif content_already_started and was_capped:
+            recording_status = "capped"
+        else:
+            recording_status = "ok"
+
+        # Record the event (DB).
         self._record_event(
             event,
             event_id=event_id,
             is_lost=is_lost,
             video_result=video_result,
+            recording_status=recording_status,
         )
 
         # Clear linear predictor for this QR so it doesn't ghost-predict.
@@ -1047,6 +1262,7 @@ class ContainerCounterApp:
             'is_lost': is_lost,
             'camera': video_result.camera if video_result else None,
             'fallback': bool(video_result.fallback) if video_result else False,
+            'recording_status': recording_status,
         }
         self.state.add_event(event_dict)
 
@@ -1057,6 +1273,7 @@ class ContainerCounterApp:
             f"lost={'YES ⚠' if is_lost else 'NO ✓'} "
             f"cam={video_result.camera if video_result else '—'}"
             f"{' (fallback)' if video_result and video_result.fallback else ''} "
+            f"status={recording_status} "
             f"entry_x={event.entry_x} exit_x={event.exit_x} "
             f"disp={event.exit_x - event.entry_x:+}px "
             f"dur={event.duration_seconds:.2f}s "
@@ -1079,7 +1296,9 @@ class ContainerCounterApp:
         event_id: str,
         event: ContainerEvent,
         track_frames: list,
+        qr_measured_fps: Optional[float] = None,
         is_lost: bool,
+        content_already_started: bool = False,
     ):
         """Delegate event-video capture to the coordinator.
 
@@ -1102,14 +1321,30 @@ class ContainerCounterApp:
             'entry_x': event.entry_x,
             'exit_x': event.exit_x,
             'frame_count': len(track_frames),
+            'detection_count': event.detection_count,
         }
+
+        # Anchor the content-camera pre-roll at the track's *entry*
+        # moment (when the container first became visible) rather than
+        # "now" (event completion).  This is what delivers the 3-second
+        # lead-in the operator sees in the final clip.  If the event
+        # carries no monotonic anchor (legacy data), fall back to a
+        # wall-clock-derived estimate so we never crash.
+        if event.entry_time_monotonic > 0.0:
+            trigger_mono = event.entry_time_monotonic
+        else:
+            # Best-effort fallback: shift "now" back by the track's
+            # duration so the ring buffer still captures the lead-in.
+            trigger_mono = time.monotonic() - max(0.0, event.duration_seconds)
 
         try:
             return self._event_video.capture(
                 event_id=event_id,
-                trigger_monotonic_time=time.monotonic(),
+                trigger_monotonic_time=trigger_mono,
                 qr_frames=track_frames,
+                qr_fps_override=qr_measured_fps,
                 metadata=metadata,
+                content_already_started=content_already_started,
             )
         except Exception as e:
             logger.error(
@@ -1125,6 +1360,7 @@ class ContainerCounterApp:
         event_id: Optional[str],
         is_lost: bool = False,
         video_result=None,
+        recording_status: str = "ok",
     ) -> None:
         """Record event to database."""
         try:
@@ -1153,6 +1389,7 @@ class ContainerCounterApp:
                 'camera': camera,
                 'fallback': fallback,
                 'video_relpath': video_relpath,
+                'recording_status': recording_status,
             })
 
             # Insert into database (entry_y/exit_y columns store X positions

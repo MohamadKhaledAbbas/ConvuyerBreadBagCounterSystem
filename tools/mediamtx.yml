@@ -1,0 +1,44 @@
+# MediaMTX configuration for local content-camera simulation.
+#
+# This file is used ONLY on developer machines.  Production (RDK board)
+# connects to the real RTSP camera at 192.168.2.128 — no MediaMTX needed.
+#
+# Start:  see tools/sim_content_camera.sh
+
+# ── Network ───────────────────────────────────────────────────────────────
+rtspAddress: :8554          # RTSP listen port (non-privileged; avoids sudo)
+rtmpAddress: :1935
+hlsAddress:  :8888
+webrtcAddress: :8889
+
+# ── Auth ──────────────────────────────────────────────────────────────────
+# Allow any credentials (publisher = ffmpeg, reader = content recorder).
+# MediaMTX v1.9+: user: any means any user incl. anonymous.
+# pass: and path: must be empty (null) — NOT the string "any".
+# An empty path means any path; pass is not checked for user: any.
+authInternalUsers:
+- user: any
+  pass:
+  ips: []
+  permissions:
+  - action: publish
+    path:
+  - action: read
+    path:
+  - action: playback
+    path:
+
+# ── Logging ───────────────────────────────────────────────────────────────
+logLevel: warn   # reduce noise; change to 'info' for debugging
+
+# ── Paths ─────────────────────────────────────────────────────────────────
+# The content recorder opens:
+#   rtsp://{user}:{pwd}@127.0.0.1:8554/cam/realmonitor?channel=1&subtype=0
+# MediaMTX strips the query string, so the path is "cam/realmonitor".
+paths:
+  cam/realmonitor:
+    # ffmpeg will PUBLISH to this path; the recorder will READ from it.
+    source: publisher
+    # If the publisher (ffmpeg) disconnects, keep the slot open so the
+    # recorder's reconnect loop can pick it back up automatically.
+    sourceOnDemand: no

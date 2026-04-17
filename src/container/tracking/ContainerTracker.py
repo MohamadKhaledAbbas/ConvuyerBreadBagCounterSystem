@@ -47,19 +47,30 @@ class TrackedContainer:
     qr_value: int                           # QR code value (1-5)
     track_id: int                           # Unique track ID
     entry_x: int                            # X position when first seen
-    entry_time: float                       # Timestamp when first seen
+    entry_time: float                       # Wall-clock timestamp when first seen
     last_x: int                             # Most recent X position
-    last_time: float                        # Most recent timestamp
+    last_time: float                        # Most recent wall-clock timestamp
     state: TrackState = TrackState.TRACKING
-    
+
+    # Monotonic-clock counterpart of ``entry_time`` — used to align the
+    # event's pre-roll against the content-camera ring buffer (which is
+    # indexed by ``time.monotonic()``).  Kept separate from ``entry_time``
+    # because the two clocks can drift relative to each other.
+    entry_time_monotonic: float = 0.0
+
+    # Number of real QR detections that have fed this track.  Used as a
+    # false-positive gate: a track with only 1-2 sightings is likely a
+    # decoder glitch and should not emit a counted event.
+    detection_count: int = 0
+
     # Position history for trajectory analysis
     positions: List[Tuple[int, int, float]] = field(default_factory=list)  # (x, y, time)
-    
+
     # Exit information (filled when track completes)
     exit_x: Optional[int] = None
     exit_time: Optional[float] = None
     direction: Direction = Direction.UNKNOWN
-    
+
     def add_position(self, x: int, y: int, timestamp: float) -> None:
         """Record a position in the history."""
         self.positions.append((x, y, timestamp))
@@ -97,6 +108,12 @@ class ContainerEvent:
     exit_x: int
     duration_seconds: float
     positions: List[Tuple[int, int, float]]      # Full position history
+    # Monotonic-clock time the track first appeared — the correct anchor
+    # for aligning a pre-event video roll against the ring buffer.
+    entry_time_monotonic: float = 0.0
+    # Number of confirmed QR detections that contributed to this track
+    # (informational — already filtered by the tracker's min-detections gate).
+    detection_count: int = 0
     
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -139,21 +156,28 @@ class ContainerTracker:
         exit_zone_ratio: float = 0.15,
         lost_timeout: float = 2.0,
         min_displacement_ratio: float = 0.3,
+        min_detections_for_event: int = 3,
     ):
         """
         Initialize the container tracker.
-        
+
         Args:
             frame_width: Width of the video frame in pixels
             exit_zone_ratio: Fraction of frame width for exit zones
             lost_timeout: Seconds without detection before marking lost
             min_displacement_ratio: Minimum x displacement as fraction of frame width
                                     to determine direction (filters small movements)
+            min_detections_for_event: Minimum number of *real* QR detections
+                a track must accumulate before it is allowed to emit an
+                event.  Filters out single-frame decoder glitches that
+                would otherwise count as containers.  Set to ``1`` to
+                disable (legacy behaviour).
         """
         self.frame_width = frame_width
         self.exit_zone_ratio = exit_zone_ratio
         self.lost_timeout = lost_timeout
         self.min_displacement_ratio = min_displacement_ratio
+        self.min_detections_for_event = max(1, int(min_detections_for_event))
         
         # Calculate exit zone boundaries
         self.left_exit_x = int(frame_width * exit_zone_ratio)
@@ -186,16 +210,22 @@ class ContainerTracker:
         self,
         qr_value: int,
         center: Tuple[int, int],
-        timestamp: Optional[float] = None
+        timestamp: Optional[float] = None,
+        is_prediction: bool = False,
     ) -> Optional[ContainerEvent]:
         """
         Update tracker with a new QR detection.
-        
+
         Args:
             qr_value: QR code value (1-5)
             center: (x, y) center position of QR code
             timestamp: Detection timestamp (defaults to current time)
-            
+            is_prediction: ``True`` when ``center`` is extrapolated from a
+                linear predictor rather than an actual QR decoder output.
+                Predicted positions maintain the track's trajectory but
+                do **not** count toward the ``min_detections_for_event``
+                false-positive gate.
+
         Returns:
             ContainerEvent if the container exited the frame, None otherwise
         """
@@ -203,19 +233,36 @@ class ContainerTracker:
             timestamp = time.time()
         
         x, y = center
-        
+        # Monotonic timestamp captured alongside the wall-clock one so
+        # downstream consumers (EventVideoCoordinator, ContentCameraRecorder)
+        # can align the pre-roll ring buffer precisely.
+        t_mono = time.monotonic()
+
         # Check if we have an existing track for this QR value
         if qr_value in self._tracks:
             track = self._tracks[qr_value]
             track.add_position(x, y, timestamp)
-            
+            if not is_prediction:
+                track.detection_count += 1
+
             # Check if container has exited
             event = self._check_exit(track)
             if event:
                 del self._tracks[qr_value]
                 return event
+            # The FP gate inside ``_check_exit`` sets state=COMPLETED
+            # when it drops a track for too few detections.  Remove the
+            # track here so callers stop feeding it frames and its
+            # downstream buffers can be reclaimed on the next tick.
+            if track.state == TrackState.COMPLETED:
+                del self._tracks[qr_value]
+                return None
         else:
-            # New container
+            # New container.  We allow predicted positions to start a
+            # track only if a detection has already happened on a prior
+            # frame \u2014 otherwise a single prediction can't create a track.
+            if is_prediction:
+                return None
             track = TrackedContainer(
                 qr_value=qr_value,
                 track_id=self._next_track_id,
@@ -223,17 +270,19 @@ class ContainerTracker:
                 entry_time=timestamp,
                 last_x=x,
                 last_time=timestamp,
+                entry_time_monotonic=t_mono,
+                detection_count=1,
             )
             track.add_position(x, y, timestamp)
             self._tracks[qr_value] = track
             self._next_track_id += 1
-            
+
             logger.debug(
                 f"[ContainerTracker] New track #{track.track_id}: "
                 f"QR={qr_value} entry_x={x} "
                 f"exit_zones=[left<={self.left_exit_x} / right>={self.right_exit_x}]"
             )
-        
+
         return None
     
     def check_lost_tracks(self, current_time: Optional[float] = None) -> List[ContainerEvent]:
@@ -256,14 +305,26 @@ class ContainerTracker:
         
         for qr_value, track in self._tracks.items():
             time_since_seen = current_time - track.last_time
-            
+
             if time_since_seen > self.lost_timeout:
+                # False-positive gate: a track that never accumulated
+                # enough detections is likely a QR decoder glitch.
+                if track.detection_count < self.min_detections_for_event:
+                    logger.info(
+                        f"[ContainerTracker] Track #{track.track_id} DROPPED "
+                        f"(likely false positive on lost): QR={qr_value} "
+                        f"detections={track.detection_count} "
+                        f"required>={self.min_detections_for_event}"
+                    )
+                    lost_qr_values.append(qr_value)
+                    continue
+
                 # Mark as lost and determine direction from trajectory
                 track.state = TrackState.LOST
                 track.exit_time = track.last_time
                 track.exit_x = track.last_x
                 track.direction = self._determine_direction(track)
-                
+
                 event = ContainerEvent(
                     track_id=track.track_id,
                     qr_value=track.qr_value,
@@ -273,6 +334,8 @@ class ContainerTracker:
                     exit_x=track.exit_x,
                     duration_seconds=track.duration_seconds,
                     positions=track.positions.copy(),
+                    entry_time_monotonic=track.entry_time_monotonic,
+                    detection_count=track.detection_count,
                 )
                 events.append(event)
                 lost_qr_values.append(qr_value)
@@ -310,22 +373,43 @@ class ContainerTracker:
     def _check_exit(self, track: TrackedContainer) -> Optional[ContainerEvent]:
         """
         Check if a track has exited via left or right of frame.
-        
+
         Args:
             track: The tracked container to check
-            
+
         Returns:
-            ContainerEvent if exited, None otherwise
+            ContainerEvent if exited AND the track accumulated enough real
+            detections to be considered valid, ``None`` otherwise.  A track
+            that exits with too few detections is dropped silently and
+            logged at ``info`` level as a suspected false positive.
         """
         x = track.last_x
-        
-        # Check left exit (positive direction: right → left, filled leaving)
-        if x <= self.left_exit_x:
+
+        # Left or right exit?
+        exited_left = x <= self.left_exit_x
+        exited_right = x >= self.right_exit_x
+        if not (exited_left or exited_right):
+            return None
+
+        # False-positive gate.
+        if track.detection_count < self.min_detections_for_event:
+            logger.info(
+                f"[ContainerTracker] Track #{track.track_id} DROPPED "
+                f"(likely false positive): QR={track.qr_value} "
+                f"detections={track.detection_count} "
+                f"required>={self.min_detections_for_event} "
+                f"entry_x={track.entry_x} exit_x={x} "
+                f"dur={track.duration_seconds:.2f}s"
+            )
+            track.state = TrackState.COMPLETED
+            return None
+
+        if exited_left:
             track.state = TrackState.COMPLETED
             track.exit_x = x
             track.exit_time = track.last_time
             track.direction = Direction.POSITIVE
-            
+
             self.total_positive += 1
             self.qr_stats[track.qr_value]['positive'] += 1
             
@@ -347,8 +431,10 @@ class ContainerTracker:
                 exit_x=track.exit_x,
                 duration_seconds=track.duration_seconds,
                 positions=track.positions.copy(),
+                entry_time_monotonic=track.entry_time_monotonic,
+                detection_count=track.detection_count,
             )
-        
+
         # Check right exit (negative direction: left → right, empty returning)
         if x >= self.right_exit_x:
             track.state = TrackState.COMPLETED
@@ -377,6 +463,8 @@ class ContainerTracker:
                 exit_x=track.exit_x,
                 duration_seconds=track.duration_seconds,
                 positions=track.positions.copy(),
+                entry_time_monotonic=track.entry_time_monotonic,
+                detection_count=track.detection_count,
             )
         
         return None

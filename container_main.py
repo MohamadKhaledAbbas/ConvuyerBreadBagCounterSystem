@@ -43,7 +43,7 @@ import src.constants as constants
 # =============================================================================
 DEVELOPMENT = True             # Force development mode (video file instead of ROS2)
 ENABLE_DISPLAY = True           # Force enable cv2 display window
-VIDEO_PATH = 'data/test_round_tip.avi' # Path to video file (development only)
+VIDEO_PATH = os.path.expanduser('~/Downloads/cam_qr2.mp4') # Path to video file (development only)
 MAX_FRAMES = None               # Max frames to process (None = infinite)
 DATABASE_PATH = str(DB_PATH)    # Path to database file
 

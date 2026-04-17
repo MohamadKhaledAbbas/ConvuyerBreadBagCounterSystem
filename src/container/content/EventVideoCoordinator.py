@@ -121,6 +121,8 @@ class EventVideoCoordinator:
         trigger_monotonic_time: float,
         qr_frames: List[np.ndarray],
         metadata: dict,
+        qr_fps_override: Optional[float] = None,
+        content_already_started: bool = False,
     ) -> EventVideoResult:
         """Capture an event video using the chosen source.
 
@@ -136,12 +138,33 @@ class EventVideoCoordinator:
                 is written alongside the QR-camera clip and used to
                 enrich logs.  The coordinator adds ``camera`` and
                 ``fallback`` keys to a shallow copy before writing.
+            qr_fps_override: Measured sampling fps computed from the
+                EventFrameBuffer timestamps.  When supplied it is used
+                as the video write fps instead of ``_qr_fps`` so the
+                clip plays at real-time speed even when the processing
+                loop runs below target_fps.
+            content_already_started: When ``True``, the content camera
+                recording was already started at QR-threshold time via
+                :meth:`ContentCameraRecorder.begin_event_recording` and
+                ended via :meth:`end_event_recording` just before this
+                call.  The coordinator skips ``trigger_recording()`` and
+                returns the content result directly.
 
         Returns:
             An :class:`EventVideoResult` describing the outcome.  Never
             raises on the hot path — all errors are logged and converted
             into a ``video_relpath=None`` result.
         """
+        # --- Content camera already recording (begin/end model) ----------
+        if self._preference == "content" and content_already_started:
+            rel = f"{self._content_output_relroot}/{event_id}.mp4"
+            logger.info(
+                f"[EventVideo] event={event_id} source=content "
+                f"(begin/end model) file={rel}"
+            )
+            return EventVideoResult(
+                camera="content", fallback=False, video_relpath=rel
+            )
         # --- Try content recorder if preferred and healthy ---------------
         if self._preference == "content":
             if self._content is not None and self._content.is_available():
@@ -176,12 +199,14 @@ class EventVideoCoordinator:
                 )
             # Reaching here means we wanted content but couldn't get it.
             return self._submit_qr_video(
-                event_id=event_id, frames=qr_frames, metadata=metadata, fallback=True,
+                event_id=event_id, frames=qr_frames, metadata=metadata,
+                fallback=True, fps_override=qr_fps_override,
             )
 
         # --- Preference = qr (or invalid) --------------------------------
         return self._submit_qr_video(
-            event_id=event_id, frames=qr_frames, metadata=metadata, fallback=False,
+            event_id=event_id, frames=qr_frames, metadata=metadata,
+            fallback=False, fps_override=qr_fps_override,
         )
 
     # ------------------------------------------------------------------
@@ -195,6 +220,7 @@ class EventVideoCoordinator:
         frames: List[np.ndarray],
         metadata: dict,
         fallback: bool,
+        fps_override: Optional[float] = None,
     ) -> EventVideoResult:
         if not frames:
             logger.warning(
@@ -215,7 +241,9 @@ class EventVideoCoordinator:
         full_meta["video_file"] = self._QR_VIDEO_FILENAME
 
         codec = self._codec
-        fps = self._qr_fps
+        # Use the measured rate when available so the clip plays at real-time
+        # speed even if the processing loop ran below target_fps.
+        fps = fps_override if fps_override is not None else self._qr_fps
 
         def _encode_job() -> None:
             try:

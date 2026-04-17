@@ -78,6 +78,7 @@ class ContentRecorderConfig:
     post_event_seconds: float = 2.0     # seconds to keep capturing after trigger
     target_fps: int = 15                # reader + output FPS
     reconnect_delay: float = 2.0        # seconds between RTSP reconnect attempts
+    max_recording_seconds: float = 15.0 # safety cap: auto-finalize any recording longer than this
     frame_size: Optional[Tuple[int, int]] = None   # (w, h); detected from stream
     codec: str = "mp4v"                 # four-cc for ``cv2.VideoWriter``
 
@@ -246,18 +247,23 @@ class ContentCameraRecorder:
     ) -> Optional[str]:
         """Trigger a content recording for the given event.
 
-        Snapshots frames from the ring buffer within
-        ``[trigger_time - pre_event_seconds, trigger_time]`` (i.e. a
-        walltime-accurate pre-roll) and schedules post-roll capture for
-        ``post_event_seconds``.  Returns the **relative output filename**
-        (e.g. ``"qr3_positive_20251105_123456.mp4"``) without the
-        directory prefix, or ``None`` if the recorder isn't running.
+        The ``trigger_time`` argument is the container's **entry** moment
+        (``event.entry_time_monotonic``), which may be in the past by the
+        time this method is called (the event fires at container exit).
+
+        Pre-roll:  ``[trigger_time - pre_event_seconds,  NOW]``
+            Captures from ``pre_event_seconds`` before the container
+            entered all the way through to the exit (which is NOW), so the
+            full transit is always included.
+
+        Post-roll: ``post_event_seconds`` seconds *after* this call,
+            giving a brief tail of the conveyor after the container leaves.
 
         Args:
             event_id: Identifier used for the output filename.
-            trigger_time: Monotonic-clock time the event fired.  Defaults
-                to ``time.monotonic()`` — pass an earlier value if the
-                event was detected slightly after it occurred.
+            trigger_time: Monotonic-clock anchor for the pre-roll start
+                (typically the container's entry time).  Defaults to
+                ``time.monotonic()`` when omitted.
         """
         if self._reader_thread is None or self._stop_event.is_set():
             logger.warning(
@@ -265,38 +271,139 @@ class ContentCameraRecorder:
             )
             return None
 
-        t_trigger = trigger_time if trigger_time is not None else time.monotonic()
-        pre_cutoff = t_trigger - self.config.pre_event_seconds
+        # t_anchor: the start reference (entry time or "now" when unknown)
+        t_anchor = trigger_time if trigger_time is not None else time.monotonic()
+        # t_now: the actual call time (= approximately the exit moment)
+        t_now = time.monotonic()
+
+        # Pre-roll window spans from pre_event_seconds before the anchor
+        # up to the CURRENT time so the entire transit is included,
+        # even when t_anchor is several seconds in the past.
+        pre_cutoff = t_anchor - self.config.pre_event_seconds
+        pre_end = max(t_anchor, t_now)   # safety for immediate/same-tick calls
 
         with self._lock:
             if len(self._ring) == 0:
                 logger.warning(
                     f"[ContentRecorder] trigger_recording({event_id}) — ring buffer empty"
                 )
-            # Take frames within the pre-roll time window.  Because the
-            # deque is monotonically ordered by time, we can scan from
-            # the right until we fall below ``pre_cutoff``.
             pre: List[_FrameEntry] = [
                 entry for entry in self._ring
-                if pre_cutoff <= entry[0] <= t_trigger
+                if pre_cutoff <= entry[0] <= pre_end
             ]
             rec = _PendingRecording(
                 event_id=event_id,
-                trigger_time=t_trigger,
+                # Reader-loop gating: frames arriving strictly after t_now
+                # are treated as post-roll.  Frames already in the ring
+                # buffer ([t_anchor, t_now]) are already in pre_frames.
+                trigger_time=t_now,
                 pre_frames=pre,
-                capture_until=t_trigger + self.config.post_event_seconds,
+                capture_until=t_now + self.config.post_event_seconds,
                 post_frames=[],
                 done_event=threading.Event(),
             )
             self._active.append(rec)
 
-        span_s = (pre[-1][0] - pre[0][0]) if pre else 0.0
+        span_s = (pre[-1][0] - pre[0][0]) if len(pre) >= 2 else 0.0
         logger.info(
             f"[ContentRecorder] Triggered event={event_id} "
             f"pre_frames={len(pre)} (~{span_s:.2f}s) "
             f"post_seconds={self.config.post_event_seconds}"
         )
         return f"{event_id}.mp4"
+
+    # ----- begin / end model (start-of-transit) --------------------------
+
+    def begin_event_recording(
+        self,
+        event_id: str,
+        trigger_time: Optional[float] = None,
+    ) -> None:
+        """Start continuous recording for an ongoing container transit.
+
+        Called when the QR camera's detection-count threshold is first
+        met (i.e. mid-transit, not at exit).
+
+        Pre-roll: snapshots from the ring buffer going back
+        ``pre_event_seconds`` before *trigger_time*.
+
+        Active capture: the reader thread keeps appending frames until
+        :meth:`end_event_recording` is called **or**
+        ``max_recording_seconds`` elapses (safety cap), whichever comes
+        first.
+
+        Args:
+            event_id: Identifier used for the output filename.
+            trigger_time: Monotonic-clock anchor (container entry time).
+                Defaults to ``time.monotonic()``.
+        """
+        if self._reader_thread is None or self._stop_event.is_set():
+            logger.warning(
+                f"[ContentRecorder] begin_event_recording({event_id}) ignored — not running"
+            )
+            return
+
+        t_anchor = trigger_time if trigger_time is not None else time.monotonic()
+        t_now = time.monotonic()
+        pre_cutoff = t_anchor - self.config.pre_event_seconds
+        pre_end = max(t_anchor, t_now)
+
+        with self._lock:
+            # Avoid duplicate begin calls for the same event
+            for rec in self._active:
+                if rec.event_id == event_id:
+                    logger.debug(
+                        f"[ContentRecorder] begin_event_recording({event_id}) — already active"
+                    )
+                    return
+
+            pre: List[_FrameEntry] = [
+                entry for entry in self._ring
+                if pre_cutoff <= entry[0] <= pre_end
+            ]
+            rec = _PendingRecording(
+                event_id=event_id,
+                trigger_time=t_now,
+                pre_frames=pre,
+                # Safety cap — auto-finalized by the reader loop if
+                # end_event_recording is never called (e.g. crash, bug).
+                capture_until=t_now + self.config.max_recording_seconds,
+                post_frames=[],
+                done_event=threading.Event(),
+            )
+            self._active.append(rec)
+
+        span_s = (pre[-1][0] - pre[0][0]) if len(pre) >= 2 else 0.0
+        logger.info(
+            f"[ContentRecorder] BEGIN event={event_id} "
+            f"pre_frames={len(pre)} (~{span_s:.2f}s) "
+            f"max_cap={self.config.max_recording_seconds}s"
+        )
+
+    def end_event_recording(self, event_id: str) -> None:
+        """End an active recording started by :meth:`begin_event_recording`.
+
+        Sets ``capture_until`` to ``now + post_event_seconds`` so the
+        recording captures a brief tail after the container exits.
+        If the recording already auto-finalized (max cap), this is a
+        harmless no-op.
+        """
+        now = time.monotonic()
+        with self._lock:
+            for rec in self._active:
+                if rec.event_id == event_id:
+                    rec.capture_until = now + self.config.post_event_seconds
+                    logger.info(
+                        f"[ContentRecorder] END event={event_id} "
+                        f"post_seconds={self.config.post_event_seconds} "
+                        f"total_frames={len(rec.pre_frames) + len(rec.post_frames)}"
+                    )
+                    return
+        # Not found — likely already auto-finalized by the max-cap.
+        logger.debug(
+            f"[ContentRecorder] end_event_recording({event_id}) — "
+            f"not found (already finalized?)"
+        )
 
     def get_health(self) -> dict:
         """Return diagnostic info for health monitoring."""
@@ -479,13 +586,27 @@ class ContentCameraRecorder:
         tmp_path = path + ".writing.mp4"
         bare_frames = [f for _, f in entries]
 
+        # Use the actual measured sampling rate so the video plays at
+        # real-time speed even when the camera delivers fewer fps than
+        # target_fps (e.g. 720p main stream at 7fps vs target of 20fps).
+        # Without this, each frame would be displayed for only 1/20 s
+        # instead of the ~1/7 s it actually represents, making the clip
+        # run 3× too fast and appear artificially short.
+        if len(entries) >= 2:
+            span = entries[-1][0] - entries[0][0]
+            measured_fps = len(entries) / span if span > 0 else float(self.config.target_fps)
+            # Clamp: never below 1 fps, never above target_fps
+            write_fps = max(1.0, min(float(self.config.target_fps), measured_fps))
+        else:
+            write_fps = float(self.config.target_fps)
+
         try:
-            self._write_h264_ffmpeg(bare_frames, tmp_path, float(self.config.target_fps), w, h)
+            self._write_h264_ffmpeg(bare_frames, tmp_path, write_fps, w, h)
         except Exception as e:
             logger.warning(
                 f"[ContentRecorder] ffmpeg encode failed ({e}) — falling back to OpenCV"
             )
-            self._write_opencv_fallback(bare_frames, tmp_path, self.config.codec, float(self.config.target_fps), w, h)
+            self._write_opencv_fallback(bare_frames, tmp_path, self.config.codec, write_fps, w, h)
 
         if not os.path.exists(tmp_path):
             logger.error(f"[ContentRecorder] No output produced for {path}")
@@ -501,7 +622,7 @@ class ContentCameraRecorder:
         logger.info(
             f"[ContentRecorder] Wrote {path} frames={len(entries)} "
             f"pre={len(rec.pre_frames)} post={len(rec.post_frames)} "
-            f"span={span:.2f}s size={w}x{h}"
+            f"span={span:.2f}s fps={write_fps:.1f} size={w}x{h}"
         )
 
     @staticmethod
