@@ -129,6 +129,16 @@ class DatabaseManager:
         remaining = timeout - (time.monotonic() - start)
         if remaining > 0:
             time.sleep(min(remaining, 0.2))
+    def fetchall(self, sql: str, params=()) -> list:
+        """Execute a SELECT and return all rows."""
+        with self._cursor() as cursor:
+            cursor.execute(sql, params)
+            return cursor.fetchall()
+    def fetchone(self, sql: str, params=()) -> Optional[tuple]:
+        """Execute a SELECT and return the first row, or None."""
+        with self._cursor() as cursor:
+            cursor.execute(sql, params)
+            return cursor.fetchone()
     def _ensure_db_exists(self):
         db_file = Path(self.db_path)
         db_file.parent.mkdir(parents=True, exist_ok=True)
@@ -173,6 +183,7 @@ class DatabaseManager:
 
         # Migrate existing tables to add new columns (safe for existing DBs)
         self._migrate_track_events_schema()
+        self._migrate_container_events_schema()
 
         # Migrate arabic_name for bag types where it still equals English name
         self._migrate_arabic_names()
@@ -216,6 +227,27 @@ class DatabaseManager:
             conn.commit()
         except Exception as e:
             logger.error(f"[DatabaseManager] Migration error: {e}")
+
+    def _migrate_container_events_schema(self):
+        """Add missing columns to container_events table for existing databases."""
+        new_columns = [
+            ("is_lost", "INTEGER DEFAULT 0"),
+        ]
+        try:
+            conn = self._get_connection()
+            for col_name, col_type in new_columns:
+                try:
+                    conn.execute(
+                        f"ALTER TABLE container_events ADD COLUMN {col_name} {col_type}"
+                    )
+                    logger.info(
+                        f"[DatabaseManager] Migrated container_events: added column {col_name}"
+                    )
+                except sqlite3.OperationalError:
+                    pass  # Column already exists or table doesn't exist yet
+            conn.commit()
+        except Exception as e:
+            logger.error(f"[DatabaseManager] Container events migration error: {e}")
 
     def _migrate_arabic_names(self):
         """Fix bag_types where arabic_name still equals the English name (untranslated).

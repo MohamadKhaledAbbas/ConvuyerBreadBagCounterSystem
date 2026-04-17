@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>سجل الحاويات</title>
+    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --bg-deep: #0f172a;
+            --glass-bg: rgba(30, 41, 59, 0.7);
+            --glass-border: rgba(255, 255, 255, 0.08);
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --accent-primary: #38bdf8;
+            --accent-success: #2dd4bf;
+            --accent-warning: #fbbf24;
+            --accent-danger: #f87171;
+            --accent-cyan: #06b6d4;
+            --radius-lg: 16px;
+            --radius-md: 12px;
+            --radius-sm: 8px;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        a { color: var(--accent-primary); text-decoration: none; }
+        a:visited, a:active { color: var(--accent-primary); }
+        body {
+            font-family: 'Tajawal', 'Inter', system-ui, sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.8;
+        }
+        .numbers { font-family: 'Inter', sans-serif !important; font-feature-settings: "tnum" 1; }
+        main { max-width: 1400px; margin: 0 auto; padding: 2rem 1.5rem; }
+
+        .header { text-align: center; margin-bottom: 2rem; }
+        .header h1 {
+            font-size: 2rem; font-weight: 800;
+            background: linear-gradient(135deg, var(--accent-cyan), var(--accent-primary));
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+        }
+        .header .subtitle { color: var(--text-secondary); font-size: 1rem; }
+        .back-link {
+            display: inline-flex; align-items: center; gap: 0.5rem;
+            color: var(--accent-primary); text-decoration: none; font-size: 0.9rem;
+            margin-bottom: 1rem;
+        }
+        .back-link:hover { color: var(--accent-success); }
+
+        /* Filters */
+        .filter-bar {
+            display: flex; flex-wrap: wrap; gap: 0.8rem;
+            background: var(--glass-bg); border: 1px solid var(--glass-border);
+            border-radius: var(--radius-md); padding: 1rem 1.2rem;
+            margin-bottom: 1.5rem; align-items: flex-end;
+        }
+        .filter-bar .field { display: flex; flex-direction: column; gap: 0.3rem; }
+        .filter-bar label { font-size: 0.75rem; color: var(--text-muted); }
+        .filter-bar select, .filter-bar input {
+            background: rgba(15,23,42,0.6); border: 1px solid var(--glass-border);
+            color: var(--text-primary); border-radius: var(--radius-sm);
+            padding: 0.45rem 0.7rem; font-size: 0.85rem;
+            font-family: 'Inter', sans-serif;
+        }
+        .filter-bar button {
+            background: rgba(56,189,248,0.15); color: var(--accent-primary);
+            border: 1px solid rgba(56,189,248,0.3); border-radius: var(--radius-sm);
+            padding: 0.45rem 1rem; cursor: pointer; font-size: 0.85rem;
+            font-family: 'Tajawal', sans-serif; font-weight: 600;
+        }
+        .filter-bar button:hover { background: rgba(56,189,248,0.25); }
+
+        /* Table */
+        .events-wrap {
+            background: var(--glass-bg); border: 1px solid var(--glass-border);
+            border-radius: var(--radius-lg); overflow: hidden;
+            backdrop-filter: blur(10px); margin-bottom: 1.5rem;
+        }
+        table { width: 100%; border-collapse: collapse; }
+        thead th {
+            background: rgba(15,23,42,0.6); padding: 0.75rem 0.8rem;
+            text-align: right; font-weight: 600; color: var(--text-secondary);
+            border-bottom: 1px solid var(--glass-border); font-size: 0.8rem;
+        }
+        tbody td {
+            padding: 0.6rem 0.8rem; font-size: 0.88rem;
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+        }
+        tbody tr:hover { background: rgba(56,189,248,0.05); }
+        .dir-badge {
+            display: inline-block; padding: 0.15rem 0.6rem;
+            border-radius: 20px; font-size: 0.75rem; font-weight: 600;
+        }
+        .dir-badge.positive { background: rgba(45,212,191,0.15); color: var(--accent-success); }
+        .dir-badge.negative { background: rgba(251,191,36,0.15); color: var(--accent-warning); }
+        .dir-badge.unknown { background: rgba(100,116,139,0.15); color: var(--text-muted); }
+        .qr-badge {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 28px; height: 28px; border-radius: 6px;
+            font-weight: 800; font-size: 0.9rem;
+            background: rgba(6,182,212,0.15); color: var(--accent-cyan);
+            font-family: 'Inter', sans-serif;
+        }
+        .snapshot-link {
+            color: var(--accent-primary); text-decoration: none; font-size: 0.8rem;
+            cursor: pointer;
+        }
+        .snapshot-link:hover { text-decoration: underline; }
+
+        /* Footage modal */
+        .modal-overlay {
+            display: none; position: fixed; inset: 0; z-index: 1000;
+            background: rgba(0,0,0,0.88); align-items: center; justify-content: center;
+        }
+        .modal-overlay.active { display: flex; }
+        .modal-box {
+            background: var(--glass-bg); border: 1px solid var(--glass-border);
+            border-radius: var(--radius-lg); padding: 1.5rem; width: 92%; max-width: 720px;
+            max-height: 92vh; overflow-y: auto; position: relative;
+            backdrop-filter: blur(16px);
+        }
+        .modal-close {
+            position: absolute; top: 0.8rem; left: 0.8rem;
+            background: none; border: none; color: var(--text-muted);
+            font-size: 1.4rem; cursor: pointer;
+        }
+        .modal-close:hover { color: var(--text-primary); }
+        .modal-title {
+            font-size: 1.1rem; font-weight: 700; margin-bottom: 1.2rem;
+            display: flex; align-items: center; gap: 0.5rem;
+        }
+        .modal-title i { color: var(--accent-cyan); }
+        /* Big preview */
+        .preview-area { text-align: center; margin-bottom: 1rem; position: relative; }
+        .preview-area img {
+            max-width: 100%; max-height: 46vh;
+            border-radius: var(--radius-md); border: 2px solid var(--glass-border);
+            transition: opacity 0.15s;
+        }
+        .preview-area img.loading { opacity: 0.4; }
+        .preview-label {
+            font-size: 0.78rem; color: var(--text-muted);
+            margin-top: 0.4rem; font-family: 'Inter', sans-serif;
+        }
+        /* Timeline strip */
+        .timeline-strip {
+            display: flex; align-items: flex-end; gap: 4px;
+            justify-content: center; margin-bottom: 1rem; flex-wrap: wrap;
+        }
+        .strip-frame {
+            display: flex; flex-direction: column; align-items: center;
+            cursor: pointer; gap: 3px;
+        }
+        .strip-frame img {
+            width: 72px; height: 54px; object-fit: cover;
+            border-radius: 4px; border: 2px solid transparent;
+            transition: border-color 0.15s, transform 0.1s;
+        }
+        .strip-frame img:hover { transform: translateY(-2px); border-color: var(--accent-primary); }
+        .strip-frame.active img { border-color: var(--accent-cyan); box-shadow: 0 0 0 2px rgba(6,182,212,0.3); }
+        .strip-frame.event-frame img { border-color: var(--accent-danger); width: 82px; height: 62px; }
+        .strip-frame.event-frame.active img { border-color: var(--accent-cyan); }
+        .strip-label {
+            font-size: 0.62rem; font-family: 'Inter', sans-serif;
+            color: var(--text-muted); white-space: nowrap;
+        }
+        .strip-frame.event-frame .strip-label { color: var(--accent-danger); font-weight: 700; }
+        .strip-separator {
+            display: flex; flex-direction: column; align-items: center;
+            color: var(--text-muted); font-size: 0.7rem; padding: 0 2px;
+            padding-bottom: 20px;
+        }
+        /* Frame nav */
+        .frame-nav {
+            display: flex; justify-content: center; align-items: center;
+            gap: 1rem; margin-top: 0.6rem;
+        }
+        .frame-nav button {
+            background: rgba(56,189,248,0.12); color: var(--accent-primary);
+            border: 1px solid rgba(56,189,248,0.25); border-radius: var(--radius-sm);
+            padding: 0.35rem 1rem; cursor: pointer; font-size: 0.85rem;
+            font-family: 'Tajawal', sans-serif; transition: background 0.15s;
+        }
+        .frame-nav button:hover { background: rgba(56,189,248,0.22); }
+        .frame-nav button:disabled { opacity: 0.35; cursor: default; }
+        .frame-counter { color: var(--text-muted); font-size: 0.8rem; font-family: 'Inter', sans-serif; min-width: 80px; text-align: center; }
+        .modal-loading { text-align: center; padding: 3rem; color: var(--text-muted); }
+        .modal-error { text-align: center; padding: 2rem; color: var(--accent-danger); }
+        .empty-msg {
+            text-align: center; padding: 3rem; color: var(--text-muted); font-size: 1rem;
+        }
+
+        /* Pagination */
+        .pagination {
+            display: flex; justify-content: center; align-items: center;
+            gap: 0.8rem; flex-wrap: wrap;
+        }
+        .pagination button {
+            padding: 0.4rem 0.8rem; background: var(--glass-bg);
+            border: 1px solid var(--glass-border); border-radius: var(--radius-sm);
+            color: var(--accent-primary); cursor: pointer; font-size: 0.8rem;
+        }
+        .pagination button:hover { background: rgba(56,189,248,0.1); }
+        .pagination button:disabled { opacity: 0.4; cursor: default; }
+        .pagination .page-info { color: var(--text-muted); font-size: 0.8rem; }
+
+        .footer {
+            text-align: center; padding: 1.5rem; color: var(--text-muted); font-size: 0.85rem;
+        }
+        .footer a { color: var(--accent-primary); text-decoration: none; }
+
+        @media (max-width: 768px) {
+            .filter-bar { flex-direction: column; }
+            .header h1 { font-size: 1.6rem; }
+            table { font-size: 0.78rem; }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <a href="/container" class="back-link"><i class="fa-solid fa-arrow-right"></i> لوحة الحاويات</a>
+
+    <div class="header">
+        <h1><i class="fa-solid fa-clock-rotate-left"></i> سجل الحاويات</h1>
+        <p class="subtitle">جميع عمليات دخول وخروج الحاويات مع التفاصيل</p>
+    </div>
+
+    <!-- Filters -->
+    <div class="filter-bar">
+        <div class="field">
+            <label for="filterQR"><i class="fa-solid fa-qrcode"></i> الحاوية</label>
+            <select id="filterQR">
+                <option value="">الكل</option>
+                <option value="1">حاوية 1</option>
+                <option value="2">حاوية 2</option>
+                <option value="3">حاوية 3</option>
+                <option value="4">حاوية 4</option>
+                <option value="5">حاوية 5</option>
+            </select>
+        </div>
+        <div class="field">
+            <label for="filterDir"><i class="fa-solid fa-arrows-up-down"></i> الاتجاه</label>
+            <select id="filterDir">
+                <option value="">الكل</option>
+                <option value="positive">خروج (ممتلئة)</option>
+                <option value="negative">عودة (فارغة)</option>
+                <option value="unknown">غير محدد</option>
+            </select>
+        </div>
+        <div class="field">
+            <label for="filterStart">من</label>
+            <input type="datetime-local" id="filterStart">
+        </div>
+        <div class="field">
+            <label for="filterEnd">إلى</label>
+            <input type="datetime-local" id="filterEnd">
+        </div>
+        <button onclick="currentOffset=0; loadEvents();"><i class="fa-solid fa-filter"></i> تصفية</button>
+    </div>
+
+    <!-- Events Table -->
+    <div class="events-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>الوقت</th>
+                    <th>الحاوية</th>
+                    <th>الاتجاه</th>
+                    <th>المدة</th>
+                    <th>لقطة</th>
+                </tr>
+            </thead>
+            <tbody id="eventsBody">
+                <tr><td colspan="6" class="empty-msg">جارٍ التحميل...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Pagination -->
+    <div class="pagination">
+        <button id="btnPrev" onclick="prevPage()" disabled><i class="fa-solid fa-chevron-right"></i> السابق</button>
+        <span class="page-info numbers" id="pageInfo">—</span>
+        <button id="btnNext" onclick="nextPage()">التالي <i class="fa-solid fa-chevron-left"></i></button>
+    </div>
+
+    <div class="footer">
+        <a href="/container">&larr; لوحة الحاويات</a> &nbsp;•&nbsp;
+        <a href="/">الرئيسية</a>
+    </div>
+</main>
+
+<script>
+const PAGE_SIZE = 50;
+let currentOffset = 0;
+let totalEvents = 0;
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+async function loadEvents() {
+    const params = new URLSearchParams();
+    const qr = document.getElementById('filterQR').value;
+    const dir = document.getElementById('filterDir').value;
+    const start = document.getElementById('filterStart').value;
+    const end = document.getElementById('filterEnd').value;
+
+    if (qr) params.set('qr_code_value', qr);
+    if (dir) params.set('direction', dir);
+    if (start) params.set('start_time', start);
+    if (end) params.set('end_time', end);
+    params.set('limit', PAGE_SIZE);
+    params.set('offset', currentOffset);
+
+    try {
+        const res = await fetch('/container/api/events?' + params.toString());
+        const data = await res.json();
+        totalEvents = data.total || 0;
+        renderTable(data.events || []);
+        updatePagination();
+    } catch (err) {
+        console.error('Load events error:', err);
+        document.getElementById('eventsBody').innerHTML =
+            '<tr><td colspan="6" class="empty-msg">خطأ في التحميل</td></tr>';
+    }
+}
+
+function renderTable(events) {
+    const body = document.getElementById('eventsBody');
+    if (!events.length) {
+        body.innerHTML = '<tr><td colspan="6" class="empty-msg">لا توجد عمليات</td></tr>';
+        return;
+    }
+    body.innerHTML = events.map((e, i) => {
+        const num = currentOffset + i + 1;
+        const time = e.timestamp
+            ? new Date(e.timestamp).toLocaleString('en-GB', {hour12: false, day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit'})
+            : '—';
+        const dirLabel = e.direction === 'positive' ? 'خروج ↑' : e.direction === 'negative' ? 'عودة ↓' : 'غير محدد';
+        const dirClass = e.direction || 'unknown';
+        const dur = e.duration_seconds != null ? e.duration_seconds.toFixed(1) + 's' : '—';
+        const snap = e.snapshot_path
+            ? `<a class="snapshot-link" onclick="openFootage('${esc(e.snapshot_path)}')"><i class="fa-solid fa-film"></i> لقطات</a>`
+            : '—';
+        return `<tr>
+            <td class="numbers">${num}</td>
+            <td class="numbers">${esc(time)}</td>
+            <td><span class="qr-badge">${e.qr_code_value}</span></td>
+            <td><span class="dir-badge ${esc(dirClass)}">${dirLabel}</span></td>
+            <td class="numbers">${esc(dur)}</td>
+            <td>${snap}</td>
+        </tr>`;
+    }).join('');
+}
+
+function updatePagination() {
+    const page = Math.floor(currentOffset / PAGE_SIZE) + 1;
+    const totalPages = Math.max(1, Math.ceil(totalEvents / PAGE_SIZE));
+    document.getElementById('pageInfo').textContent = `${page} / ${totalPages}  (${totalEvents})`;
+    document.getElementById('btnPrev').disabled = currentOffset === 0;
+    document.getElementById('btnNext').disabled = currentOffset + PAGE_SIZE >= totalEvents;
+}
+
+function prevPage() { currentOffset = Math.max(0, currentOffset - PAGE_SIZE); loadEvents(); }
+function nextPage() { currentOffset += PAGE_SIZE; loadEvents(); }
+
+// Default date filter to today
+(function setDefaults() {
+    const now = new Date();
+    const sod = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    function ldt(d) { return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')+'T'+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'); }
+    const urlP = new URLSearchParams(window.location.search);
+    document.getElementById('filterStart').value = urlP.get('start') || ldt(sod);
+    document.getElementById('filterEnd').value = urlP.get('end') || ldt(now);
+})();
+loadEvents();
+
+// Keyboard: ESC to close modal, arrows to navigate frames
+document.addEventListener('keydown', function(e) {
+    if (!document.getElementById('footageModal').classList.contains('active')) return;
+    if (e.key === 'Escape') closeFootage();
+    if (e.key === 'ArrowLeft' && modalFrameIdx < modalFrames.length - 1) { modalFrameIdx++; renderViewer(); }
+    if (e.key === 'ArrowRight' && modalFrameIdx > 0) { modalFrameIdx--; renderViewer(); }
+});
+
+/* ── Footage modal ── */
+let modalFrames = []; // [{url, label, isEvent}]
+let modalFrameIdx = 0;
+const STRIP_CONTEXT = 5;
+
+function openFootage(eventId) {
+    if (eventId.includes('/')) eventId = eventId.split('/').pop();
+    const overlay = document.getElementById('footageModal');
+    const content = document.getElementById('footageContent');
+    content.innerHTML = '<div class="modal-loading"><i class="fa-solid fa-spinner fa-spin"></i> جارٍ تحميل اللقطات...</div>';
+    document.getElementById('footageVideo').innerHTML = '';
+    overlay.classList.add('active');
+
+    fetch('/container/snapshot/event/' + encodeURIComponent(eventId) + '/metadata')
+        .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(meta => {
+            const pre = meta.pre_frame_count || meta.pre_count || 0;
+            const post = meta.post_frame_count || meta.post_count || 0;
+            const fps = meta.fps || 20;
+            if (pre === 0 && post === 0) {
+                content.innerHTML = '<div class="modal-error"><i class="fa-solid fa-image-slash"></i> لا توجد لقطات لهذا الحدث</div>';
+                return;
+            }
+            modalFrames = [];
+            // Last STRIP_CONTEXT pre-frames leading into event
+            const preStart = Math.max(0, pre - STRIP_CONTEXT);
+            for (let i = preStart; i < pre; i++) {
+                const secsAgo = ((pre - 1 - i) / fps).toFixed(1);
+                const isLast = (i === pre - 1);
+                modalFrames.push({
+                    url: '/container/snapshot/event/' + encodeURIComponent(eventId) + '?frame_type=pre&frame_index=' + i,
+                    label: isLast ? 'لحظة الحدث' : '-' + secsAgo + 's',
+                    isEvent: isLast
+                });
+            }
+            // First STRIP_CONTEXT post-frames after event
+            const postEnd = Math.min(post, STRIP_CONTEXT);
+            for (let i = 0; i < postEnd; i++) {
+                const secsAfter = ((i + 1) / fps).toFixed(1);
+                modalFrames.push({
+                    url: '/container/snapshot/event/' + encodeURIComponent(eventId) + '?frame_type=post&frame_index=' + i,
+                    label: '+' + secsAfter + 's',
+                    isEvent: false
+                });
+            }
+            // Start on event frame (last pre)
+            modalFrameIdx = Math.min(STRIP_CONTEXT - 1, pre - preStart - 1);
+            renderViewer();
+            if (meta.video_available) {
+                document.getElementById('footageVideo').innerHTML =
+                    '<a href="/container/snapshot/event/' + encodeURIComponent(eventId) + '/video" target="_blank" style="color:var(--accent-primary);font-size:0.88rem;"><i class="fa-solid fa-play-circle"></i> تشغيل الفيديو الكامل</a>';
+            }
+        })
+        .catch(() => {
+            content.innerHTML = '<div class="modal-error"><i class="fa-solid fa-circle-exclamation"></i> تعذّر تحميل اللقطات</div>';
+        });
+}
+
+function closeFootage() {
+    document.getElementById('footageModal').classList.remove('active');
+    document.getElementById('footageVideo').innerHTML = '';
+}
+
+function renderViewer() {
+    const content = document.getElementById('footageContent');
+    const f = modalFrames[modalFrameIdx];
+
+    // Big preview
+    const eventTag = f.isEvent ? ' <span style="color:var(--accent-danger);font-size:0.75rem;font-weight:700;">⭐ لحظة الحدث</span>' : '';
+    let html = '<div class="preview-area"><img src="' + f.url + '" alt="' + f.label + '"><div class="preview-label">' + f.label + eventTag + '</div></div>';
+
+    // Timeline strip
+    html += '<div class="timeline-strip">';
+    modalFrames.forEach(function(fr, i) {
+        const activeClass = i === modalFrameIdx ? ' active' : '';
+        const evClass = fr.isEvent ? ' event-frame' : '';
+        html += '<div class="strip-frame' + activeClass + evClass + '" onclick="modalFrameIdx=' + i + ';renderViewer()">' +
+            '<img src="' + fr.url + '" loading="lazy" alt="' + fr.label + '">' +
+            '<span class="strip-label">' + fr.label + '</span></div>';
+    });
+    html += '</div>';
+
+    html += '<div class="frame-nav">' +
+        '<button onclick="modalFrameIdx=Math.max(0,modalFrameIdx-1);renderViewer()" ' + (modalFrameIdx === 0 ? 'disabled' : '') + '><i class="fa-solid fa-chevron-right"></i> السابق</button>' +
+        '<span class="frame-counter">' + (modalFrameIdx + 1) + ' / ' + modalFrames.length + '</span>' +
+        '<button onclick="modalFrameIdx=Math.min(modalFrames.length-1,modalFrameIdx+1);renderViewer()" ' + (modalFrameIdx === modalFrames.length - 1 ? 'disabled' : '') + '>التالي <i class="fa-solid fa-chevron-left"></i></button>' +
+        '</div>';
+
+    content.innerHTML = html;
+}
+
+document.getElementById('footageModal').addEventListener('click', function(e) {
+    if (e.target === this) closeFootage();
+});
+</script>
+
+<!-- Footage Modal -->
+<div class="modal-overlay" id="footageModal">
+    <div class="modal-box">
+        <button class="modal-close" onclick="closeFootage()"><i class="fa-solid fa-xmark"></i></button>
+        <div class="modal-title"><i class="fa-solid fa-film"></i> لقطات الحدث</div>
+        <div id="footageContent"></div>
+        <div id="footageVideo" style="text-align:center;margin-top:0.8rem"></div>
+    </div>
+</div>
+</body>
+</html>

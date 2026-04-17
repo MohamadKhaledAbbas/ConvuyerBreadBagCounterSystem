@@ -40,6 +40,7 @@ router = APIRouter(prefix="/api/health", tags=["health"])
 # Imported from the single-source-of-truth paths module.
 from src.config.paths import (
     CODEC_HEALTH_STATUS_FILE,
+    CONTAINER_PIPELINE_STATE_FILE,
 )
 
 
@@ -173,6 +174,54 @@ async def restart_codec() -> JSONResponse:
         )
 
 
+@router.get("/container")
+async def get_container_health() -> JSONResponse:
+    """
+    Health status of the container tracking pipeline (sale point / صالة).
+
+    Reads cross-process state from container_pipeline_state.json written
+    by container_main.py.
+
+    Returns:
+        JSON with container pipeline health, QR detection stats, and
+        tracking metrics.
+    """
+    state = _read_json_status(CONTAINER_PIPELINE_STATE_FILE, staleness_s=60.0)
+
+    if state is not None:
+        is_stale = state.get("stale", False)
+        qr_stats = state.get("qr_stats", {})
+        total_positive = state.get("total_positive", 0)
+        total_negative = state.get("total_negative", 0)
+
+        return JSONResponse(
+            content={
+                "enabled": True,
+                "healthy": not is_stale,
+                "stale": is_stale,
+                "age_seconds": state.get("age_seconds"),
+                "total_positive": total_positive,
+                "total_negative": total_negative,
+                "total_lost": state.get("total_lost", 0),
+                "active_tracks": state.get("active_tracks", 0),
+                "fps": state.get("fps", 0),
+                "frame_count": state.get("frame_count", 0),
+                "qr_stats": qr_stats,
+                "uptime_seconds": state.get("uptime_seconds", 0),
+            },
+            status_code=200
+        )
+
+    return JSONResponse(
+        content={
+            "enabled": False,
+            "healthy": False,
+            "reason": "Container pipeline state file not found. Is container_main.py running?"
+        },
+        status_code=200
+    )
+
+
 @router.get("/pipeline")
 async def get_pipeline_health() -> JSONResponse:
     """
@@ -269,6 +318,28 @@ async def get_pipeline_health() -> JSONResponse:
     if app_stale and is_rdk_platform():
         health["status"] = "degraded"
     health["throughput"]["app_fps"] = app_fps
+
+    # ── 3. Container pipeline (sale point / صالة) ────────────────
+    container_state = _read_json_status(CONTAINER_PIPELINE_STATE_FILE, staleness_s=60.0)
+    if container_state is not None:
+        c_stale = container_state.get("stale", False)
+        c_fps = container_state.get("fps", 0)
+        health["components"]["container"] = {
+            "healthy": not c_stale,
+            "stale": c_stale,
+            "fps": c_fps,
+            "total_positive": container_state.get("total_positive", 0),
+            "total_negative": container_state.get("total_negative", 0),
+            "total_lost": container_state.get("total_lost", 0),
+            "active_tracks": container_state.get("active_tracks", 0),
+            "age_seconds": container_state.get("age_seconds"),
+        }
+        health["throughput"]["container_fps"] = c_fps
+    else:
+        health["components"]["container"] = {
+            "healthy": None,
+            "note": "Container pipeline not running or state file not found",
+        }
 
     status_code = 200 if health["status"] == "healthy" else 503
     return JSONResponse(content=health, status_code=status_code)

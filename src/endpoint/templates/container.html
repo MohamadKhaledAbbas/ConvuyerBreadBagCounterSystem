@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>صالة - مراقبة الحاويات</title>
+    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --bg-deep: #0f172a;
+            --glass-bg: rgba(30, 41, 59, 0.7);
+            --glass-border: rgba(255, 255, 255, 0.08);
+            --glass-shadow: 0 4px 30px rgba(0, 0, 0, 0.3);
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --accent-primary: #38bdf8;
+            --accent-success: #2dd4bf;
+            --accent-warning: #fbbf24;
+            --accent-danger: #f87171;
+            --accent-purple: #a78bfa;
+            --accent-orange: #fb923c;
+            --accent-cyan: #06b6d4;
+            --radius-lg: 16px;
+            --radius-md: 12px;
+            --radius-sm: 8px;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        a { color: var(--accent-primary); text-decoration: none; }
+        a:visited, a:active { color: var(--accent-primary); }
+        body {
+            font-family: 'Tajawal', 'Inter', system-ui, sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.8;
+        }
+        .numbers { font-family: 'Inter', sans-serif !important; font-feature-settings: "tnum" 1; }
+        main { max-width: 1400px; margin: 0 auto; padding: 2rem 1.5rem; }
+
+        /* Header */
+        .header {
+            text-align: center; margin-bottom: 2rem;
+            animation: fadeInDown 0.8s ease-out;
+        }
+        .header h1 {
+            font-size: 2.4rem; font-weight: 800;
+            background: linear-gradient(135deg, var(--accent-cyan), var(--accent-primary), var(--accent-success));
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+        }
+        .header .subtitle { color: var(--text-secondary); font-size: 1.1rem; }
+        .back-link {
+            display: inline-flex; align-items: center; gap: 0.5rem;
+            color: var(--accent-primary); text-decoration: none; font-size: 0.9rem;
+            margin-bottom: 1rem;
+        }
+        .back-link:hover { color: var(--accent-success); }
+
+        /* Alert Banner */
+        .alert-banner {
+            background: rgba(248, 113, 113, 0.1);
+            border: 1px solid rgba(248, 113, 113, 0.3);
+            border-radius: var(--radius-md);
+            padding: 1rem 1.5rem; margin-bottom: 1.5rem;
+            display: none; animation: fadeIn 0.5s;
+        }
+        .alert-banner.warning {
+            background: rgba(251, 191, 36, 0.1);
+            border-color: rgba(251, 191, 36, 0.3);
+        }
+        .alert-banner .alert-title {
+            color: var(--accent-danger); font-weight: 700; font-size: 1.1rem;
+            margin-bottom: 0.3rem;
+        }
+        .alert-banner.warning .alert-title { color: var(--accent-warning); }
+        .alert-banner .alert-text { color: var(--text-secondary); font-size: 0.9rem; }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem; margin-bottom: 2rem;
+        }
+        .stat-card {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-md);
+            padding: 1.5rem;
+            backdrop-filter: blur(10px);
+            text-align: center;
+            transition: transform 0.2s, border-color 0.3s;
+        }
+        .stat-card:hover {
+            transform: translateY(-3px);
+            border-color: rgba(56, 189, 248, 0.3);
+        }
+        .stat-card .stat-icon { font-size: 1.5rem; margin-bottom: 0.5rem; }
+        .stat-card .stat-icon.positive { color: var(--accent-success); }
+        .stat-card .stat-icon.negative { color: var(--accent-warning); }
+        .stat-card .stat-icon.mismatch { color: var(--accent-danger); }
+        .stat-card .stat-icon.total { color: var(--accent-primary); }
+        .stat-card .stat-label {
+            font-size: 0.8rem; color: var(--text-muted);
+            text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.3rem;
+        }
+        .stat-card .stat-value {
+            font-size: 2.2rem; font-weight: 800;
+            font-family: 'Inter', sans-serif;
+        }
+        .stat-value.positive { color: var(--accent-success); }
+        .stat-value.negative { color: var(--accent-warning); }
+        .stat-value.mismatch { color: var(--accent-danger); }
+        .stat-value.total { color: var(--accent-primary); }
+        .stat-value.neutral { color: var(--text-primary); }
+
+        /* QR Breakdown */
+        .section-title {
+            font-size: 1.3rem; font-weight: 700; margin-bottom: 1rem;
+            display: flex; align-items: center; gap: 0.5rem;
+        }
+        .section-title i { color: var(--accent-cyan); }
+        .qr-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 1rem; margin-bottom: 2rem;
+        }
+        .qr-card {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-md);
+            padding: 1.2rem;
+            backdrop-filter: blur(10px);
+        }
+        .qr-card .qr-header {
+            display: flex; align-items: center; gap: 0.8rem;
+            margin-bottom: 0.8rem;
+        }
+        .qr-badge {
+            width: 40px; height: 40px; border-radius: 10px;
+            display: flex; align-items: center; justify-content: center;
+            font-weight: 800; font-size: 1.2rem;
+            background: rgba(6, 182, 212, 0.15); color: var(--accent-cyan);
+            font-family: 'Inter', sans-serif;
+        }
+        .qr-card h3 { font-size: 1rem; font-weight: 600; }
+        .qr-card .qr-stats {
+            display: flex; gap: 1.5rem;
+        }
+        .qr-stat {
+            display: flex; flex-direction: column; align-items: center;
+        }
+        .qr-stat-label { font-size: 0.7rem; color: var(--text-muted); }
+        .qr-stat-value {
+            font-size: 1.4rem; font-weight: 700;
+            font-family: 'Inter', sans-serif;
+        }
+
+        /* Recent Events Table */
+        .events-section {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-lg);
+            padding: 1.5rem;
+            backdrop-filter: blur(10px);
+            margin-bottom: 2rem;
+        }
+        .events-table { width: 100%; border-collapse: collapse; }
+        .events-table th {
+            text-align: right; padding: 0.6rem 0.8rem;
+            font-size: 0.75rem; color: var(--text-muted);
+            border-bottom: 1px solid var(--glass-border);
+            text-transform: uppercase;
+        }
+        .events-table td {
+            padding: 0.6rem 0.8rem;
+            font-size: 0.9rem;
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+        }
+        .events-table .numbers { font-family: 'Inter', sans-serif; }
+        .dir-badge {
+            display: inline-block; padding: 0.15rem 0.6rem;
+            border-radius: 20px; font-size: 0.75rem; font-weight: 600;
+        }
+        .dir-badge.positive { background: rgba(45,212,191,0.15); color: var(--accent-success); }
+        .dir-badge.negative { background: rgba(251,191,36,0.15); color: var(--accent-warning); }
+        .dir-badge.unknown { background: rgba(100,116,139,0.15); color: var(--text-muted); }
+        .event-flags {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            flex-wrap: wrap;
+        }
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            padding: 0.15rem 0.55rem;
+            border-radius: 999px;
+            font-size: 0.7rem;
+            font-weight: 700;
+        }
+        .status-badge.lost { background: rgba(248,113,113,0.15); color: var(--accent-danger); }
+        .status-badge.complete { background: rgba(45,212,191,0.12); color: var(--accent-success); }
+
+        /* Snapshot button */
+        .snap-btn {
+            background: none; border: none; color: var(--accent-primary);
+            cursor: pointer; font-size: 0.8rem; padding: 0.2rem 0.5rem;
+            border-radius: var(--radius-sm); transition: background 0.2s;
+            font-family: 'Tajawal', sans-serif;
+        }
+        .snap-btn:hover { background: rgba(56,189,248,0.12); }
+        .snap-btn.no-snap { color: var(--text-muted); cursor: default; }
+        .snap-btn.no-snap:hover { background: none; }
+
+        /* Footage modal */
+        .modal-overlay {
+            display: none; position: fixed; inset: 0; z-index: 1000;
+            background: rgba(0,0,0,0.85); align-items: center; justify-content: center;
+        }
+        .modal-overlay.active { display: flex; }
+        .modal-box {
+            background: var(--glass-bg); border: 1px solid var(--glass-border);
+            border-radius: var(--radius-lg); width: min(1000px, 94%);
+            height: 96vh; display: flex; flex-direction: column;
+            position: relative; backdrop-filter: blur(16px); overflow: hidden;
+        }
+        .modal-close {
+            position: absolute; top: 0.8rem; left: 0.8rem;
+            background: none; border: none; color: var(--text-muted);
+            font-size: 1.4rem; cursor: pointer;
+        }
+        .modal-close:hover { color: var(--text-primary); }
+        .modal-title {
+            flex-shrink: 0;
+            font-size: 1.05rem; font-weight: 700; padding: 1rem 3rem 0.65rem 1.2rem;
+            display: flex; align-items: center; gap: 0.5rem;
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+        }
+        .modal-title i { color: var(--accent-cyan); }
+        #footageContent {
+            flex: 1 1 0;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            padding: 0.8rem 1.1rem 0;
+        }
+        #footageVideo { flex-shrink: 0; }
+        .viewer-layout {
+            flex: 1 1 0;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 0.7rem;
+        }
+        .viewer-stage {
+            flex: 1 1 0;
+            min-height: 0;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 18px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .viewer-strip-wrapper {
+            flex-shrink: 0;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 16px;
+            overflow: hidden;
+        }
+        .frame-nav {
+            flex-shrink: 0;
+            display: flex; justify-content: center; align-items: center;
+            gap: 1rem; padding: 0.6rem 0 0.8rem;
+        }
+        .preview-area {
+            background: #020617;
+            overflow: hidden;
+            flex: 1 1 0;
+            min-height: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .preview-area img {
+            width: 100%;
+            height: 100%;
+            display: block;
+            object-fit: contain;
+        }
+        .preview-caption {
+            flex-shrink: 0;
+            padding: 0.55rem 1rem 0.6rem;
+            border-top: 1px solid rgba(255,255,255,0.06);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+        }
+        .viewer-layout {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+        .viewer-stage {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 18px;
+            overflow: hidden;
+        }
+        .preview-caption {
+            padding: 0.95rem 1rem 1rem;
+            border-top: 1px solid rgba(255,255,255,0.06);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+        }
+        .preview-title { font-size: 0.92rem; font-weight: 700; }
+        .preview-subtitle { font-size: 0.78rem; color: var(--text-muted); }
+        .viewer-strip-wrapper {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 16px;
+            overflow: hidden;
+        }
+        .viewer-strip-header {
+            padding: 0.65rem 1rem 0;
+            display: flex;
+            align-items: baseline;
+            gap: 0.5rem;
+        }
+        .viewer-strip-header h3 { font-size: 0.88rem; font-weight: 700; }
+        .viewer-strip-header span { font-size: 0.74rem; color: var(--text-muted); }
+        .thumb-strip {
+            padding: 0.7rem 0.9rem 0.85rem;
+            display: flex;
+            flex-direction: row;
+            gap: 0.55rem;
+            overflow-x: auto;
+            overflow-y: hidden;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(56,189,248,0.35) transparent;
+        }
+        .thumb-strip::-webkit-scrollbar { height: 5px; }
+        .thumb-strip::-webkit-scrollbar-track { background: transparent; }
+        .thumb-strip::-webkit-scrollbar-thumb { background: rgba(56,189,248,0.35); border-radius: 3px; }
+        .thumb-card {
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+            width: 120px;
+            gap: 0.4rem;
+            padding: 0.45rem;
+            border-radius: 12px;
+            border: 1px solid transparent;
+            cursor: pointer;
+            transition: all 0.18s ease;
+        }
+        .thumb-card:hover { background: rgba(255,255,255,0.05); transform: translateY(-2px); }
+        .thumb-card.active {
+            background: rgba(56,189,248,0.08);
+            border-color: rgba(56,189,248,0.3);
+        }
+        .thumb-card.first { border-color: rgba(45,212,191,0.22); }
+        .thumb-card.last { border-color: rgba(251,191,36,0.22); }
+        .thumb-card.first.active, .thumb-card.last.active { border-color: rgba(56,189,248,0.3); }
+        .thumb-card img {
+            width: 100%;
+            height: 80px;
+            object-fit: cover;
+            border-radius: 10px;
+            background: #020617;
+        }
+        .thumb-title {
+            font-size: 0.76rem;
+            font-weight: 700;
+            text-align: center;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .thumb-subtitle { font-size: 0.68rem; color: var(--text-muted); text-align: center; }
+        .thumb-tags {
+            display: flex;
+            gap: 0.25rem;
+            flex-wrap: wrap;
+            justify-content: center;
+            margin-top: 0.1rem;
+        }
+        .thumb-tag {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.08rem 0.4rem;
+            border-radius: 999px;
+            font-size: 0.66rem;
+            font-weight: 700;
+        }
+        .thumb-tag.start { color: var(--accent-success); background: rgba(45,212,191,0.12); }
+        .thumb-tag.end { color: var(--accent-warning); background: rgba(251,191,36,0.14); }
+        .frame-nav {
+            display: flex; justify-content: center; align-items: center;
+            gap: 1rem; margin-top: 1rem;
+        }
+        .frame-nav button {
+            background: rgba(56,189,248,0.12); color: var(--accent-primary);
+            border: 1px solid rgba(56,189,248,0.25); border-radius: var(--radius-sm);
+            padding: 0.35rem 1rem; cursor: pointer; font-size: 0.85rem;
+            font-family: 'Tajawal', sans-serif; transition: background 0.15s;
+        }
+        .frame-nav button:hover { background: rgba(56,189,248,0.22); }
+        .frame-nav button:disabled { opacity: 0.35; cursor: default; }
+        .frame-counter { color: var(--text-muted); font-size: 0.8rem; font-family: 'Inter', sans-serif; min-width: 80px; text-align: center; }
+        .modal-loading, .modal-error, .modal-empty { text-align: center; padding: 2.5rem; color: var(--text-muted); }
+        .modal-error { color: var(--accent-danger); }
+
+        /* Footer */
+        .footer {
+            text-align: center; padding: 1.5rem;
+            color: var(--text-muted); font-size: 0.85rem;
+        }
+        .footer a { color: var(--accent-primary); text-decoration: none; }
+        .refresh-info {
+            text-align: center; font-size: 0.75rem;
+            color: var(--text-muted); margin-bottom: 1rem; opacity: 0.6;
+        }
+
+        /* Toolbar */
+        .toolbar {
+            display: flex; justify-content: space-between; align-items: center;
+            flex-wrap: wrap; gap: 0.8rem; margin-bottom: 1.5rem;
+        }
+        .time-selector {
+            display: flex; gap: 0.3rem;
+            background: var(--glass-bg); border: 1px solid var(--glass-border);
+            border-radius: var(--radius-md); padding: 0.3rem;
+        }
+        .time-btn {
+            background: none; border: none; color: var(--text-muted);
+            padding: 0.4rem 0.9rem; border-radius: var(--radius-sm);
+            cursor: pointer; font-size: 0.85rem; font-family: 'Tajawal', sans-serif;
+            font-weight: 600; transition: all 0.2s;
+        }
+        .time-btn:hover { color: var(--text-primary); background: rgba(255,255,255,0.05); }
+        .time-btn.active {
+            background: rgba(56,189,248,0.15); color: var(--accent-primary);
+        }
+        .nav-links { display: flex; gap: 0.5rem; }
+        .nav-btn {
+            display: inline-flex; align-items: center; gap: 0.4rem;
+            background: var(--glass-bg); border: 1px solid var(--glass-border);
+            border-radius: var(--radius-md); padding: 0.5rem 1rem;
+            color: var(--accent-primary); text-decoration: none;
+            font-size: 0.85rem; font-weight: 600; transition: all 0.2s;
+        }
+        .nav-btn:hover {
+            background: rgba(56,189,248,0.1); border-color: rgba(56,189,248,0.3);
+            transform: translateY(-1px);
+        }
+
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes fadeInDown { from { opacity: 0; transform: translateY(-20px); } to { opacity: 1; transform: translateY(0); } }
+        @media (max-width: 768px) {
+            .header h1 { font-size: 1.8rem; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+            .qr-grid { grid-template-columns: 1fr; }
+            .toolbar { flex-direction: column; }
+            .nav-links { justify-content: center; }
+            .thumb-card { width: 80px; }
+            .thumb-card img { height: 54px; }
+        }
+    </style>
+</head>
+<body>
+    <main>
+        <a href="/" class="back-link"><i class="fa-solid fa-arrow-right"></i> الرئيسية</a>
+
+        <div class="header">
+            <h1><i class="fa-solid fa-boxes-stacked"></i> صالة - مراقبة الحاويات</h1>
+            <p class="subtitle">متابعة حركة الحاويات عبر رموز QR مع كشف اتجاه الحركة</p>
+        </div>
+
+        <!-- Toolbar -->
+        <div class="toolbar">
+            <div class="time-selector">
+                <button class="time-btn active" onclick="setRange('today', this)">اليوم</button>
+                <button class="time-btn" onclick="setRange('24h', this)">٢٤ ساعة</button>
+                <button class="time-btn" onclick="setRange('yesterday', this)">أمس</button>
+                <button class="time-btn" onclick="setRange('week', this)">٧ أيام</button>
+            </div>
+            <div class="nav-links">
+                <a href="/container/events" class="nav-btn"><i class="fa-solid fa-clock-rotate-left"></i> سجل العمليات</a>
+                <a href="/container/snapshot/view" class="nav-btn"><i class="fa-solid fa-video"></i> البث المباشر</a>
+            </div>
+        </div>
+
+        <!-- Alert Banner (shown when mismatch detected) -->
+        <div class="alert-banner" id="alertBanner">
+            <div class="alert-title"><i class="fa-solid fa-triangle-exclamation"></i> <span id="alertTitle">تنبيه</span></div>
+            <div class="alert-text" id="alertText"></div>
+        </div>
+
+        <!-- Stats Summary -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-icon total"><i class="fa-solid fa-boxes-stacked"></i></div>
+                <div class="stat-label">إجمالي العمليات</div>
+                <div class="stat-value total numbers" id="statTotal">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon positive"><i class="fa-solid fa-arrow-up"></i></div>
+                <div class="stat-label">خروج (ممتلئة)</div>
+                <div class="stat-value positive numbers" id="statPositive">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon negative"><i class="fa-solid fa-arrow-down"></i></div>
+                <div class="stat-label">عودة (فارغة)</div>
+                <div class="stat-value negative numbers" id="statNegative">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon mismatch"><i class="fa-solid fa-not-equal"></i></div>
+                <div class="stat-label">الفرق</div>
+                <div class="stat-value mismatch numbers" id="statMismatch">0</div>
+            </div>
+        </div>
+
+        <!-- Per-QR Breakdown -->
+        <div class="section-title"><i class="fa-solid fa-qrcode"></i> تفاصيل الحاويات</div>
+        <div class="qr-grid" id="qrGrid">
+            <!-- Generated by JS -->
+        </div>
+
+        <!-- Recent Events -->
+        <div class="events-section">
+            <div class="section-title"><i class="fa-solid fa-clock-rotate-left"></i> آخر العمليات <a href="/container/events" style="margin-right:auto;font-size:0.8rem;font-weight:500;">عرض الكل <i class="fa-solid fa-chevron-left"></i></a></div>
+            <table class="events-table">
+                <thead>
+                    <tr>
+                        <th>الوقت</th>
+                        <th>الحاوية</th>
+                        <th>الاتجاه</th>
+                        <th>المدة</th>
+                        <th>لقطات</th>
+                    </tr>
+                </thead>
+                <tbody id="eventsBody">
+                    <tr><td colspan="5" style="text-align:center;color:var(--text-muted);">لا توجد عمليات</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="refresh-info">
+            <i class="fa-solid fa-rotate"></i> تحديث تلقائي كل ٥ ثوانٍ &nbsp;•&nbsp;
+            <a href="/container/snapshot/view">البث المباشر للصالة</a> &nbsp;•&nbsp;
+            <a href="/health/view">حالة المنظومة</a>
+        </div>
+
+        <div class="footer">
+            <a href="/">&larr; العودة للرئيسية</a>
+        </div>
+    </main>
+
+    <!-- Footage Modal -->
+    <div class="modal-overlay" id="footageModal">
+        <div class="modal-box">
+            <button class="modal-close" onclick="closeFootage()"><i class="fa-solid fa-xmark"></i></button>
+            <div class="modal-title"><i class="fa-solid fa-film"></i> <span id="modalEventTitle">لقطات الحدث</span></div>
+            <div id="footageContent"></div>
+            <div id="footageVideo"></div>
+        </div>
+    </div>
+
+    <script>
+    function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+    let currentRange = 'today';
+
+    function localISO(d) {
+        return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')
+            +'T'+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')+':'+String(d.getSeconds()).padStart(2,'0');
+    }
+
+    function getTimeRange() {
+        const now = new Date();
+        let start, end;
+        if (currentRange === 'today') {
+            start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            end = now;
+        } else if (currentRange === '24h') {
+            start = new Date(now.getTime() - 24*60*60*1000);
+            end = now;
+        } else if (currentRange === 'yesterday') {
+            start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+            end = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        } else {
+            start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6);
+            end = now;
+        }
+        return { start: localISO(start), end: localISO(end) };
+    }
+
+    function setRange(range, btn) {
+        currentRange = range;
+        document.querySelectorAll('.time-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        refreshData();
+    }
+
+    function renderQRGrid(breakdown) {
+        const grid = document.getElementById('qrGrid');
+        let html = '';
+        for (let i = 1; i <= 5; i++) {
+            const data = breakdown[String(i)] || { positive: 0, negative: 0, unknown: 0 };
+            const delta = data.positive - data.negative;
+            const deltaClass = delta > 0 ? 'positive' : delta < 0 ? 'negative' : 'neutral';
+            html += `
+            <div class="qr-card">
+                <div class="qr-header">
+                    <div class="qr-badge">${i}</div>
+                    <h3>حاوية ${i}</h3>
+                </div>
+                <div class="qr-stats">
+                    <div class="qr-stat">
+                        <span class="qr-stat-label">خروج</span>
+                        <span class="qr-stat-value positive numbers">${data.positive}</span>
+                    </div>
+                    <div class="qr-stat">
+                        <span class="qr-stat-label">عودة</span>
+                        <span class="qr-stat-value negative numbers">${data.negative}</span>
+                    </div>
+                    <div class="qr-stat">
+                        <span class="qr-stat-label">الفرق</span>
+                        <span class="qr-stat-value ${deltaClass} numbers">${delta}</span>
+                    </div>
+                </div>
+            </div>`;
+        }
+        grid.innerHTML = html;
+    }
+
+    function getEventIdFromPath(snapshotPath) {
+        if (!snapshotPath) return null;
+        if (!snapshotPath.includes('/')) return snapshotPath;
+        const parts = snapshotPath.split('/').filter(Boolean);
+        const last = parts[parts.length - 1] || null;
+        if (!last) return null;
+        if (last === 'video.mp4') return parts[parts.length - 2] || null;
+        if (last.endsWith('.mp4')) return last.slice(0, -4);
+        return last;
+    }
+
+    function renderEvents(events) {
+        const body = document.getElementById('eventsBody');
+        if (!events || events.length === 0) {
+            body.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-muted);">لا توجد عمليات</td></tr>';
+            return;
+        }
+        // Store events so openFootage can retrieve by index (avoids JSON-in-onclick escaping).
+        window._dashboardEvents = events;
+        body.innerHTML = events.map((e, idx) => {
+            const time = e.timestamp ? new Date(e.timestamp).toLocaleTimeString('en-GB', {hour12: false}) : '—';
+            const dirLabel = e.direction === 'positive' ? 'خروج ↑' : e.direction === 'negative' ? 'عودة ↓' : 'غير محدد';
+            const dirClass = e.direction || 'unknown';
+            const duration = e.duration_seconds !== null && e.duration_seconds !== undefined
+                ? e.duration_seconds.toFixed(1) + 's'
+                : '—';
+            const eventId = getEventIdFromPath(e.snapshot_path || '');
+            const snapBtn = eventId
+                ? `<button class="snap-btn" onclick="openFootage(${idx})"><i class="fa-solid fa-play"></i> عرض</button>`
+                : '<span class="snap-btn no-snap">—</span>';
+            const statusBadge = e.is_lost
+                ? '<span class="status-badge lost"><i class="fa-solid fa-triangle-exclamation"></i> مفقود</span>'
+                : '<span class="status-badge complete"><i class="fa-solid fa-circle-check"></i> سليم</span>';
+            return `<tr>
+                <td class="numbers">${esc(time)}</td>
+                <td class="numbers">${e.qr_code_value}</td>
+                <td><div class="event-flags"><span class="dir-badge ${esc(dirClass)}">${dirLabel}</span>${statusBadge}</div></td>
+                <td class="numbers">${esc(duration)}</td>
+                <td>${snapBtn}</td>
+            </tr>`;
+        }).join('');
+    }
+
+    /* ── Footage modal ── */
+
+    function openFootage(idx) {
+        const event = (window._dashboardEvents || [])[idx];
+        if (!event) return;
+        const eventId = getEventIdFromPath(event.snapshot_path || '');
+        const videoUrl = eventId ? '/container/event/' + encodeURIComponent(eventId) + '/video' : null;
+        const dirLabel = event.direction === 'positive' ? 'خروج' : event.direction === 'negative' ? 'عودة' : '';
+        const stateLabel = event.is_lost ? 'مفقود ويحتاج مراجعة' : 'مكتمل بدون مشكلة';
+        document.getElementById('modalEventTitle').textContent =
+            `حاوية ${event.qr_code_value}${dirLabel ? ' — ' + dirLabel : ''} — ${stateLabel}`;
+        const content = document.getElementById('footageContent');
+        if (!videoUrl) {
+            content.innerHTML = '<div class="modal-error"><i class="fa-solid fa-video-slash"></i> لا يوجد مقطع محفوظ</div>';
+        } else {
+            const time = event.timestamp ? new Date(event.timestamp).toLocaleString('en-GB', {hour12: false}) : '';
+            const dur = event.duration_seconds != null ? event.duration_seconds.toFixed(1) + 's' : '';
+            content.innerHTML = `
+                <div style="display:flex; flex-direction:column; height:100%;">
+                    <div style="flex:1 1 0; min-height:0; display:flex; align-items:center; justify-content:center; background:#000; border-radius:10px; overflow:hidden;">
+                        <video id="modalVideo" src="${videoUrl}" controls autoplay preload="auto"
+                               style="width:100%; height:100%; object-fit:contain; background:#000;"
+                               onerror="document.getElementById('modalVideoError').style.display='block';"></video>
+                    </div>
+                    <div id="modalVideoError" style="display:none; margin-top:0.6rem; color:var(--accent-danger);">
+                        <i class="fa-solid fa-circle-exclamation"></i> تعذّر تحميل الفيديو
+                    </div>
+                    <div style="margin-top:0.7rem; display:flex; justify-content:space-between; gap:1rem; flex-wrap:wrap; font-size:0.85rem; color:var(--text-secondary);">
+                        <span class="numbers">${esc(time)}</span>
+                        <span class="numbers">${esc(dur)}</span>
+                    </div>
+                </div>`;
+        }
+        document.getElementById('footageVideo').innerHTML = '';
+        document.getElementById('footageModal').classList.add('active');
+    }
+
+    function closeFootage() {
+        document.getElementById('footageModal').classList.remove('active');
+        const v = document.getElementById('modalVideo');
+        if (v) { try { v.pause(); v.removeAttribute('src'); v.load(); } catch(e) {} }
+        document.getElementById('footageContent').innerHTML = '';
+        document.getElementById('footageVideo').innerHTML = '';
+    }
+
+    document.addEventListener('keydown', function(e) {
+        if (!document.getElementById('footageModal').classList.contains('active')) return;
+        if (e.key === 'Escape') closeFootage();
+    });
+    document.getElementById('footageModal').addEventListener('click', function(e) {
+        if (e.target === this) closeFootage();
+    });
+
+    function checkAlerts(stats) {
+        const banner = document.getElementById('alertBanner');
+        const mismatch = Math.abs(stats.mismatch || 0);
+        if (mismatch > 5) {
+            banner.style.display = 'block';
+            banner.className = mismatch > 10 ? 'alert-banner' : 'alert-banner warning';
+            document.getElementById('alertTitle').textContent =
+                mismatch > 10 ? 'تنبيه: فرق كبير!' : 'تنبيه: فرق ملحوظ';
+            document.getElementById('alertText').textContent =
+                `الفرق بين الخروج والعودة: ${stats.mismatch} (خروج: ${stats.total_positive}، عودة: ${stats.total_negative}). يرجى التحقق من الحاويات.`;
+        } else {
+            banner.style.display = 'none';
+        }
+    }
+
+    async function refreshData() {
+        try {
+            const { start, end } = getTimeRange();
+            const tp = 'start_time=' + encodeURIComponent(start) + '&end_time=' + encodeURIComponent(end);
+
+            const statsRes = await fetch('/container/api/stats?' + tp);
+            const stats = await statsRes.json();
+
+            document.getElementById('statTotal').textContent = stats.total || 0;
+            document.getElementById('statPositive').textContent = stats.total_positive || 0;
+            document.getElementById('statNegative').textContent = stats.total_negative || 0;
+            document.getElementById('statMismatch').textContent = stats.mismatch || 0;
+
+            renderQRGrid(stats.qr_breakdown || {});
+            checkAlerts(stats);
+
+            // Fetch recent events
+            const eventsRes = await fetch('/container/api/events?limit=15&' + tp);
+            const eventsData = await eventsRes.json();
+            renderEvents(eventsData.events || []);
+
+        } catch (err) {
+            console.error('Refresh error:', err);
+        }
+    }
+
+    // Initial load + auto-refresh every 5s
+    refreshData();
+    setInterval(refreshData, 5000);
+    </script>
+</body>
+</html>

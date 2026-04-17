@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title|default("محتويات الحاويات") }}</title>
+    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="/static/theme.css">
+    <style>
+        .numbers {
+            font-family: 'Inter', sans-serif !important;
+            font-feature-settings: "tnum" 1;
+        }
+        .back-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--accent-primary);
+            text-decoration: none;
+            font-size: 0.95rem;
+            margin-bottom: 1rem;
+        }
+        .back-link:hover { color: var(--accent-success); }
+
+        .page-header h1 {
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+            align-items: center;
+            margin-bottom: 1.5rem;
+            padding: 1rem 1.25rem;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-md);
+        }
+        .toolbar select, .toolbar button {
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid var(--glass-border);
+            color: var(--text-primary);
+            padding: 0.5rem 0.9rem;
+            border-radius: var(--radius-sm);
+            font-family: inherit;
+            font-size: 0.95rem;
+            cursor: pointer;
+            transition: border-color 0.2s;
+        }
+        .toolbar select:hover, .toolbar button:hover {
+            border-color: var(--accent-primary);
+        }
+        .toolbar .spacer { flex: 1; }
+        .toolbar .count-pill {
+            font-family: 'Inter', sans-serif;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            padding: 0.35rem 0.75rem;
+            background: rgba(56, 189, 248, 0.1);
+            border: 1px solid rgba(56, 189, 248, 0.25);
+            border-radius: 999px;
+        }
+
+        .videos-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+            gap: 1.5rem;
+        }
+        .video-card {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+            transition: transform 0.2s ease, border-color 0.2s ease;
+            backdrop-filter: blur(10px);
+            display: flex;
+            flex-direction: column;
+        }
+        .video-card:hover {
+            transform: translateY(-3px);
+            border-color: rgba(56, 189, 248, 0.5);
+        }
+        .video-card video {
+            width: 100%;
+            aspect-ratio: 16 / 9;
+            background: #000;
+            display: block;
+        }
+        .video-card-body {
+            padding: 1rem 1.25rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+        .video-card-title {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-weight: 700;
+            font-size: 1.05rem;
+        }
+        .qr-chip {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 2rem;
+            height: 2rem;
+            padding: 0 0.6rem;
+            border-radius: 999px;
+            background: rgba(56, 189, 248, 0.15);
+            color: var(--accent-primary);
+            font-family: 'Inter', sans-serif;
+            font-weight: 700;
+            border: 1px solid rgba(56, 189, 248, 0.35);
+        }
+        .dir-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            padding: 0.25rem 0.6rem;
+            border-radius: 999px;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+        .dir-chip.positive {
+            background: rgba(45, 212, 191, 0.15);
+            color: var(--accent-success);
+            border: 1px solid rgba(45, 212, 191, 0.35);
+        }
+        .dir-chip.negative {
+            background: rgba(251, 146, 60, 0.15);
+            color: var(--accent-orange);
+            border: 1px solid rgba(251, 146, 60, 0.35);
+        }
+        .dir-chip.unknown {
+            background: rgba(148, 163, 184, 0.15);
+            color: var(--text-secondary);
+            border: 1px solid rgba(148, 163, 184, 0.25);
+        }
+        .video-meta {
+            display: flex;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+        }
+        .video-meta .numbers { color: var(--text-primary); }
+
+        .empty-state {
+            text-align: center;
+            padding: 4rem 2rem;
+            color: var(--text-secondary);
+        }
+        .empty-state i {
+            font-size: 3rem;
+            color: var(--text-muted);
+            margin-bottom: 1rem;
+        }
+
+        .loading-state {
+            text-align: center;
+            padding: 3rem;
+            color: var(--text-secondary);
+        }
+    </style>
+</head>
+<body>
+    <main class="container">
+        <a href="/container" class="back-link">
+            <i class="fa-solid fa-arrow-right"></i>
+            العودة إلى لوحة الحاويات
+        </a>
+
+        <header class="page-header">
+            <h1><i class="fa-solid fa-video"></i> محتويات الحاويات</h1>
+            <p class="subtitle">تسجيلات كاميرا المحتوى (الزاوية الثلاثية) المرتبطة بأحداث الحاويات.</p>
+        </header>
+
+        <div class="toolbar">
+            <label for="qr-filter">الحاوية:</label>
+            <select id="qr-filter">
+                <option value="">الكل</option>
+                <option value="1">QR 1</option>
+                <option value="2">QR 2</option>
+                <option value="3">QR 3</option>
+                <option value="4">QR 4</option>
+                <option value="5">QR 5</option>
+            </select>
+
+            <button id="refresh-btn" title="تحديث">
+                <i class="fa-solid fa-arrows-rotate"></i> تحديث
+            </button>
+
+            <div class="spacer"></div>
+
+            <span class="count-pill" id="count-pill">0 فيديو</span>
+        </div>
+
+        <div id="loading" class="loading-state" style="display: none;">
+            <i class="fa-solid fa-spinner fa-spin"></i> جاري التحميل...
+        </div>
+
+        <div id="videos-grid" class="videos-grid"></div>
+
+        <div id="empty-state" class="empty-state" style="display: none;">
+            <i class="fa-solid fa-film"></i>
+            <p>لا توجد تسجيلات للمحتوى حتى الآن.</p>
+            <p style="font-size: 0.85rem; margin-top: 0.5rem;">
+                تأكد من تفعيل <code>content_recording_enabled</code> في الإعدادات.
+            </p>
+        </div>
+    </main>
+
+    <script>
+        const qrFilter = document.getElementById('qr-filter');
+        const refreshBtn = document.getElementById('refresh-btn');
+        const grid = document.getElementById('videos-grid');
+        const empty = document.getElementById('empty-state');
+        const loading = document.getElementById('loading');
+        const countPill = document.getElementById('count-pill');
+
+        const DIR_LABELS = {
+            positive: 'خروج',
+            negative: 'رجوع',
+            unknown: 'غير معروف',
+        };
+        const DIR_ICONS = {
+            positive: 'fa-arrow-right-from-bracket',
+            negative: 'fa-arrow-right-to-bracket',
+            unknown: 'fa-question',
+        };
+
+        function fmtBytes(n) {
+            if (!n && n !== 0) return '—';
+            const units = ['B', 'KB', 'MB', 'GB'];
+            let i = 0;
+            while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+            return n.toFixed(n >= 10 || i === 0 ? 0 : 1) + ' ' + units[i];
+        }
+
+        function fmtTime(eventId) {
+            // event_id format: qrN_dir_YYYYMMDD_HHMMSS_ffffff
+            const m = eventId.match(/_(\d{8})_(\d{6})_?/);
+            if (!m) return eventId;
+            const d = m[1], t = m[2];
+            return `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)} ${t.slice(0, 2)}:${t.slice(2, 4)}:${t.slice(4, 6)}`;
+        }
+
+        function cardHtml(v) {
+            const dir = v.direction || 'unknown';
+            const dirLabel = DIR_LABELS[dir] || dir;
+            const dirIcon = DIR_ICONS[dir] || 'fa-question';
+            const qrBadge = v.qr_value != null
+                ? `<span class="qr-chip numbers">QR ${v.qr_value}</span>`
+                : '';
+            return `
+                <article class="video-card">
+                    <video controls preload="metadata"
+                           src="/container/content/video/${encodeURIComponent(v.event_id)}"
+                           poster=""></video>
+                    <div class="video-card-body">
+                        <div class="video-card-title">
+                            ${qrBadge}
+                            <span class="dir-chip ${dir}">
+                                <i class="fa-solid ${dirIcon}"></i> ${dirLabel}
+                            </span>
+                        </div>
+                        <div class="video-meta">
+                            <span class="numbers"><i class="fa-regular fa-clock"></i> ${fmtTime(v.event_id)}</span>
+                            <span class="numbers">${fmtBytes(v.size_bytes)}</span>
+                        </div>
+                        <div class="video-meta" style="font-size: 0.75rem; color: var(--text-muted);">
+                            <span class="numbers" title="${v.event_id}">${v.event_id}</span>
+                        </div>
+                    </div>
+                </article>
+            `;
+        }
+
+        async function loadVideos() {
+            const qr = qrFilter.value;
+            loading.style.display = 'block';
+            empty.style.display = 'none';
+            grid.innerHTML = '';
+            try {
+                const url = new URL('/container/api/content/list', window.location.origin);
+                if (qr) url.searchParams.set('qr_code_value', qr);
+                const res = await fetch(url.toString());
+                const data = await res.json();
+                const videos = data.videos || [];
+                countPill.textContent = `${videos.length} فيديو`;
+                if (videos.length === 0) {
+                    empty.style.display = 'block';
+                } else {
+                    grid.innerHTML = videos.map(cardHtml).join('');
+                }
+            } catch (e) {
+                grid.innerHTML = `<div class="empty-state">خطأ في التحميل: ${e.message}</div>`;
+            } finally {
+                loading.style.display = 'none';
+            }
+        }
+
+        qrFilter.addEventListener('change', loadVideos);
+        refreshBtn.addEventListener('click', loadVideos);
+        loadVideos();
+    </script>
+</body>
+</html>

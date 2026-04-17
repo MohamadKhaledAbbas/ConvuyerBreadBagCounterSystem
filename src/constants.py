@@ -2,7 +2,7 @@
 Application constants for ConvuyerBreadBagCounterSystem.
 """
 
-# Configuration keys for database
+# Configuration keys for database - Bread Camera
 is_development_key = 'is_development'
 rtsp_username = "rtsp_username"
 rtsp_password = "rtsp_password"
@@ -12,6 +12,37 @@ is_profiler_enabled = "is_profiler_enabled"
 enable_display_key = "enable_display"
 enable_recording_key = "enable_recording"
 snapshot_requested_key = "snapshot_requested"  # Flag for on-demand snapshot capture
+
+# Configuration keys for database - Container Camera (Sale Point / صالة)
+container_rtsp_host = "container_rtsp_host"  # Default: 192.168.2.118
+container_rtsp_port = "container_rtsp_port"  # Same as bread camera port
+container_rtsp_username = "container_rtsp_username"  # Same credentials
+container_rtsp_password = "container_rtsp_password"  # Same credentials
+container_snapshot_requested_key = "container_snapshot_requested"
+container_enable_display_key = "container_enable_display"
+
+# Container tracking configuration keys
+container_exit_zone_ratio = "container_exit_zone_ratio"  # Default: 0.15
+container_lost_timeout = "container_lost_timeout"  # Default: 2.0 seconds
+container_pre_event_seconds = "container_pre_event_seconds"  # Default: 5.0
+container_post_event_seconds = "container_post_event_seconds"  # Default: 5.0
+container_detect_interval = "container_detect_interval"  # Default: 3 (detect every N-th frame)
+
+# Event video recording:
+#   "qr"      -> encode from QR camera frames (always available, single camera)
+#   "content" -> use content camera ring buffer (3D angle); falls back to "qr" if unavailable
+container_event_video_source = "container_event_video_source"  # Default: "qr"
+
+# Content Camera (3D angle view of container contents, 192.168.2.128)
+content_rtsp_host = "content_rtsp_host"        # Default: 192.168.2.128
+content_rtsp_port = "content_rtsp_port"        # Default: 554
+content_rtsp_username = "content_rtsp_username"
+content_rtsp_password = "content_rtsp_password"
+content_recording_enabled_key = "content_recording_enabled"   # '1' to enable content recording
+content_pre_event_seconds = "content_pre_event_seconds"       # Default: 3.0 (pre-roll before event)
+content_post_event_seconds = "content_post_event_seconds"     # Default: 2.0 (continue recording after exit)
+content_buffer_seconds = "content_buffer_seconds"             # Default: 5.0 (rolling buffer size)
+content_video_fps = "content_video_fps"                       # Default: 15 (output video fps)
 
 CONFIG_KEYS = [
     is_development_key,
@@ -24,3 +55,35 @@ CONFIG_KEYS = [
     enable_recording_key,
     snapshot_requested_key,
 ]
+
+# Container configuration keys (separate list for clarity)
+CONTAINER_CONFIG_KEYS = [
+    container_rtsp_host,
+    container_rtsp_port,
+    container_rtsp_username,
+    container_rtsp_password,
+    container_snapshot_requested_key,
+    container_enable_display_key,
+    container_exit_zone_ratio,
+    container_lost_timeout,
+    container_pre_event_seconds,
+    container_post_event_seconds,
+    container_detect_interval,
+    container_event_video_source,
+]
+
+# Content camera configuration keys
+CONTENT_CONFIG_KEYS = [
+    content_rtsp_host,
+    content_rtsp_port,
+    content_rtsp_username,
+    content_rtsp_password,
+    content_recording_enabled_key,
+    content_pre_event_seconds,
+    content_post_event_seconds,
+    content_buffer_seconds,
+    content_video_fps,
+]
+
+# All configuration keys
+ALL_CONFIG_KEYS = CONFIG_KEYS + CONTAINER_CONFIG_KEYS + CONTENT_CONFIG_KEYS

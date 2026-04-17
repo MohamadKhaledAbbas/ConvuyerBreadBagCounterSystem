@@ -32,32 +32,33 @@ echo "[INFO] is_development=$IS_DEVELOPMENT, show_ui_screen=$SHOW_UI_SCREEN, acc
 TMP_STATUS_DIR=$(python3 -c "from src.config.paths import TMP_STATUS_DIR; print(TMP_STATUS_DIR)" 2>/dev/null || echo "/tmp")
 echo "[INFO] Cleaning up stale artifacts from previous runs..."
 rm -f "${TMP_STATUS_DIR}/codec_health_status.json"
+rm -f "${TMP_STATUS_DIR}/container_codec_health_status.json"
 # Clean FastDDS shared memory artifacts that can cause issues after power loss
 rm -f /dev/shm/fastrtps_* /dev/shm/fast_datasharing_* 2>/dev/null
 echo "[INFO] Stale artifact cleanup complete"
 
 # --- Stop all services first for a clean restart/selection ---
 echo "[INFO] Stopping all breadcount services for controlled startup..."
-sudo supervisorctl stop breadcount-ros2 breadcount-main breadcount-uvicorn > /dev/null 2>&1
+sudo supervisorctl stop breadcount-ros2 breadcount-main breadcount-uvicorn breadcount-container-ros2 breadcount-container-main > /dev/null 2>&1
 
 # --- Start services based on is_production ---
 if [ "$IS_DEVELOPMENT" = "1" ]; then
-    echo "[INFO] Starting DEVELOPMENT services (MAIN, UVICORN)..."
+    echo "[INFO] Starting DEVELOPMENT services (MAIN, UVICORN, CONTAINER-MAIN)..."
     # Only start the core services needed for testing/API access
-    sudo supervisorctl start breadcount-main breadcount-uvicorn
+    sudo supervisorctl start breadcount-main breadcount-uvicorn breadcount-container-main
 
     # ROS2 is excluded, allowing main/uvicorn to run simpler if ROS isn't needed.
 else
 
-    echo "[INFO] Starting PRODUCTION services (ROS2, MAIN, UVICORN)..."
+    echo "[INFO] Starting PRODUCTION services (ROS2, MAIN, UVICORN, CONTAINER)..."
     # In production, we assume UI is off (show_ui_screen should be set to 0 in your config utility)
-    sudo supervisorctl start breadcount-ros2 breadcount-main breadcount-uvicorn
+    sudo supervisorctl start breadcount-ros2 breadcount-main breadcount-uvicorn breadcount-container-ros2 breadcount-container-main
 
     # You might want to explicitly set the UI flag to 0 in production mode if you rely on the script for configuration
     python3 "$CONFIG_PY" --key show_ui_screen --value 0
 fi
 
 echo "=== Current Service Status ==="
-sudo supervisorctl status breadcount-ros2 breadcount-main breadcount-uvicorn 2>/dev/null || \
-sudo supervisorctl status breadcount-ros2 breadcount-main breadcount-uvicorn
+sudo supervisorctl status breadcount-ros2 breadcount-main breadcount-uvicorn breadcount-container-ros2 breadcount-container-main 2>/dev/null || \
+sudo supervisorctl status breadcount-ros2 breadcount-main breadcount-uvicorn breadcount-container-ros2 breadcount-container-main
 echo "=============================="

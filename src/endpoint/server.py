@@ -117,6 +117,10 @@ app.include_router(guidelines.router)
 from src.endpoint.routes import health
 app.include_router(health.router)
 
+# Include container tracking router (QR-based container monitoring at sale point)
+from src.endpoint.routes import container
+app.include_router(container.router)
+
 
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
@@ -293,6 +297,35 @@ async def health() -> JSONResponse:
     throughput = {
         "app_fps": app_metrics.get("fps", 0),
     }
+
+    # ── Container pipeline (sale point / صالة) ──
+    from src.config.paths import CONTAINER_PIPELINE_STATE_FILE
+    container_data = None
+    try:
+        if os.path.exists(CONTAINER_PIPELINE_STATE_FILE):
+            with open(CONTAINER_PIPELINE_STATE_FILE, 'r') as _f:
+                container_data = json.load(_f)
+    except Exception:
+        pass
+
+    if container_data is not None:
+        c_ts = container_data.get("timestamp") or container_data.get("updated_at") or 0
+        c_age = (time.time() - c_ts) if c_ts else None
+        c_stale = (c_age is not None and c_age > 60)
+        components["container"] = {
+            "healthy": not c_stale,
+            "stale": c_stale,
+            "fps": container_data.get("fps", 0),
+            "total_positive": container_data.get("total_positive", 0),
+            "total_negative": container_data.get("total_negative", 0),
+            "active_tracks": container_data.get("active_tracks", 0),
+        }
+        throughput["container_fps"] = container_data.get("fps", 0)
+    else:
+        components["container"] = {
+            "healthy": None,
+            "note": "مراقبة الحاويات غير مفعّلة أو غير متصلة",
+        }
 
     # ── Monitoring log summary (24h) ──
     log_summary: Dict[str, Any] = {}

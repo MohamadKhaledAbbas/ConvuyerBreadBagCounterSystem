@@ -218,6 +218,96 @@ CREATE INDEX IF NOT EXISTS idx_monitoring_logs_level ON monitoring_logs(level);
 CREATE INDEX IF NOT EXISTS idx_monitoring_logs_level_ts ON monitoring_logs(level, timestamp);
 
 -- ============================================================================
+-- Table: container_events
+-- ============================================================================
+-- Stores container tracking events from the sale point (صالة) camera.
+-- Each event represents a container identified by QR code (1-5) passing
+-- through the frame in either positive (bottom→top, filled) or
+-- negative (top→bottom, empty) direction.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS container_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,                    -- ISO 8601 timestamp when container exited
+    qr_code_value INTEGER NOT NULL CHECK (qr_code_value BETWEEN 1 AND 5),  -- Container ID (1-5)
+    direction TEXT NOT NULL CHECK (direction IN ('positive', 'negative', 'unknown')),  -- Movement direction
+    track_id INTEGER,                           -- Internal track ID for debugging
+    
+    -- Position data
+    entry_y INTEGER,                            -- Y position when first seen
+    exit_y INTEGER,                             -- Y position when last seen
+    
+    -- Timing data
+    duration_seconds REAL,                      -- Time in frame (seconds)
+    
+    -- Snapshot data
+    snapshot_path TEXT,                         -- Path to snapshot directory (pre/post frames)
+    
+    -- Track status
+    is_lost INTEGER DEFAULT 0,                  -- 1 if track was lost (disappeared mid-frame)
+    
+    -- Additional metadata (JSON)
+    metadata TEXT,                              -- JSON: {position_count, avg_velocity, ...}
+    
+    created_at TEXT DEFAULT (datetime('now', 'utc'))
+);
+
+-- Indexes for container_events queries
+CREATE INDEX IF NOT EXISTS idx_container_events_timestamp ON container_events(timestamp);
+CREATE INDEX IF NOT EXISTS idx_container_events_qr_code ON container_events(qr_code_value);
+CREATE INDEX IF NOT EXISTS idx_container_events_direction ON container_events(direction);
+CREATE INDEX IF NOT EXISTS idx_container_events_ts_dir ON container_events(timestamp, direction);
+
+-- ============================================================================
+-- Table: container_stats
+-- ============================================================================
+-- Aggregated statistics for container tracking over time periods.
+-- Used for dashboard summaries and mismatch detection.
+-- Typically populated hourly or per-shift.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS container_stats (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    period_start TEXT NOT NULL,                 -- Period start (ISO 8601)
+    period_end TEXT NOT NULL,                   -- Period end (ISO 8601)
+    
+    -- Aggregate counts
+    positive_count INTEGER DEFAULT 0,           -- Containers going out (filled)
+    negative_count INTEGER DEFAULT 0,           -- Containers returning (empty)
+    unknown_count INTEGER DEFAULT 0,            -- Direction could not be determined
+    lost_count INTEGER DEFAULT 0,               -- Tracks lost before exit
+    
+    -- Per-QR breakdown (JSON)
+    qr_breakdown TEXT,                          -- JSON: {"1": {"positive": X, "negative": Y}, ...}
+    
+    -- Alerts
+    mismatch_detected INTEGER DEFAULT 0,        -- 1 if positive != negative (significant difference)
+    mismatch_delta INTEGER DEFAULT 0,           -- positive_count - negative_count
+    
+    -- Metadata
+    created_at TEXT DEFAULT (datetime('now', 'utc')),
+    
+    UNIQUE(period_start, period_end)
+);
+
+-- Indexes for container_stats queries
+CREATE INDEX IF NOT EXISTS idx_container_stats_period ON container_stats(period_start, period_end);
+
+-- ============================================================================
+-- Initial Data: Default Container Configuration
+-- ============================================================================
+-- Pre-populated configuration for container tracking.
+-- Uses INSERT OR IGNORE to avoid duplicates on re-initialization.
+-- ============================================================================
+
+INSERT OR IGNORE INTO config (key, value) VALUES
+    ('container_rtsp_host', '192.168.2.118'),
+    ('container_exit_zone_ratio', '0.10'),
+    ('container_lost_timeout', '2.0'),
+    ('container_pre_event_seconds', '5.0'),
+    ('container_post_event_seconds', '5.0');
+
+-- ============================================================================
 -- Initial Data: Default Bag Types
 -- ============================================================================
 -- Pre-populated bag types required for the analytics endpoint.

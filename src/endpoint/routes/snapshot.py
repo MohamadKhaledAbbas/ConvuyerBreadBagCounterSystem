@@ -38,6 +38,26 @@ SNAPSHOT_RAW_PATH = os.path.join(SNAPSHOT_DIR, "latest_raw.jpg")
 SNAPSHOT_OVERLAY_PATH = os.path.join(SNAPSHOT_DIR, "latest_overlay.jpg")
 SNAPSHOT_META_PATH = os.path.join(SNAPSHOT_DIR, "latest_meta.json")
 
+# Container camera snapshot paths
+CONTAINER_SNAPSHOT_RAW_PATH = os.path.join(SNAPSHOT_DIR, "container_latest_raw.jpg")
+CONTAINER_SNAPSHOT_OVERLAY_PATH = os.path.join(SNAPSHOT_DIR, "container_latest_overlay.jpg")
+CONTAINER_SNAPSHOT_META_PATH = os.path.join(SNAPSHOT_DIR, "container_latest_meta.json")
+
+
+def _get_snapshot_paths(camera: str = "bread") -> tuple[str, str, str]:
+    """Get snapshot file paths for a given camera."""
+    if camera == "container":
+        return CONTAINER_SNAPSHOT_RAW_PATH, CONTAINER_SNAPSHOT_OVERLAY_PATH, CONTAINER_SNAPSHOT_META_PATH
+    return SNAPSHOT_RAW_PATH, SNAPSHOT_OVERLAY_PATH, SNAPSHOT_META_PATH
+
+
+def _get_snapshot_flag_key(camera: str = "bread") -> str:
+    """Get the DB config key used to request a snapshot from the given camera."""
+    if camera == "container":
+        from src.constants import container_snapshot_requested_key
+        return container_snapshot_requested_key
+    return snapshot_requested_key
+
 
 class SnapshotWriter:
     """
@@ -46,11 +66,11 @@ class SnapshotWriter:
     Used by ConveyorCounterApp when snapshot_requested flag is set.
     """
 
-    def __init__(self, snapshot_dir: str = SNAPSHOT_DIR):
+    def __init__(self, snapshot_dir: str = SNAPSHOT_DIR, prefix: str = ""):
         self._snapshot_dir = snapshot_dir
-        self._raw_path = os.path.join(snapshot_dir, "latest_raw.jpg")
-        self._overlay_path = os.path.join(snapshot_dir, "latest_overlay.jpg")
-        self._meta_path = os.path.join(snapshot_dir, "latest_meta.json")
+        self._raw_path = os.path.join(snapshot_dir, f"{prefix}latest_raw.jpg")
+        self._overlay_path = os.path.join(snapshot_dir, f"{prefix}latest_overlay.jpg")
+        self._meta_path = os.path.join(snapshot_dir, f"{prefix}latest_meta.json")
 
         # Ensure directory exists
         os.makedirs(snapshot_dir, exist_ok=True)
@@ -121,21 +141,23 @@ def get_snapshot_writer() -> SnapshotWriter:
     return _snapshot_writer
 
 
-def _read_snapshot(overlay: bool = False) -> tuple[Optional[bytes], dict]:
+def _read_snapshot(overlay: bool = False, camera: str = "bread") -> tuple[Optional[bytes], dict]:
     """
     Read the latest snapshot from disk.
 
     Args:
         overlay: If True, read the overlay version
+        camera: "bread" or "container"
 
     Returns:
         Tuple of (jpeg_bytes, metadata) or (None, {}) if not available
     """
-    path = SNAPSHOT_OVERLAY_PATH if overlay else SNAPSHOT_RAW_PATH
+    raw_path, overlay_path, meta_path = _get_snapshot_paths(camera)
+    path = overlay_path if overlay else raw_path
 
     # Check if overlay exists, fall back to raw
     if overlay and not os.path.exists(path):
-        path = SNAPSHOT_RAW_PATH
+        path = raw_path
 
     if not os.path.exists(path):
         return None, {}
@@ -145,8 +167,8 @@ def _read_snapshot(overlay: bool = False) -> tuple[Optional[bytes], dict]:
             jpeg_bytes = f.read()
 
         meta = {}
-        if os.path.exists(SNAPSHOT_META_PATH):
-            with open(SNAPSHOT_META_PATH, 'r') as f:
+        if os.path.exists(meta_path):
+            with open(meta_path, 'r') as f:
                 meta = json.load(f)
 
         return jpeg_bytes, meta
@@ -155,27 +177,32 @@ def _read_snapshot(overlay: bool = False) -> tuple[Optional[bytes], dict]:
         return None, {}
 
 
-def _request_snapshot() -> bool:
+def _request_snapshot(camera: str = "bread") -> bool:
     """
     Set the snapshot_requested flag in database to trigger capture.
+
+    Args:
+        camera: "bread" or "container"
 
     Returns:
         True if flag was set successfully
     """
     try:
         db = get_db()
-        db.set_config(snapshot_requested_key, "1")
+        key = _get_snapshot_flag_key(camera)
+        db.set_config(key, "1")
         return True
     except Exception as e:
-        logger.error(f"[Snapshot] Failed to set snapshot request flag: {e}")
+        logger.error(f"[Snapshot] Failed to set snapshot request flag ({camera}): {e}")
         return False
 
 
-def _get_snapshot_timestamp() -> float:
+def _get_snapshot_timestamp(camera: str = "bread") -> float:
     """Get the timestamp of the current snapshot file."""
-    if os.path.exists(SNAPSHOT_META_PATH):
+    _, _, meta_path = _get_snapshot_paths(camera)
+    if os.path.exists(meta_path):
         try:
-            with open(SNAPSHOT_META_PATH, 'r') as f:
+            with open(meta_path, 'r') as f:
                 meta = json.load(f)
             return meta.get("timestamp", 0)
         except Exception:
@@ -183,11 +210,12 @@ def _get_snapshot_timestamp() -> float:
     return 0
 
 
-def _check_db_flag() -> str:
+def _check_db_flag(camera: str = "bread") -> str:
     """Read the current value of the snapshot_requested flag from DB."""
     try:
         db = get_db()
-        val = db.get_config(snapshot_requested_key)
+        key = _get_snapshot_flag_key(camera)
+        val = db.get_config(key)
         return str(val) if val is not None else "not_set"
     except Exception as e:
         return f"error:{e}"
@@ -196,7 +224,8 @@ def _check_db_flag() -> str:
 @router.get("/snapshot")
 async def snapshot(
     overlay: bool = Query(False, description="Include detection overlays"),
-    timeout: float = Query(3.0, ge=0.5, le=10.0, description="Max wait time for new snapshot")
+    timeout: float = Query(3.0, ge=0.5, le=10.0, description="Max wait time for new snapshot"),
+    camera: str = Query("bread", description="Camera source: bread or container"),
 ) -> Response:
     """
     Request and get the latest camera frame as a JPEG image.
@@ -207,16 +236,21 @@ async def snapshot(
     Args:
         overlay: Include detection/tracking overlays
         timeout: Maximum time to wait for new snapshot (seconds)
+        camera: Which camera to capture from ("bread" or "container")
 
     Returns:
         JPEG image response or 503 if capture failed
     """
+    # Validate camera parameter
+    if camera not in ("bread", "container"):
+        camera = "bread"
+
     # Get current snapshot timestamp before requesting new one
-    old_timestamp = await run_in_threadpool(_get_snapshot_timestamp)
-    logger.debug(f"[Snapshot] old_timestamp={old_timestamp:.3f}")
+    old_timestamp = await run_in_threadpool(_get_snapshot_timestamp, camera)
+    logger.debug(f"[Snapshot] old_timestamp={old_timestamp:.3f} camera={camera}")
 
     # Request new snapshot (DB write — offload to thread pool)
-    flag_set = await run_in_threadpool(_request_snapshot)
+    flag_set = await run_in_threadpool(_request_snapshot, camera)
     if not flag_set:
         return Response(
             content="Failed to request snapshot - database error",
@@ -225,7 +259,7 @@ async def snapshot(
         )
 
     # Confirm the flag was actually written
-    db_flag_after_set = await run_in_threadpool(_check_db_flag)
+    db_flag_after_set = await run_in_threadpool(_check_db_flag, camera)
     logger.debug(f"[Snapshot] DB flag after set: {db_flag_after_set}")
 
     # Poll for new snapshot using asyncio.sleep so the event loop stays alive.
@@ -237,7 +271,7 @@ async def snapshot(
     got_fresh = False
     poll_count = 0
     while time.monotonic() - start_time < timeout:
-        new_timestamp = await run_in_threadpool(_get_snapshot_timestamp)
+        new_timestamp = await run_in_threadpool(_get_snapshot_timestamp, camera)
         poll_count += 1
         if new_timestamp > old_timestamp:
             got_fresh = True
@@ -252,8 +286,8 @@ async def snapshot(
     # Log why we exited the poll loop
     if not got_fresh:
         elapsed = time.monotonic() - start_time
-        db_flag_final = await run_in_threadpool(_check_db_flag)
-        final_ts = await run_in_threadpool(_get_snapshot_timestamp)
+        db_flag_final = await run_in_threadpool(_check_db_flag, camera)
+        final_ts = await run_in_threadpool(_get_snapshot_timestamp, camera)
         logger.warning(
             f"[Snapshot] Timed out after {elapsed:.2f}s ({poll_count} polls). "
             f"old_ts={old_timestamp:.3f}, final_ts={final_ts:.3f}, "
@@ -262,7 +296,7 @@ async def snapshot(
         )
 
     # Read the snapshot (blocking file I/O — offload)
-    jpeg_bytes, meta = await run_in_threadpool(_read_snapshot, overlay)
+    jpeg_bytes, meta = await run_in_threadpool(_read_snapshot, overlay, camera)
 
     if jpeg_bytes is None:
         logger.warning("[Snapshot] No snapshot file on disk — main.py has never written one.")
@@ -418,7 +452,8 @@ async def get_background_frame() -> Response:
 @router.get("/snapshot/view", response_class=HTMLResponse)
 async def snapshot_view(
     refresh: float = Query(0, ge=0, le=60.0, description="Auto-refresh interval (0=manual)"),
-    overlay: bool = Query(True, description="Include detection overlays")
+    overlay: bool = Query(True, description="Include detection overlays"),
+    camera: str = Query("bread", description="Camera source: bread or container"),
 ) -> HTMLResponse:
     """
     HTML page for viewing snapshots with manual or auto-refresh.
@@ -426,8 +461,18 @@ async def snapshot_view(
     Args:
         refresh: Auto-refresh interval in seconds (0 = manual only)
         overlay: Include detection overlays
+        camera: Which camera to view ("bread" or "container")
     """
+    if camera not in ("bread", "container"):
+        camera = "bread"
     overlay_param = "true" if overlay else "false"
+    auto_refresh_js = f"setInterval(refreshNow, {int(refresh * 1000)});" if refresh > 0 else ""
+
+    # Camera selector options
+    bread_selected = 'selected' if camera == 'bread' else ''
+    container_selected = 'selected' if camera == 'container' else ''
+    page_title = "البث المباشر — كاميرا الحاويات" if camera == "container" else "البث المباشر — منظومة إحصاء أكياس الخبز"
+    page_subtitle = "عرض حي لكاميرا مراقبة الحاويات (صالة)" if camera == "container" else "عرض حي للكاميرا مع إطارات الكشف والتعرف"
     auto_refresh_js = f"setInterval(refreshNow, {int(refresh * 1000)});" if refresh > 0 else ""
 
     html_content = f"""
@@ -436,7 +481,7 @@ async def snapshot_view(
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>البث المباشر — منظومة إحصاء أكياس الخبز</title>
+    <title>{page_title}</title>
     <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
@@ -641,8 +686,8 @@ async def snapshot_view(
         <a href="/" class="back-home"><i class="fa-solid fa-home"></i> الرئيسية</a>
         
         <div class="page-header">
-            <h1><i class="fa-solid fa-camera"></i> البث المباشر</h1>
-            <p class="subtitle">عرض حي للكاميرا مع إطارات الكشف والتعرف</p>
+            <h1><i class="fa-solid fa-camera"></i> {'البث المباشر — الحاويات' if camera == 'container' else 'البث المباشر'}</h1>
+            <p class="subtitle">{page_subtitle}</p>
         </div>
         
         <div class="info-bar">
@@ -708,6 +753,10 @@ async def snapshot_view(
             <button class="btn btn-secondary" onclick="toggleOverlay()">
                 <i class="fa-solid fa-eye"></i> {"إخفاء التوضيحات" if overlay else "إظهار التوضيحات"}
             </button>
+            <select id="cameraSelect" onchange="switchCamera()">
+                <option value="bread" {bread_selected}>🍞 كاميرا الخبز</option>
+                <option value="container" {container_selected}>📦 كاميرا الحاويات</option>
+            </select>
             <select id="autoRefresh" onchange="updateAutoRefresh()">
                 <option value="0" {"selected" if refresh == 0 else ""}>يدوي</option>
                 <option value="1" {"selected" if refresh == 1 else ""}>تلقائي 1 ثانية</option>
@@ -731,6 +780,7 @@ async def snapshot_view(
     
     <script>
         let overlay = {str(overlay).lower()};
+        let currentCamera = '{camera}';
         let isLoading = false;
         
         const img = document.getElementById('snapshot');
@@ -795,7 +845,7 @@ async def snapshot_view(
             
             try {{
                 const response = await fetch(
-                    '/snapshot?overlay=' + overlay + '&_cb=' + cacheBust,
+                    '/snapshot?overlay=' + overlay + '&camera=' + currentCamera + '&_cb=' + cacheBust,
                     {{ cache: 'no-store' }}
                 );
                 
@@ -845,6 +895,14 @@ async def snapshot_view(
             overlay = !overlay;
             const url = new URL(window.location);
             url.searchParams.set('overlay', overlay);
+            url.searchParams.set('camera', currentCamera);
+            window.location.href = url.toString();
+        }}
+
+        function switchCamera() {{
+            currentCamera = document.getElementById('cameraSelect').value;
+            const url = new URL(window.location);
+            url.searchParams.set('camera', currentCamera);
             window.location.href = url.toString();
         }}
         
@@ -852,6 +910,7 @@ async def snapshot_view(
             const rate = document.getElementById('autoRefresh').value;
             const url = new URL(window.location);
             url.searchParams.set('refresh', rate);
+            url.searchParams.set('camera', currentCamera);
             window.location.href = url.toString();
         }}
         

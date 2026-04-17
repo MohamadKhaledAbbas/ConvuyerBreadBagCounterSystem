@@ -171,3 +171,10 @@ CONVEYOR_ROI_FILE: str = os.path.join(DATA_DIR, "conveyor_roi.json")
 ROI_CANDIDATES_DIR: str = os.path.join(DATA_DIR, "roi_candidates")
 CLASSIFIED_ROIS_DIR: str = os.path.join(DATA_DIR, "classified_rois")
 LOST_SNAPSHOTS_DIR: str = os.path.join(SPOOL_DIR, "lost_snapshots")
+
+# Container tracking (sale point / صالة)
+CONTAINER_PIPELINE_STATE_FILE: str = os.path.join(DATA_DIR, "container_pipeline_state.json")
+CONTAINER_SNAPSHOT_DIR: str = os.path.join(DATA_DIR, "container_snapshots")
+
+# Content camera recordings (3D-angle view of container contents)
+CONTAINER_CONTENT_VIDEOS_DIR: str = os.path.join(DATA_DIR, "container_content_videos")

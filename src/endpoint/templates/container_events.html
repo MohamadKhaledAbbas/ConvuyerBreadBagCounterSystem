@@ -1,0 +1,1245 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>سجل الحاويات</title>
+    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="/static/theme.css">
+    <style>
+        .numbers {
+            font-family: 'Inter', sans-serif !important;
+            font-feature-settings: "tnum" 1;
+        }
+
+        .back-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--accent-primary);
+            text-decoration: none;
+            font-size: 0.95rem;
+            margin-bottom: 1rem;
+        }
+
+        .back-link:hover {
+            color: var(--accent-success);
+        }
+
+        .page-header h1 {
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-success));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .stats-grid {
+            margin-bottom: 2rem;
+        }
+
+        .stat-card.lost {
+            border-color: rgba(248, 113, 113, 0.22);
+        }
+
+        .stat-card .stat-value.success {
+            color: var(--accent-success);
+        }
+
+        .stat-card .stat-value.warning {
+            color: var(--accent-warning);
+        }
+
+        .stat-card .stat-value.danger {
+            color: var(--accent-danger);
+        }
+
+        .events-filter-bar {
+            margin-bottom: 2rem;
+        }
+
+        .events-filter-bar .field label {
+            direction: rtl;
+            text-align: right;
+        }
+
+        .events-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .event-card {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+            transition: transform 0.22s ease, box-shadow 0.22s ease, border-color 0.22s ease;
+            backdrop-filter: blur(10px);
+            animation: fadeInUp 0.3s ease;
+        }
+
+        .event-card:hover {
+            transform: translateY(-4px);
+            box-shadow: var(--glass-shadow);
+            border-color: rgba(56, 189, 248, 0.28);
+        }
+
+        .event-card.lost {
+            border-color: rgba(248, 113, 113, 0.24);
+        }
+
+        .event-card.lost:hover {
+            border-color: rgba(248, 113, 113, 0.48);
+            box-shadow: 0 10px 28px rgba(248, 113, 113, 0.12);
+        }
+
+        .event-snapshot {
+            position: relative;
+            height: 220px;
+            background:
+                radial-gradient(circle at top right, rgba(56, 189, 248, 0.18), transparent 40%),
+                linear-gradient(160deg, rgba(15, 23, 42, 0.95), rgba(30, 41, 59, 0.88));
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .event-snapshot img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .event-snapshot video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            background: #000;
+            display: block;
+        }
+
+        .badge-soft.cam-qr {
+            background: rgba(56, 189, 248, 0.15);
+            color: var(--accent-primary);
+            border: 1px solid rgba(56, 189, 248, 0.28);
+        }
+        .badge-soft.cam-content {
+            background: rgba(167, 139, 250, 0.15);
+            color: var(--accent-purple);
+            border: 1px solid rgba(167, 139, 250, 0.28);
+        }
+        .badge-soft.cam-fallback {
+            background: rgba(251, 146, 60, 0.14);
+            color: var(--accent-orange);
+            border: 1px solid rgba(251, 146, 60, 0.28);
+        }
+
+        .event-snapshot::after {
+            content: '';
+            position: absolute;
+            inset: auto 0 0 0;
+            height: 45%;
+            background: linear-gradient(180deg, transparent, rgba(15, 23, 42, 0.78));
+            pointer-events: none;
+        }
+
+        .event-snapshot .empty-art {
+            text-align: center;
+            color: var(--text-muted);
+            z-index: 1;
+        }
+
+        .event-snapshot .empty-art i {
+            display: block;
+            font-size: 2.4rem;
+            margin-bottom: 0.6rem;
+            opacity: 0.6;
+        }
+
+        .event-snapshot-meta {
+            position: absolute;
+            right: 1rem;
+            left: 1rem;
+            bottom: 0.9rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+            z-index: 2;
+        }
+
+        .event-card-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 1rem;
+            padding: 1rem 1.25rem 0.55rem;
+        }
+
+        .event-title-block {
+            display: flex;
+            align-items: center;
+            gap: 0.8rem;
+        }
+
+        .qr-badge {
+            width: 44px;
+            height: 44px;
+            border-radius: 14px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.05rem;
+            font-weight: 800;
+            color: var(--accent-primary);
+            background: rgba(56, 189, 248, 0.14);
+            border: 1px solid rgba(56, 189, 248, 0.18);
+        }
+
+        .event-heading h3 {
+            font-size: 1.05rem;
+            font-weight: 800;
+            line-height: 1.3;
+        }
+
+        .event-heading p {
+            color: var(--text-secondary);
+            font-size: 0.8rem;
+        }
+
+        .event-state {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.45rem;
+            justify-content: flex-end;
+        }
+
+        .badge-soft {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            padding: 0.25rem 0.7rem;
+            border-radius: 999px;
+            font-size: 0.74rem;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+
+        .badge-soft.positive {
+            background: rgba(45, 212, 191, 0.15);
+            color: var(--accent-success);
+        }
+
+        .badge-soft.negative {
+            background: rgba(251, 191, 36, 0.15);
+            color: var(--accent-warning);
+        }
+
+        .badge-soft.unknown {
+            background: rgba(100, 116, 139, 0.15);
+            color: var(--text-muted);
+        }
+
+        .badge-soft.lost {
+            background: rgba(248, 113, 113, 0.15);
+            color: var(--accent-danger);
+        }
+
+        .badge-soft.complete {
+            background: rgba(45, 212, 191, 0.12);
+            color: var(--accent-success);
+        }
+
+        .event-card-body {
+            padding: 0.3rem 1.25rem 1.1rem;
+        }
+
+        .event-meta-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.7rem 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .meta-item {
+            display: flex;
+            flex-direction: column;
+            gap: 0.15rem;
+        }
+
+        .meta-label {
+            color: var(--text-muted);
+            font-size: 0.72rem;
+            font-weight: 500;
+        }
+
+        .meta-value {
+            font-size: 0.88rem;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        .event-actions {
+            display: flex;
+            gap: 0.6rem;
+        }
+
+        .event-actions button,
+        .event-actions a {
+            flex: 1;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.45rem;
+            padding: 0.65rem 0.8rem;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--glass-border);
+            text-decoration: none;
+            font-size: 0.82rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.18s ease;
+        }
+
+        .event-actions .btn-primary-soft {
+            background: rgba(56, 189, 248, 0.12);
+            color: var(--accent-primary);
+        }
+
+        .event-actions .btn-primary-soft:hover {
+            background: rgba(56, 189, 248, 0.18);
+            border-color: rgba(56, 189, 248, 0.28);
+        }
+
+        .event-actions .btn-secondary-soft {
+            background: rgba(15, 23, 42, 0.45);
+            color: var(--text-secondary);
+        }
+
+        .event-actions .btn-secondary-soft:hover {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-primary);
+        }
+
+        .empty-state {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-lg);
+            padding: 4rem 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .pagination {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .pagination button {
+            padding: 0.55rem 0.95rem;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-sm);
+            color: var(--accent-primary);
+            cursor: pointer;
+            font-size: 0.82rem;
+            font-weight: 700;
+        }
+
+        .pagination button:hover {
+            background: rgba(56, 189, 248, 0.1);
+        }
+
+        .pagination button:disabled {
+            opacity: 0.4;
+            cursor: default;
+        }
+
+        .page-info {
+            color: var(--text-secondary);
+            font-size: 0.88rem;
+        }
+
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 1000;
+            background: rgba(2, 6, 23, 0.82);
+            backdrop-filter: blur(10px);
+            align-items: center;
+            justify-content: center;
+            padding: 1rem;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal-box {
+            position: relative;
+            width: min(1080px, 100%);
+            height: 96vh;
+            display: flex;
+            flex-direction: column;
+            background: linear-gradient(180deg, rgba(15, 23, 42, 0.96), rgba(15, 23, 42, 0.9));
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 24px;
+            box-shadow: 0 25px 60px rgba(0, 0, 0, 0.35);
+            overflow: hidden;
+        }
+
+        .modal-close {
+            position: absolute;
+            top: 1rem;
+            left: 1rem;
+            width: 40px;
+            height: 40px;
+            border: none;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.06);
+            color: var(--text-secondary);
+            cursor: pointer;
+            z-index: 3;
+        }
+
+        .modal-close:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .modal-shell {
+            flex: 1 1 0;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            padding: 0.9rem 1.1rem 1rem;
+            overflow: hidden;
+        }
+
+        .modal-header {
+            flex-shrink: 0;
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 1rem;
+            padding: 0 2.8rem 0.7rem 0;
+        }
+
+        #footageContent {
+            flex: 1 1 0;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        }
+
+        .modal-title {
+            display: flex;
+            flex-direction: column;
+            gap: 0.3rem;
+        }
+
+        .modal-title h2 {
+            font-size: 1.2rem;
+            font-weight: 800;
+        }
+
+        .modal-title p {
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+        }
+
+        .viewer-layout {
+            flex: 1 1 0;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 0.7rem;
+        }
+
+        .viewer-stage {
+            flex: 1 1 0;
+            min-height: 0;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 20px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .preview-area {
+            position: relative;
+            background: #020617;
+            overflow: hidden;
+            flex: 1 1 0;
+            min-height: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .preview-area img {
+            width: 100%;
+            height: 100%;
+            display: block;
+            object-fit: contain;
+        }
+
+        .preview-caption {
+            flex-shrink: 0;
+            padding: 0.6rem 1.1rem 0.65rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.06);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+        }
+
+        .preview-caption .title {
+            font-size: 0.92rem;
+            font-weight: 700;
+        }
+
+        .preview-caption .subtitle {
+            color: var(--text-secondary);
+            font-size: 0.78rem;
+        }
+
+        .frame-counter {
+            color: var(--text-secondary);
+            font-size: 0.82rem;
+        }
+
+        .viewer-strip-wrapper {
+            flex-shrink: 0;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 16px;
+            overflow: hidden;
+        }
+
+        .viewer-strip-header {
+            padding: 0.65rem 1rem 0;
+            display: flex;
+            align-items: baseline;
+            gap: 0.5rem;
+        }
+
+        .viewer-strip-header h3 {
+            font-size: 0.88rem;
+            font-weight: 700;
+        }
+
+        .viewer-strip-header span {
+            color: var(--text-secondary);
+            font-size: 0.74rem;
+        }
+
+        .thumb-strip {
+            padding: 0.7rem 0.9rem 0.85rem;
+            display: flex;
+            flex-direction: row;
+            gap: 0.55rem;
+            overflow-x: auto;
+            overflow-y: hidden;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(56, 189, 248, 0.35) transparent;
+        }
+
+        .thumb-strip::-webkit-scrollbar {
+            height: 5px;
+        }
+
+        .thumb-strip::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .thumb-strip::-webkit-scrollbar-thumb {
+            background: rgba(56, 189, 248, 0.35);
+            border-radius: 3px;
+        }
+
+        .thumb-card {
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+            width: 120px;
+            gap: 0.4rem;
+            padding: 0.45rem;
+            border-radius: 14px;
+            border: 1px solid transparent;
+            cursor: pointer;
+            transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
+        }
+
+        .thumb-card:hover {
+            background: rgba(255, 255, 255, 0.05);
+            transform: translateY(-2px);
+        }
+
+        .thumb-card.active {
+            background: rgba(56, 189, 248, 0.08);
+            border-color: rgba(56, 189, 248, 0.3);
+        }
+
+        .thumb-card.first {
+            border-color: rgba(45, 212, 191, 0.22);
+        }
+
+        .thumb-card.first.active,
+        .thumb-card.last.active {
+            border-color: rgba(56, 189, 248, 0.3);
+        }
+
+        .thumb-card.last {
+            border-color: rgba(251, 191, 36, 0.22);
+        }
+
+        .thumb-card img {
+            width: 100%;
+            height: 80px;
+            border-radius: 10px;
+            object-fit: cover;
+            background: #020617;
+        }
+
+        .thumb-info {
+            display: flex;
+            flex-direction: column;
+            gap: 0.12rem;
+            min-width: 0;
+        }
+
+        .thumb-title {
+            font-size: 0.76rem;
+            font-weight: 700;
+            text-align: center;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .thumb-subtitle {
+            color: var(--text-secondary);
+            font-size: 0.68rem;
+            text-align: center;
+        }
+
+        .thumb-tags {
+            display: flex;
+            gap: 0.25rem;
+            flex-wrap: wrap;
+            justify-content: center;
+            margin-top: 0.1rem;
+        }
+
+        .thumb-tag {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.1rem 0.45rem;
+            border-radius: 999px;
+            font-size: 0.67rem;
+            font-weight: 700;
+        }
+
+        .thumb-tag.start {
+            color: var(--accent-success);
+            background: rgba(45, 212, 191, 0.12);
+        }
+
+        .thumb-tag.end {
+            color: var(--accent-warning);
+            background: rgba(251, 191, 36, 0.14);
+        }
+
+        .modal-loading,
+        .modal-error,
+        .modal-empty {
+            text-align: center;
+            padding: 3rem 1.5rem;
+            color: var(--text-secondary);
+        }
+
+        .modal-error {
+            color: var(--accent-danger);
+        }
+
+        .viewer-nav {
+            flex-shrink: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 0.8rem;
+            padding-top: 0.65rem;
+            flex-wrap: wrap;
+        }
+
+        .viewer-nav button {
+            padding: 0.55rem 0.95rem;
+            border-radius: var(--radius-sm);
+            border: 1px solid rgba(56, 189, 248, 0.22);
+            background: rgba(56, 189, 248, 0.1);
+            color: var(--accent-primary);
+            font-weight: 700;
+            cursor: pointer;
+        }
+
+        .viewer-nav button:disabled {
+            opacity: 0.35;
+            cursor: default;
+        }
+
+        .footer {
+            text-align: center;
+            padding: 1.6rem 0 1rem;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+
+        @media (max-width: 900px) {
+            .thumb-card {
+                width: 96px;
+            }
+
+            .thumb-card img {
+                height: 64px;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .events-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .event-meta-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+
+            .event-card-header {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .event-state {
+                justify-content: flex-start;
+            }
+
+            .modal-shell {
+                padding: 1rem;
+            }
+
+            .modal-header {
+                padding-right: 2.6rem;
+            }
+
+            .thumb-card {
+                width: 80px;
+            }
+
+            .thumb-card img {
+                height: 54px;
+            }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <a href="/container" class="back-link"><i class="fa-solid fa-arrow-right"></i> العودة إلى لوحة الحاويات</a>
+
+    <div class="page-header">
+        <h1><i class="fa-solid fa-boxes-stacked"></i> سجل أحداث الحاويات</h1>
+        <p class="subtitle">عرض تشغيلي للأحداث المكتملة والمفقودة مع رحلة اللقطات من أول ظهور حتى آخر إطار</p>
+    </div>
+
+    <div class="stats-grid" id="statsGrid">
+        <div class="stat-card">
+            <div class="stat-value numbers">-</div>
+            <div class="stat-label">إجمالي الأحداث</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value success numbers">-</div>
+            <div class="stat-label">اتجاه موجب</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value warning numbers">-</div>
+            <div class="stat-label">اتجاه سالب</div>
+        </div>
+        <div class="stat-card lost">
+            <div class="stat-value danger numbers">-</div>
+            <div class="stat-label">أحداث مفقودة</div>
+        </div>
+    </div>
+
+    <div class="filter-bar events-filter-bar">
+        <div class="field">
+            <label for="filterQR"><i class="fa-solid fa-qrcode"></i> الحاوية</label>
+            <select id="filterQR">
+                <option value="">الكل</option>
+                <option value="1">حاوية 1</option>
+                <option value="2">حاوية 2</option>
+                <option value="3">حاوية 3</option>
+                <option value="4">حاوية 4</option>
+                <option value="5">حاوية 5</option>
+            </select>
+        </div>
+        <div class="field">
+            <label for="filterDir"><i class="fa-solid fa-arrows-up-down"></i> الاتجاه</label>
+            <select id="filterDir">
+                <option value="">الكل</option>
+                <option value="positive">خروج</option>
+                <option value="negative">عودة</option>
+                <option value="unknown">غير محدد</option>
+            </select>
+        </div>
+        <div class="field">
+            <label for="filterLost"><i class="fa-solid fa-triangle-exclamation"></i> الحالة</label>
+            <select id="filterLost">
+                <option value="">الكل</option>
+                <option value="false">مكتمل بدون مشكلة</option>
+                <option value="true">مفقود ويحتاج مراجعة</option>
+            </select>
+        </div>
+        <div class="field">
+            <label for="filterStart"><i class="fa-solid fa-calendar"></i> من</label>
+            <input type="datetime-local" id="filterStart">
+        </div>
+        <div class="field">
+            <label for="filterEnd">إلى</label>
+            <input type="datetime-local" id="filterEnd">
+        </div>
+        <button class="btn btn-primary" type="button" onclick="applyFilters()"><i class="fa-solid fa-filter"></i> تطبيق</button>
+        <button class="btn btn-secondary" type="button" onclick="resetFilters()"><i class="fa-solid fa-rotate"></i> إعادة تعيين</button>
+    </div>
+
+    <div id="eventsContainer">
+        <div class="empty-state">
+            <i class="fa-solid fa-spinner fa-spin"></i>
+            <div>جارٍ تحميل الأحداث...</div>
+        </div>
+    </div>
+
+    <div class="pagination">
+        <button id="btnPrev" onclick="prevPage()" disabled><i class="fa-solid fa-chevron-right"></i> السابق</button>
+        <span class="page-info numbers" id="pageInfo">—</span>
+        <button id="btnNext" onclick="nextPage()">التالي <i class="fa-solid fa-chevron-left"></i></button>
+    </div>
+
+    <div class="footer">
+        <a href="/container">لوحة الحاويات</a> &nbsp;•&nbsp; <a href="/">الرئيسية</a>
+    </div>
+</main>
+
+<div class="modal-overlay" id="footageModal">
+    <div class="modal-box">
+        <button class="modal-close" onclick="closeFootage()"><i class="fa-solid fa-xmark"></i></button>
+        <div class="modal-shell">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <h2 id="modalTitle">رحلة الحدث</h2>
+                    <p id="modalSubtitle">من أول ظهور حتى آخر إطار محفوظ</p>
+                </div>
+                <div id="modalStateBadge"></div>
+            </div>
+            <div id="footageContent"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+const PAGE_SIZE = 24;
+let currentOffset = 0;
+let totalEvents = 0;
+let currentEvents = [];
+
+let viewerEvent = null;
+
+function esc(value) {
+    const div = document.createElement('div');
+    div.textContent = value ?? '';
+    return div.innerHTML;
+}
+
+function toLocalInputValue(date) {
+    return date.getFullYear() + '-' +
+        String(date.getMonth() + 1).padStart(2, '0') + '-' +
+        String(date.getDate()).padStart(2, '0') + 'T' +
+        String(date.getHours()).padStart(2, '0') + ':' +
+        String(date.getMinutes()).padStart(2, '0');
+}
+
+function formatDateTime(value) {
+    if (!value) return '—';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return date.toLocaleString('en-GB', {
+        hour12: false,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+    });
+}
+
+function formatDuration(seconds) {
+    if (seconds == null || Number.isNaN(Number(seconds))) return '—';
+    return Number(seconds).toFixed(1) + 's';
+}
+
+function getDirectionLabel(direction) {
+    if (direction === 'positive') return 'خروج';
+    if (direction === 'negative') return 'عودة';
+    return 'غير محدد';
+}
+
+function getDirectionIcon(direction) {
+    if (direction === 'positive') return 'fa-arrow-up';
+    if (direction === 'negative') return 'fa-arrow-down';
+    return 'fa-question';
+}
+
+function getCompletionLabel(event) {
+    return event.is_lost ? 'مفقود ويحتاج مراجعة' : 'مكتمل بدون مشكلة';
+}
+
+function getEventId(snapshotPath) {
+    if (!snapshotPath) return null;
+    if (!snapshotPath.includes('/')) return snapshotPath;
+    const parts = snapshotPath.split('/').filter(Boolean);
+    const last = parts[parts.length - 1] || null;
+    if (!last) return null;
+    // QR camera stores the clip as {event_id}/video.mp4 — the event id is
+    // the parent directory name.
+    if (last === 'video.mp4') return parts[parts.length - 2] || null;
+    // Content camera stores it as {event_id}.mp4 — strip the extension.
+    if (last.endsWith('.mp4')) return last.slice(0, -4);
+    // Legacy: snapshot_path was just the event-id directory.
+    return last;
+}
+
+function getVideoUrl(event) {
+    const id = getEventId(event.snapshot_path);
+    if (!id) return null;
+    return '/container/event/' + encodeURIComponent(id) + '/video';
+}
+
+function getCameraInfo(event) {
+    const meta = event.metadata || {};
+    const camera = (meta.camera || 'qr');
+    const fallback = Boolean(meta.fallback);
+    return { camera, fallback };
+}
+
+function renderCameraChip(event) {
+    const { camera, fallback } = getCameraInfo(event);
+    if (camera === 'content') {
+        return '<span class="badge-soft cam-content"><i class="fa-solid fa-cube"></i> كاميرا المحتوى</span>';
+    }
+    if (fallback) {
+        return '<span class="badge-soft cam-fallback" title="تم التسجيل من كاميرا QR لتعذّر كاميرا المحتوى"><i class="fa-solid fa-right-left"></i> QR (بديل)</span>';
+    }
+    return '<span class="badge-soft cam-qr"><i class="fa-solid fa-qrcode"></i> كاميرا QR</span>';
+}
+
+function buildQueryParams(includePagination = true) {
+    const params = new URLSearchParams();
+    const qr = document.getElementById('filterQR').value;
+    const dir = document.getElementById('filterDir').value;
+    const lost = document.getElementById('filterLost').value;
+    const start = document.getElementById('filterStart').value;
+    const end = document.getElementById('filterEnd').value;
+
+    if (qr) params.set('qr_code_value', qr);
+    if (dir) params.set('direction', dir);
+    if (lost) params.set('is_lost', lost);
+    if (start) params.set('start_time', start);
+    if (end) params.set('end_time', end);
+    if (includePagination) {
+        params.set('limit', PAGE_SIZE);
+        params.set('offset', currentOffset);
+    }
+    return params;
+}
+
+async function loadStats() {
+    const params = buildQueryParams(false);
+    const res = await fetch('/container/api/stats?' + params.toString());
+    if (!res.ok) throw new Error('stats');
+    const stats = await res.json();
+    renderStats(stats);
+}
+
+function renderStats(stats) {
+    const cards = [
+        { value: stats.total ?? 0, label: 'إجمالي الأحداث', klass: '' },
+        { value: stats.total_positive ?? 0, label: 'اتجاه موجب', klass: 'success' },
+        { value: stats.total_negative ?? 0, label: 'اتجاه سالب', klass: 'warning' },
+        { value: stats.total_lost ?? 0, label: 'أحداث مفقودة', klass: 'danger', card: 'lost' },
+    ];
+    document.getElementById('statsGrid').innerHTML = cards.map((card) => `
+        <div class="stat-card ${card.card || ''}">
+            <div class="stat-value ${card.klass || ''} numbers">${esc(String(card.value))}</div>
+            <div class="stat-label">${card.label}</div>
+        </div>
+    `).join('');
+}
+
+async function loadEvents() {
+    const container = document.getElementById('eventsContainer');
+    container.innerHTML = '<div class="empty-state"><i class="fa-solid fa-spinner fa-spin"></i><div>جارٍ تحميل الأحداث...</div></div>';
+
+    const params = buildQueryParams(true);
+    try {
+        const [eventsRes] = await Promise.all([
+            fetch('/container/api/events?' + params.toString()),
+            loadStats(),
+        ]);
+
+        if (!eventsRes.ok) throw new Error('events');
+        const data = await eventsRes.json();
+        currentEvents = data.events || [];
+        totalEvents = data.total || 0;
+        renderEvents(currentEvents);
+        updatePagination();
+    } catch (err) {
+        console.error('Failed to load container events', err);
+        container.innerHTML = '<div class="empty-state"><i class="fa-solid fa-circle-exclamation"></i><div>تعذّر تحميل البيانات</div></div>';
+        document.getElementById('statsGrid').innerHTML = '<div class="stat-card" style="grid-column:1/-1"><div class="stat-label">تعذّر تحميل الإحصاءات</div></div>';
+    }
+}
+
+function renderEvents(events) {
+    const container = document.getElementById('eventsContainer');
+    if (!events.length) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <i class="fa-solid fa-circle-check"></i>
+                <h3>لا توجد أحداث ضمن الفلتر الحالي</h3>
+                <p>جرّب توسيع المدة الزمنية أو إزالة بعض الفلاتر.</p>
+            </div>
+        `;
+        return;
+    }
+
+    container.innerHTML = '<div class="events-grid">' + events.map((event, idx) => renderEventCard(event, idx)).join('') + '</div>';
+}
+
+function renderEventCard(event, idx) {
+    const videoUrl = getVideoUrl(event);
+    const direction = event.direction || 'unknown';
+    const directionLabel = getDirectionLabel(direction);
+    const directionIcon = getDirectionIcon(direction);
+    const completionLabel = getCompletionLabel(event);
+    const statusClass = event.is_lost ? 'lost' : 'complete';
+    const eventNumber = totalEvents - currentOffset - idx;
+    const meta = event.metadata || {};
+    const cameraChip = renderCameraChip(event);
+    const canOpen = Boolean(videoUrl);
+    const durationLabel = formatDuration(event.duration_seconds);
+
+    const previewBlock = videoUrl
+        ? `
+            <video muted playsinline preload="metadata"
+                   src="${videoUrl}"
+                   onmouseover="this.play().catch(()=>{})"
+                   onmouseout="this.pause(); this.currentTime=0;"
+                   onerror="this.style.display='none'; this.parentElement.querySelector('.empty-art').style.display='block';"></video>
+            <div class="empty-art" style="display:none;">
+                <i class="fa-solid fa-video-slash"></i>
+                مقطع الفيديو غير متاح
+            </div>
+        `
+        : `
+            <div class="empty-art">
+                <i class="fa-solid fa-video-slash"></i>
+                لا يوجد مقطع محفوظ
+            </div>
+        `;
+
+    return `
+        <article class="event-card ${event.is_lost ? 'lost' : ''}">
+            <div class="event-snapshot">
+                ${previewBlock}
+                <div class="event-snapshot-meta">
+                    <span class="badge-soft ${direction}"><i class="fa-solid ${directionIcon}"></i> ${directionLabel}</span>
+                    ${cameraChip}
+                </div>
+            </div>
+
+            <div class="event-card-header">
+                <div class="event-title-block">
+                    <span class="qr-badge numbers">${esc(String(event.qr_code_value ?? '—'))}</span>
+                    <div class="event-heading">
+                        <h3>حاوية ${esc(String(event.qr_code_value ?? '—'))} · <span class="numbers">#${esc(String(eventNumber))}</span></h3>
+                        <p>معرّف التتبع <span class="numbers">T${esc(String(event.track_id ?? '—'))}</span></p>
+                    </div>
+                </div>
+                <div class="event-state">
+                    <span class="badge-soft ${direction}">${directionLabel}</span>
+                    ${event.is_lost ? '<span class="badge-soft lost"><i class="fa-solid fa-triangle-exclamation"></i> مراجعة</span>' : '<span class="badge-soft complete"><i class="fa-solid fa-circle-check"></i> سليم</span>'}
+                </div>
+            </div>
+
+            <div class="event-card-body">
+                <div class="event-meta-grid">
+                    <div class="meta-item">
+                        <span class="meta-label">وقت الحدث</span>
+                        <span class="meta-value numbers">${esc(formatDateTime(event.timestamp))}</span>
+                    </div>
+                    <div class="meta-item">
+                        <span class="meta-label">المدة</span>
+                        <span class="meta-value numbers">${esc(durationLabel)}</span>
+                    </div>
+                    <div class="meta-item">
+                        <span class="meta-label">موضع البداية</span>
+                        <span class="meta-value numbers">${event.entry_x != null ? esc(String(Math.round(event.entry_x))) + ' px' : '—'}</span>
+                    </div>
+                    <div class="meta-item">
+                        <span class="meta-label">آخر موضع</span>
+                        <span class="meta-value numbers">${event.exit_x != null ? esc(String(Math.round(event.exit_x))) + ' px' : '—'}</span>
+                    </div>
+                </div>
+
+                <div class="event-actions">
+                    <button class="btn-primary-soft" type="button" ${canOpen ? '' : 'disabled'} onclick="openFootageByIndex(${idx})">
+                        <i class="fa-solid fa-play"></i> عرض المقطع
+                    </button>
+                    <a class="btn-secondary-soft" href="/container" target="_blank" rel="noopener noreferrer">
+                        <i class="fa-solid fa-arrow-up-right-from-square"></i> فتح اللوحة
+                    </a>
+                </div>
+            </div>
+        </article>
+    `;
+}
+
+function updatePagination() {
+    const page = Math.floor(currentOffset / PAGE_SIZE) + 1;
+    const totalPages = Math.max(1, Math.ceil(totalEvents / PAGE_SIZE));
+    document.getElementById('pageInfo').textContent = `${page} / ${totalPages} (${totalEvents})`;
+    document.getElementById('btnPrev').disabled = currentOffset === 0;
+    document.getElementById('btnNext').disabled = currentOffset + PAGE_SIZE >= totalEvents;
+}
+
+function applyFilters() {
+    currentOffset = 0;
+    loadEvents();
+}
+
+function resetFilters() {
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    document.getElementById('filterQR').value = '';
+    document.getElementById('filterDir').value = '';
+    document.getElementById('filterLost').value = '';
+    document.getElementById('filterStart').value = toLocalInputValue(startOfDay);
+    document.getElementById('filterEnd').value = toLocalInputValue(now);
+    applyFilters();
+}
+
+function prevPage() {
+    currentOffset = Math.max(0, currentOffset - PAGE_SIZE);
+    loadEvents();
+}
+
+function nextPage() {
+    currentOffset += PAGE_SIZE;
+    loadEvents();
+}
+
+function initializeFilters() {
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const params = new URLSearchParams(window.location.search);
+    document.getElementById('filterQR').value = params.get('qr_code_value') || '';
+    document.getElementById('filterDir').value = params.get('direction') || '';
+    document.getElementById('filterLost').value = params.get('is_lost') || '';
+    document.getElementById('filterStart').value = params.get('start_time') || toLocalInputValue(startOfDay);
+    document.getElementById('filterEnd').value = params.get('end_time') || toLocalInputValue(now);
+}
+
+function openFootageByIndex(index) {
+    const event = currentEvents[index];
+    if (!event) return;
+    openFootage(event);
+}
+
+function openFootage(event) {
+    const videoUrl = getVideoUrl(event);
+    viewerEvent = event;
+
+    document.getElementById('modalTitle').textContent = `رحلة الحاوية ${event.qr_code_value}`;
+    document.getElementById('modalSubtitle').textContent = `التتبع T${event.track_id} · ${getCompletionLabel(event)}`;
+    document.getElementById('modalStateBadge').innerHTML = [
+        renderCameraChip(event),
+        event.is_lost
+            ? '<span class="badge-soft lost"><i class="fa-solid fa-triangle-exclamation"></i> مفقود</span>'
+            : '<span class="badge-soft complete"><i class="fa-solid fa-circle-check"></i> مكتمل</span>',
+    ].join(' ');
+
+    const content = document.getElementById('footageContent');
+    if (!videoUrl) {
+        content.innerHTML = '<div class="modal-empty"><i class="fa-solid fa-video-slash"></i><div>لا يوجد مقطع محفوظ لهذا الحدث</div></div>';
+    } else {
+        const directionLabel = getDirectionLabel(event.direction || 'unknown');
+        content.innerHTML = `
+            <div class="viewer-layout" style="display:flex; flex-direction:column; height:100%;">
+                <div style="flex:1 1 0; min-height:0; display:flex; align-items:center; justify-content:center; background:#000; border-radius: 12px; overflow:hidden;">
+                    <video id="modalVideo" src="${videoUrl}" controls autoplay preload="auto"
+                           style="width:100%; height:100%; object-fit:contain; background:#000;"
+                           onerror="document.getElementById('modalVideoError').style.display='block';"></video>
+                </div>
+                <div id="modalVideoError" style="display:none; margin-top:0.8rem; color: var(--accent-danger);">
+                    <i class="fa-solid fa-circle-exclamation"></i> تعذّر تحميل الفيديو
+                </div>
+                <div class="preview-caption" style="margin-top: 0.8rem; display:flex; justify-content:space-between; gap:1rem; flex-wrap:wrap;">
+                    <div>
+                        <div class="title">${esc(formatDateTime(event.timestamp))}</div>
+                        <div class="subtitle numbers">${directionLabel} · ${formatDuration(event.duration_seconds)}</div>
+                    </div>
+                    <div class="numbers" style="color: var(--text-secondary);">
+                        entry_x=${event.entry_x ?? '—'} → exit_x=${event.exit_x ?? '—'}
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+    document.getElementById('footageModal').classList.add('active');
+}
+
+function closeFootage() {
+    document.getElementById('footageModal').classList.remove('active');
+    // Stop playback cleanly so we don't hold the stream open.
+    const v = document.getElementById('modalVideo');
+    if (v) {
+        try { v.pause(); v.removeAttribute('src'); v.load(); } catch (e) {}
+    }
+    viewerEvent = null;
+}
+
+document.addEventListener('keydown', function(event) {
+    const modalOpen = document.getElementById('footageModal').classList.contains('active');
+    if (!modalOpen) return;
+    if (event.key === 'Escape') closeFootage();
+});
+
+document.getElementById('footageModal').addEventListener('click', function(event) {
+    if (event.target === this) closeFootage();
+});
+
+initializeFilters();
+loadEvents();
+</script>
+</body>
+</html>
