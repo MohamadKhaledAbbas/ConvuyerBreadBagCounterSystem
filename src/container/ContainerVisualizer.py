@@ -85,6 +85,7 @@ class ContainerVisualizer:
         recent_events: Optional[List[Dict]] = None,
         exit_zone_ratio: float = 0.15,
         frame_detections: Optional[List] = None,
+        frame_mode: str = "detect",
     ) -> np.ndarray:
         """
         Draw all annotations on a frame.
@@ -134,7 +135,8 @@ class ContainerVisualizer:
         # Draw status panel
         self._draw_status_panel(
             frame, fps, total_positive, total_negative, total_lost,
-            len(active_tracks), qr_positive, qr_negative
+            len(active_tracks), qr_positive, qr_negative,
+            frame_mode=frame_mode,
         )
 
         # Draw event log
@@ -263,10 +265,11 @@ class ContainerVisualizer:
         active_tracks: int,
         qr_positive: Optional[Dict[int, int]],
         qr_negative: Optional[Dict[int, int]],
+        frame_mode: str = "detect",
     ) -> None:
         """Draw the status/stats panel on top-left."""
         x, y = 10, 10
-        w, h_panel = 260, 230
+        w, h_panel = 260, 255
 
         if qr_positive:
             h_panel += 25 * len(qr_positive)
@@ -334,6 +337,25 @@ class ContainerVisualizer:
         cv2.putText(
             frame, f"Lost: {total_lost}", (x + 10, cy),
             self.FONT, self.FONT_SCALE_MEDIUM, self.COLORS['text_error'], 1
+        )
+
+        # Frame processing mode
+        cy += 25
+        _mode_colors = {
+            'detect': self.COLORS['text_success'],    # green
+            'predict': self.COLORS['text_warning'],   # orange/yellow
+            'gate': self.COLORS['text_info'],          # blue/cyan
+        }
+        _mode_labels = {
+            'detect': 'QR Detect',
+            'predict': 'Track Predict',
+            'gate': 'Motion Gate',
+        }
+        mode_color = _mode_colors.get(frame_mode, self.COLORS['text_primary'])
+        mode_label = _mode_labels.get(frame_mode, frame_mode)
+        cv2.putText(
+            frame, f"Mode: {mode_label}", (x + 10, cy),
+            self.FONT, self.FONT_SCALE_MEDIUM, mode_color, 1
         )
 
         # Per-QR breakdown

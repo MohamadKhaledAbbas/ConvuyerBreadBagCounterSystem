@@ -678,6 +678,9 @@ class ContainerCounterApp:
         # Reused by _annotate_frame to avoid a third get_active_tracks() dict copy.
         self._current_tracks: Dict[int, object] = {}
 
+        # Frame processing mode for UI overlay: "detect", "gate", or "predict"
+        self._frame_mode: str = "detect"
+
         # Time of the last DB poll for on-demand snapshot requests.
         # Throttled to 1 Hz so the hot frame loop is not blocked by SQLite reads.
         self._last_snapshot_check: float = 0.0
@@ -941,7 +944,14 @@ class ContainerCounterApp:
                 if frame.shape[0] < 4 or frame.shape[1] < 4:
                     continue
                 
-                frame_start = time.time()
+                # Reset the budget deadline to *now* each time we get a
+                # frame.  The frame source (RTSP/ROS2) already paces
+                # delivery at the camera's native FPS, so any blocking
+                # time inside frame_server.__next__() counts as pacing.
+                # The budget pacer only needs to cover the *processing*
+                # tail (annotate + display) — not the full frame interval.
+                _next_frame_time = time.time()
+                frame_start = _next_frame_time
                 
                 # Process frame
                 self._process_frame(frame)
@@ -1076,6 +1086,7 @@ class ContainerCounterApp:
 
         is_detect_frame = ((self.state.frame_count - 1) % self._detect_interval == 0)
         self._frame_detections = []   # reset per-frame viz list
+        # _frame_mode set after we know what actually ran this frame
 
         # ── Motion gate ──
         # On detect-eligible frames with no active tracks, skip the expensive
@@ -1089,6 +1100,7 @@ class ContainerCounterApp:
                 diff = cv2.absdiff(gray, self._prev_detect_gray).mean()
                 if diff < self._motion_threshold:
                     is_detect_frame = False
+                    self._frame_mode = "gate"
                     if _dbg:
                         _dbg_t['motion_gate'] = f'skip(diff={diff:.1f})'
                 elif _dbg:
@@ -1101,6 +1113,7 @@ class ContainerCounterApp:
 
         if is_detect_frame:
             # ── Full QR detection ──
+            self._frame_mode = "detect"
             t_qr_start = time.time()
             detections = self.qr_detector.detect_all(frame)
             t_qr = time.time() - t_qr_start
@@ -1147,6 +1160,10 @@ class ContainerCounterApp:
                 step = self._detect_interval
 
             current_tracks = self.tracker.get_active_tracks()  # single call; reused below
+            if current_tracks:
+                self._frame_mode = "predict"
+            else:
+                self._frame_mode = "gate"
             for qr_val, center, bbox_xywh in self._linear_predictor.predict(step):
                 # Only predict for QR values that have an active track.
                 # If the track was silently dropped (FP gate, etc.) remove the
@@ -1285,6 +1302,7 @@ class ContainerCounterApp:
             recent_events=events,
             exit_zone_ratio=self.config.exit_zone_ratio,
             frame_detections=self._frame_detections,
+            frame_mode=self._frame_mode,
         )
         
         return annotated
@@ -1791,14 +1809,20 @@ class ContainerCounterApp:
         return exited
 
     def _update_fps(self) -> None:
-        """Update FPS calculation."""
+        """Update FPS calculation with EMA smoothing."""
         self._fps_frames += 1
-        elapsed = time.time() - self._fps_start_time
+        now = time.time()
+        elapsed = now - self._fps_start_time
         
         if elapsed >= 1.0:
-            self.state.fps = self._fps_frames / elapsed
+            raw_fps = self._fps_frames / elapsed
+            # Exponential moving average (α=0.3) for stable display
+            if self.state.fps > 0:
+                self.state.fps = 0.3 * raw_fps + 0.7 * self.state.fps
+            else:
+                self.state.fps = raw_fps
             self._fps_frames = 0
-            self._fps_start_time = time.time()
+            self._fps_start_time = now
     
     def _maybe_publish_state(self) -> None:
         """Publish state to JSON file if interval has elapsed."""
