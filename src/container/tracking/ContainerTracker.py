@@ -114,10 +114,13 @@ class ContainerEvent:
     # Number of confirmed QR detections that contributed to this track
     # (informational — already filtered by the tracker's min-detections gate).
     detection_count: int = 0
-    
+    # Human-readable explanation of why the track was classified as lost.
+    # Empty string for normal (non-lost) events.
+    lost_reason: str = ""
+
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
-        return {
+        d = {
             'track_id': self.track_id,
             'qr_value': self.qr_value,
             'direction': self.direction.value,
@@ -127,6 +130,9 @@ class ContainerEvent:
             'duration_seconds': round(self.duration_seconds, 2),
             'position_count': len(self.positions),
         }
+        if self.lost_reason:
+            d['lost_reason'] = self.lost_reason
+        return d
 
 
 class ContainerTracker:

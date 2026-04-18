@@ -1189,22 +1189,13 @@ class ContainerCounterApp:
         # Check for lost tracks
         lost_events = self.tracker.check_lost_tracks()
         for event in lost_events:
-            # If the last known position was already near an exit zone the
-            # container did exit normally — the QR code simply became unreadable
-            # before the strict exit boundary was crossed.  Only flag tracks
-            # whose last position was clearly mid-frame.
-            actually_lost = not self._is_exit_direction(event)
-            reason = (
-                f"mid-frame (exit_x={event.exit_x}, "
-                f"zone=[left<={self.tracker.left_exit_x} / right>={self.tracker.right_exit_x}])"
-                if actually_lost
-                else f"near-exit (exit_x={event.exit_x})"
-            )
+            actually_lost, reason = self._classify_lost_track(event)
+            event.lost_reason = reason if actually_lost else ""
             logger.info(
                 f"[ContainerCounterApp] Lost-track resolved: "
                 f"QR={event.qr_value} track=#{event.track_id} "
                 f"dir={event.direction.value} "
-                f"is_lost={actually_lost} reason={reason}"
+                f"is_lost={actually_lost} reason={reason!r}"
             )
             self._handle_container_event(event, is_lost=actually_lost)
 
@@ -1508,6 +1499,7 @@ class ContainerCounterApp:
             'track_id': event.track_id,
             'duration': round(event.duration_seconds, 2),
             'is_lost': is_lost,
+            'lost_reason': event.lost_reason if is_lost else "",
             'camera': preliminary_result.camera if preliminary_result else 'qr',
             'fallback': bool(preliminary_result.fallback) if preliminary_result else False,
             'recording_status': recording_status,
@@ -1751,6 +1743,7 @@ class ContainerCounterApp:
                 # Actual video clip length (pre-roll + transit + post-roll).
                 # Distinct from duration_seconds which is QR tracking time only.
                 'clip_duration_seconds': round(clip_duration_seconds, 1),
+                'lost_reason': event.lost_reason if is_lost else None,
             })
 
             # Insert into database (entry_y/exit_y columns store X positions
@@ -1780,33 +1773,69 @@ class ContainerCounterApp:
         except Exception as e:
             logger.error(f"[ContainerCounterApp] Failed to record event: {e}")
 
-    def _is_exit_direction(self, event: ContainerEvent) -> bool:
+    def _classify_lost_track(self, event: ContainerEvent) -> Tuple[bool, str]:
         """
-        Check if event was a proper exit (reached near the exit zone) vs truly lost.
+        Determine whether a timed-out track is truly lost or just had its QR
+        become unreadable near the exit.
 
-        Uses a generous 5x multiplier on exit_zone_ratio so that containers
-        whose QR becomes unreadable just before the strict exit boundary are
-        still classified as exited rather than lost.
-
-        Caps the generous ratio at 0.30 to avoid false-positives for very wide
-        exit zones.
+        Returns
+        -------
+        (is_lost, reason)
+            is_lost  – True  → record as lost (video + lost counter)
+                       False → record as normal exit (QR unreadable near edge)
+            reason   – human-readable string stored in DB and shown on UI
         """
         if self.tracker is None:
-            return True
+            return False, "no tracker"
+
         frame_w = self.tracker.frame_width
+        x = event.exit_x
+        direction = event.direction
+        pct = int(x / frame_w * 100)
+
+        # ── Generous zone: 5× exit_zone_ratio, capped at 30% ──
         generous_ratio = min(self.tracker.exit_zone_ratio * 5, 0.30)
-        left_threshold = int(frame_w * generous_ratio)
-        right_threshold = int(frame_w * (1.0 - generous_ratio))
-        exited = event.exit_x <= left_threshold or event.exit_x >= right_threshold
-        logger.debug(
-            f"[ContainerCounterApp] exit_check QR={event.qr_value} "
-            f"track=#{event.track_id} "
-            f"exit_x={event.exit_x} "
-            f"strict_zone=[left<={self.tracker.left_exit_x} / right>={self.tracker.right_exit_x}] "
-            f"generous_zone=[left<={left_threshold} / right>={right_threshold}] (ratio={generous_ratio:.0%}) "
-            f"→ {'EXITED' if exited else 'MID-FRAME'}"
+        left_thr = int(frame_w * generous_ratio)        # e.g. 384 px
+        right_thr = int(frame_w * (1.0 - generous_ratio))  # e.g. 896 px
+
+        in_generous_zone = x <= left_thr or x >= right_thr
+
+        # ── Direction-aware mid-point check ──
+        # A container that has clearly crossed the frame midpoint *toward*
+        # its expected exit was almost certainly exiting — the QR code just
+        # became unreadable before the strict boundary.  Only applied when
+        # direction is determined (not UNKNOWN).
+        from src.container.tracking.ContainerTracker import Direction
+        past_midpoint_toward_exit = (
+            (direction == Direction.POSITIVE and x < frame_w // 2) or
+            (direction == Direction.NEGATIVE and x > frame_w // 2)
         )
-        return exited
+
+        if in_generous_zone:
+            reason = f"near-exit at {pct}% (generous zone)"
+            return False, reason
+
+        if past_midpoint_toward_exit and direction != Direction.UNKNOWN:
+            reason = f"past midpoint at {pct}% toward {direction.value} exit — QR unreadable"
+            return False, reason
+
+        # ── Truly lost ──
+        if direction == Direction.UNKNOWN:
+            disp = event.exit_x - event.entry_x
+            reason = (
+                f"direction unknown — only {abs(disp)}px displacement "
+                f"(need ≥{int(frame_w * self.tracker.min_displacement_ratio)}px)"
+            )
+        elif direction == Direction.POSITIVE:
+            reason = f"mid-frame at {pct}% (left exit not reached, entry={event.entry_x}px)"
+        else:
+            reason = f"mid-frame at {pct}% (right exit not reached, entry={event.entry_x}px)"
+
+        logger.debug(
+            f"[ContainerCounterApp] lost_classify QR={event.qr_value} "
+            f"exit_x={x} dir={direction.value} → lost=True reason={reason!r}"
+        )
+        return True, reason
 
     def _update_fps(self) -> None:
         """Update FPS calculation with EMA smoothing."""

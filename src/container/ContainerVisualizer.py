@@ -384,11 +384,16 @@ class ContainerVisualizer:
             return
 
         x = 10
-        w = 320
+        w = 400
         line_h = 22
-        # Show last 5 events
+        # Show last 5 events; lost events get an extra reason line
         display_events = events[-5:]
-        h_panel = 30 + line_h * len(display_events)
+
+        total_lines = sum(
+            2 if ev.get('is_lost') and ev.get('lost_reason') else 1
+            for ev in display_events
+        )
+        h_panel = 30 + line_h * total_lines
         y = frame_h - h_panel - 10
 
         # Background
@@ -408,6 +413,7 @@ class ContainerVisualizer:
             qr = ev.get('qr_value', '?')
             direction = ev.get('direction', 'unknown')
             lost = ev.get('is_lost', False)
+            lost_reason = ev.get('lost_reason', '')
 
             if direction == 'positive':
                 d_icon = "+"
@@ -425,6 +431,15 @@ class ContainerVisualizer:
                 frame, label, (x + 10, cy),
                 self.FONT, self.FONT_SCALE_SMALL, color, 1
             )
+
+            if lost and lost_reason:
+                cy += line_h
+                # Truncate reason to fit panel width
+                reason_text = lost_reason[:52] + "…" if len(lost_reason) > 52 else lost_reason
+                cv2.putText(
+                    frame, f"  {reason_text}", (x + 10, cy),
+                    self.FONT, self.FONT_SCALE_SMALL, self.COLORS['text_error'], 1
+                )
 
     def show(self, frame: np.ndarray, delay_ms: int = 1) -> bool:
         """
