@@ -161,7 +161,10 @@ class RingBufferSnapshotter:
         # (150 frames × 3 bytes/px × 640×360 ≈ 83 MB) with no visible
         # quality loss in the saved JPEG sequence.
         h, w = frame.shape[:2]
-        small = cv2.resize(frame, (w // 2, h // 2))
+        new_w, new_h = max(1, w // 2), max(1, h // 2)
+        if new_w < 2 or new_h < 2:
+            return
+        small = cv2.resize(frame, (new_w, new_h))
 
         with self._lock:
             # Add to ring buffer (pre-event)

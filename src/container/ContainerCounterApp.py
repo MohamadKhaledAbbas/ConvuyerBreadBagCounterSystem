@@ -569,6 +569,7 @@ class ContainerCounterApp:
         
         # Last detection/track data for on-demand snapshot annotation
         self._last_detection: Optional[QRDetection] = None
+        self._frame_detections: list = []  # per-frame viz list; reset in _process_frame
         # Detection runs every N-th frame; intermediate frames use linear prediction.
         # Will be overwritten with the config value in _init_components.
         self._detect_interval: int = self.config.detect_interval
@@ -938,6 +939,10 @@ class ContainerCounterApp:
         if frame is None or frame.size == 0:
             return
 
+        h0, w0 = frame.shape[:2]
+        if w0 < 4 or h0 < 4:
+            return
+
         self.state.frame_count += 1
 
         # Update tracker frame width if needed
@@ -956,7 +961,7 @@ class ContainerCounterApp:
         # Always compute half-res frame for the global pre-roll and
         # per-track event-video buffers.  cv2.resize at 720p→360p is
         # <1 ms so the overhead is negligible.
-        half = cv2.resize(frame, (w // 2, h // 2))
+        half = cv2.resize(frame, (max(1, w // 2), max(1, h // 2)))
         self._qr_preroll.add(half, center_x=0)
 
         is_detect_frame = ((self.state.frame_count - 1) % self._detect_interval == 0)

@@ -48,6 +48,9 @@
 + helper_scripts/
 + helper_scripts/***
 
++ scripts/
++ scripts/***
+
 # Main application files
 + main.py
 + container_main.py
