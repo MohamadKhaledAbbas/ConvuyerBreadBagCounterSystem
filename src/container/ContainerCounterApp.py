@@ -874,12 +874,8 @@ class ContainerCounterApp:
                 if max_frames and frame_count >= max_frames:
                     break
 
-                # Skip sentinel frames (1×1 empty) returned by the frame
-                # server when the queue is empty or FPS-gated.
+                # Defence-in-depth: skip degenerate frames (e.g. codec init)
                 if frame.shape[0] < 4 or frame.shape[1] < 4:
-                    # Still pump stop-event so SIGTERM isn't blocked
-                    if self._stop_event.wait(timeout=0.001):
-                        break
                     continue
                 
                 frame_start = time.time()

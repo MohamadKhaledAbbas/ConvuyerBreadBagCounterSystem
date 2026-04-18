@@ -14,9 +14,8 @@ Usage:
         qr_result = detector.detect(frame)
 """
 
+import queue
 import time
-import threading
-from collections import deque
 from typing import Iterator, Optional, Tuple
 import numpy as np
 import cv2
@@ -36,18 +35,14 @@ if IS_RDK:
     
     class ContainerFrameServer(Node):
         """
-        ROS2 node that subscribes to /nv12_images_container and provides
-        frames as a Python iterator for QR code processing.
+        ROS2 node subscribing to /nv12_images_container, providing
+        frames via a yield-based frames() generator.
         
-        Features:
-        - Bounded queue to prevent memory overflow
-        - NV12 to BGR conversion
-        - Frame timing and latency tracking
-        - Proactive frame drops when queue fills
-        
-        Attributes:
-            queue_size: Maximum frames to buffer
-            topic: ROS2 topic to subscribe to
+        Matches the proven bread-camera FrameServer pattern:
+        - Callback stores lightweight NV12 copy only (no BGR conversion)
+        - queue.Queue with blocking get (no sentinel frames)
+        - Lazy NV12→BGR conversion at yield time
+        - Drain-to-newest ensures consumer always gets the freshest frame
         """
         
         def __init__(
@@ -57,30 +52,19 @@ if IS_RDK:
             node_name: str = 'container_frame_server',
             target_fps: float = 20.0,
         ):
-            """
-            Initialize the container frame server.
-            
-            Args:
-                topic: ROS2 topic to subscribe to
-                queue_size: Maximum frames to buffer
-                node_name: ROS2 node name
-                target_fps: Maximum frame rate to deliver to the consumer.
-                    Excess frames are silently dropped; set 0 to disable.
-            """
             super().__init__(node_name)
             
             self.topic = topic
             self.queue_size = queue_size
-            self._target_fps = float(target_fps) if target_fps and target_fps > 0 else 0.0
-            self._min_frame_interval = (1.0 / self._target_fps) if self._target_fps else 0.0
-            self._last_yielded_time: float = 0.0
             
-            # Frame queue (thread-safe deque)
-            self._queue = deque(maxlen=queue_size)
-            self._lock = threading.Lock()
+            # Frame queue: stores (nv12_data, latency_ms, (height, width))
+            self._queue: queue.Queue = queue.Queue(maxsize=queue_size)
+            
+            # Proactive drop threshold (80% of queue capacity)
+            self._proactive_drop_threshold = int(queue_size * 0.8)
             
             # NV12 data for BPU optimization (if needed)
-            self._last_nv12_data: Optional[bytes] = None
+            self._last_nv12_data: Optional[np.ndarray] = None
             self._last_frame_size: Optional[Tuple[int, int]] = None
             
             # Statistics
@@ -88,6 +72,7 @@ if IS_RDK:
             self._frames_dropped = 0
             self._frames_processed = 0
             self._last_stats_time = time.time()
+            self._stats_log_interval = 5.0
             
             # QoS profile for reliable transport
             qos = QoSProfile(
@@ -106,25 +91,22 @@ if IS_RDK:
             
             logger.info(
                 f"[ContainerFrameServer] Subscribed to {topic}, "
-                f"queue_size={queue_size}"
+                f"queue_size={queue_size}, target_fps={target_fps}"
             )
         
         def _frame_callback(self, msg: Image) -> None:
             """
             Handle incoming NV12 frame from ROS2.
             
-            Converts NV12 to BGR and adds to queue.
-            Implements proactive drops when queue is near full.
+            Stores lightweight NV12 copy only — NO BGR conversion here.
+            This keeps the callback fast so spin_once returns quickly.
             """
-            callback_start = time.time()
             self._frames_received += 1
             
             try:
-                # Get frame dimensions
                 height = msg.height
                 width = msg.width
                 
-                # NV12 has 1.5 bytes per pixel
                 expected_size = int(height * 1.5 * width)
                 actual_size = len(msg.data)
                 
@@ -135,86 +117,123 @@ if IS_RDK:
                     )
                     return
                 
-                # Reshape NV12 data
+                # Reshape NV12 and store lightweight copy (~1 MB at 720p)
                 nv12_data = np.frombuffer(msg.data, dtype=np.uint8)
                 nv12_frame = nv12_data.reshape((int(height * 1.5), width))
-                
-                # Store raw NV12 for potential BPU use
-                self._last_nv12_data = bytes(msg.data)
-                self._last_frame_size = (width, height)
-                
-                # Convert NV12 to BGR
-                bgr_frame = cv2.cvtColor(nv12_frame, cv2.COLOR_YUV2BGR_NV12)
+                nv12_copy = nv12_frame.copy()
                 
                 # Calculate latency from message timestamp
+                callback_time = time.time()
                 msg_time = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-                latency_ms = (callback_start - msg_time) * 1000 if msg_time > 0 else 0
+                latency_ms = (callback_time - msg_time) * 1000 if msg_time > 0 else 0
                 
-                # Add to queue with proactive drop
-                with self._lock:
-                    proactive_threshold = int(self.queue_size * 0.8)
-                    
-                    if len(self._queue) >= proactive_threshold:
-                        # Drop oldest frame
-                        self._queue.popleft()
+                # Leaky queue: proactive drop when near full
+                qsize = self._queue.qsize()
+                if qsize >= self._proactive_drop_threshold:
+                    try:
+                        self._queue.get_nowait()
                         self._frames_dropped += 1
-                    
-                    self._queue.append((bgr_frame, latency_ms))
+                    except queue.Empty:
+                        pass
+                elif self._queue.full():
+                    try:
+                        self._queue.get_nowait()
+                        self._frames_dropped += 1
+                    except queue.Empty:
+                        pass
+                
+                self._queue.put((nv12_copy, latency_ms, (height, width)))
                 
             except Exception as e:
                 logger.error(f"[ContainerFrameServer] Frame callback error: {e}")
         
-        def __iter__(self) -> Iterator[Tuple[np.ndarray, float]]:
-            """Iterate over frames from the queue."""
-            return self
-        
-        def __next__(self) -> Tuple[np.ndarray, float]:
+        def frames(self) -> Iterator[Tuple[np.ndarray, float]]:
             """
-            Get the next frame from the queue.
+            Yield BGR frames from the ROS2 subscription.
             
-            Drops buffered frames that are older than the target_fps interval
-            so the consumer always gets the freshest frame and never processes
-            stale backlog faster than the configured rate.
-
-            Returns:
+            Drains ALL pending DDS messages each iteration, then picks the
+            newest frame from the queue.  NV12→BGR conversion happens lazily
+            at yield time, not in the callback.
+            
+            Yields:
                 Tuple of (BGR frame, latency_ms)
-                
-            Raises:
-                StopIteration: Never raised (infinite iterator)
             """
-            # Spin ROS2 to receive frames
-            rclpy.spin_once(self, timeout_sec=0.001)
-
-            now = time.time()
-
-            # Target-FPS gate: if not enough time has elapsed since the last
-            # yielded frame, drain the queue (keep camera buffer from filling)
-            # but return an empty sentinel so the main loop sleeps.
-            if self._min_frame_interval and (now - self._last_yielded_time) < self._min_frame_interval:
-                # Drain excess so the queue never lags behind
-                with self._lock:
-                    while len(self._queue) > 1:
-                        self._queue.popleft()
-                        self._frames_dropped += 1
-                return (np.zeros((1, 1, 3), dtype=np.uint8), 0.0)
-
-            with self._lock:
-                # Drop all but the newest frame to avoid processing stale backlog
-                while len(self._queue) > 1:
-                    self._queue.popleft()
-                    self._frames_dropped += 1
-
-                if self._queue:
-                    self._frames_processed += 1
-                    self._last_yielded_time = now
-                    return self._queue.popleft()
-
-            # Queue empty — return sentinel
-            return (np.zeros((1, 1, 3), dtype=np.uint8), 0.0)
+            logger.info("[ContainerFrameServer] Starting frame iteration loop")
+            frame_count = 0
+            
+            while rclpy.ok():
+                # Pump ALL pending ROS2 callbacks into our queue.
+                # spin_once(0.0) returns immediately if nothing is ready.
+                for _ in range(self.queue_size):
+                    rclpy.spin_once(self, timeout_sec=0.0)
+                
+                # Drain queue to newest frame
+                item = None
+                drained = 0
+                while not self._queue.empty():
+                    try:
+                        latest = self._queue.get_nowait()
+                        if item is not None:
+                            drained += 1
+                        item = latest
+                    except queue.Empty:
+                        break
+                self._frames_dropped += drained
+                
+                if item is None:
+                    # Nothing available — block briefly for new data
+                    rclpy.spin_once(self, timeout_sec=0.05)
+                    continue
+                
+                nv12_data, latency_ms, (height, width) = item
+                
+                # Lazy NV12 → BGR conversion
+                bgr_frame = cv2.cvtColor(nv12_data, cv2.COLOR_YUV2BGR_NV12)
+                
+                # Store for BPU optimization
+                self._last_nv12_data = nv12_data
+                self._last_frame_size = (width, height)
+                
+                frame_count += 1
+                self._frames_processed += 1
+                
+                if frame_count == 1:
+                    logger.info(
+                        f"[ContainerFrameServer] First frame yielded! "
+                        f"{width}x{height}"
+                    )
+                
+                # Log stats periodically
+                now = time.time()
+                if now - self._last_stats_time >= self._stats_log_interval:
+                    elapsed = now - self._last_stats_time
+                    recv_fps = self._frames_received / elapsed if elapsed > 0 else 0
+                    drop_rate = (
+                        self._frames_dropped / self._frames_received * 100
+                        if self._frames_received > 0 else 0
+                    )
+                    logger.info(
+                        f"[ContainerFrameServer] Stats: "
+                        f"recv_fps={recv_fps:.1f}, "
+                        f"processed={self._frames_processed}, "
+                        f"dropped={self._frames_dropped}, "
+                        f"drop_rate={drop_rate:.1f}%, "
+                        f"queue={self._queue.qsize()}"
+                    )
+                    # Reset counters for next interval
+                    self._frames_received = 0
+                    self._frames_dropped = 0
+                    self._last_stats_time = now
+                
+                yield bgr_frame, latency_ms
+        
+        def __iter__(self) -> Iterator[Tuple[np.ndarray, float]]:
+            """Iterate via frames() generator."""
+            return self.frames()
         
         def get_frame(self, timeout: float = 0.1) -> Optional[Tuple[np.ndarray, float]]:
             """
-            Get a frame with timeout.
+            Get a single frame with timeout.
             
             Args:
                 timeout: Maximum seconds to wait
@@ -226,21 +245,20 @@ if IS_RDK:
             
             while time.time() - start < timeout:
                 rclpy.spin_once(self, timeout_sec=0.001)
-                
-                with self._lock:
-                    if self._queue:
-                        self._frames_processed += 1
-                        return self._queue.popleft()
-                
-                time.sleep(0.001)
+                try:
+                    nv12_data, latency_ms, (height, width) = self._queue.get_nowait()
+                    bgr_frame = cv2.cvtColor(nv12_data, cv2.COLOR_YUV2BGR_NV12)
+                    self._last_nv12_data = nv12_data
+                    self._last_frame_size = (width, height)
+                    self._frames_processed += 1
+                    return (bgr_frame, latency_ms)
+                except queue.Empty:
+                    pass
             
             return None
         
         def get_stats(self) -> dict:
             """Get frame server statistics."""
-            with self._lock:
-                queue_len = len(self._queue)
-            
             elapsed = time.time() - self._last_stats_time
             fps = self._frames_received / elapsed if elapsed > 0 else 0
             
@@ -249,9 +267,9 @@ if IS_RDK:
                 'frames_received': self._frames_received,
                 'frames_processed': self._frames_processed,
                 'frames_dropped': self._frames_dropped,
-                'queue_size': queue_len,
+                'queue_size': self._queue.qsize(),
                 'queue_capacity': self.queue_size,
-                'queue_fill_percent': queue_len / self.queue_size * 100,
+                'queue_fill_percent': self._queue.qsize() / self.queue_size * 100,
                 'fps': round(fps, 1),
                 'drop_rate': (
                     self._frames_dropped / self._frames_received * 100
@@ -260,7 +278,7 @@ if IS_RDK:
             }
         
         @property
-        def last_nv12_data(self) -> Optional[bytes]:
+        def last_nv12_data(self) -> Optional[np.ndarray]:
             """Get raw NV12 data from last frame (for BPU optimization)."""
             return self._last_nv12_data
         
