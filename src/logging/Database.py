@@ -330,7 +330,8 @@ class DatabaseManager:
             rtsp_port,
             is_profiler_enabled,
             enable_display_key,
-            enable_recording_key
+            enable_recording_key,
+            container_qr_engine,
         )
         
         # Default values for config keys
@@ -342,7 +343,8 @@ class DatabaseManager:
             rtsp_port: '554',
             is_profiler_enabled: '0',
             enable_display_key: '0',
-            enable_recording_key: '0'
+            enable_recording_key: '0',
+            container_qr_engine: 'auto',
         }
         
         with self._cursor() as cursor:

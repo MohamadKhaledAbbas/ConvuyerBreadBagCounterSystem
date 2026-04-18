@@ -46,6 +46,10 @@ from src.utils.AppLogging import logger
 from src.utils.platform import IS_RDK, PLATFORM_NAME
 import src.constants as constants
 
+# Set PROCESS_DEBUG=1 to log per-step timing inside _process_frame.
+# Set PROCESS_DEBUG=2 for every-frame logging (very chatty).
+_PROCESS_DEBUG = int(os.environ.get('PROCESS_DEBUG', '0') or '0')
+
 
 class _PredictedDetection:
     """Lightweight stand-in for QRDetection used on tracker-predicted frames."""
@@ -553,6 +557,8 @@ class ContainerCounterApp:
         self._snapshot_writer: Optional[SnapshotWriter] = None
         self._content_recorder = None  # ContentCameraRecorder (optional)
         self._event_video = None       # EventVideoCoordinator (always set in _init_components)
+        self._qr_engine_requested: str = 'auto'
+        self._qr_engine_resolved: str = 'unknown'
         
         # Display
         self.enable_display = self.config.enable_display
@@ -665,7 +671,14 @@ class ContainerCounterApp:
         )
         
         # QR Detector
-        self.qr_detector = QRCodeDetector()
+        qr_engine = self.db.get_config(constants.container_qr_engine, 'auto')
+        self.qr_detector = QRCodeDetector(engine=qr_engine)
+        self._qr_engine_requested = qr_engine
+        self._qr_engine_resolved = self.qr_detector.engine_name
+        logger.info(
+            f"[ContainerCounterApp] QR engine requested={qr_engine} "
+            f"resolved={self.qr_detector.engine_name}"
+        )
         
         # Container Tracker
         # Frame width will be updated when first frame arrives
@@ -858,6 +871,7 @@ class ContainerCounterApp:
             fps = self.config.fps or 25
             frame_interval = 1.0 / fps
             frame_count = 0
+            _next_frame_time = time.time()  # budget-aware pacing
             
             if self.enable_display:
                 logger.info(
@@ -884,6 +898,8 @@ class ContainerCounterApp:
                 self._process_frame(frame)
                 frame_count += 1
                 
+                t_process = time.time() - frame_start
+                
                 if frame_count % 100 == 0:
                     logger.info(
                         f"[ContainerCounterApp] {frame_count} frames processed "
@@ -895,14 +911,29 @@ class ContainerCounterApp:
                 # check frame.  Snapshot capture always re-annotates on demand
                 # inside _maybe_capture_snapshot, so no DB read needed here.
                 need_annotated = self.enable_display or (self.state.frame_count % 5 == 0)
+                t_ann_start = time.time()
                 annotated = self._annotate_frame(frame) if need_annotated else frame
+                t_annotate = time.time() - t_ann_start
 
                 # Check on-demand snapshot request
                 self._maybe_capture_snapshot(frame)
                 
-                # Frame pacing + display
-                elapsed = time.time() - frame_start
-                remaining_ms = max(1, int((frame_interval - elapsed) * 1000))
+                # ── Budget-aware frame pacing ──
+                # Instead of sleeping (frame_interval - elapsed) per frame,
+                # maintain a running deadline.  If a detect frame overruns
+                # (e.g. 300 ms) the next 3 prediction frames skip the sleep
+                # entirely until the budget catches up.
+                _next_frame_time += frame_interval
+                now = time.time()
+                remaining = _next_frame_time - now
+                
+                # If we're more than 1 second behind, reset the deadline
+                # to avoid a burst catch-up after a long stall.
+                if remaining < -1.0:
+                    _next_frame_time = now
+                    remaining = 0.0
+                
+                remaining_ms = max(1, int(remaining * 1000))
                 
                 if self.enable_display and self._visualizer:
                     # waitKey handles both event-loop pumping and frame pacing
@@ -910,10 +941,21 @@ class ContainerCounterApp:
                     if not should_continue:
                         self._running = False
                         break
-                else:
-                    # Headless: use stop-event wait so SIGTERM exits without full sleep
-                    if self._stop_event.wait(timeout=remaining_ms / 1000.0):
+                elif remaining > 0.001:
+                    # Headless: only sleep if we're ahead of schedule
+                    if self._stop_event.wait(timeout=remaining):
                         break
+                
+                # Log per-frame timing every 50 frames
+                if frame_count % 50 == 0:
+                    is_det = ((self.state.frame_count - 1) % self._detect_interval == 0)
+                    logger.info(
+                        f"[Timing] frame={frame_count} "
+                        f"{'DETECT' if is_det else 'predict'} "
+                        f"process={t_process*1000:.0f}ms "
+                        f"annotate={t_annotate*1000:.1f}ms "
+                        f"sleep={remaining_ms}ms"
+                    )
                 
                 # Update FPS
                 self._update_fps()
@@ -944,6 +986,10 @@ class ContainerCounterApp:
         6. Handle completed captures
         """
         start_time = time.time()
+        _dbg = _PROCESS_DEBUG and (
+            _PROCESS_DEBUG >= 2 or (self.state.frame_count % 20 == 0)
+        )
+        _dbg_t = {}
 
         if frame is None or frame.size == 0:
             return
@@ -965,20 +1011,37 @@ class ContainerCounterApp:
             self._linear_predictor.set_frame_size(w, h)
 
         # Add frame to ring buffer for snapshots
+        _t = time.time()
         self.snapshotter.add_frame(frame)
+        if _dbg:
+            _dbg_t['snapshotter'] = (time.time() - _t) * 1000
 
         # Always compute half-res frame for the global pre-roll and
         # per-track event-video buffers.  cv2.resize at 720p→360p is
         # <1 ms so the overhead is negligible.
+        _t = time.time()
         half = cv2.resize(frame, (max(1, w // 2), max(1, h // 2)))
         self._qr_preroll.add(half, center_x=0)
+        if _dbg:
+            _dbg_t['half+preroll'] = (time.time() - _t) * 1000
 
         is_detect_frame = ((self.state.frame_count - 1) % self._detect_interval == 0)
         self._frame_detections = []   # reset per-frame viz list
 
         if is_detect_frame:
             # ── Full QR detection ──
+            t_qr_start = time.time()
             detections = self.qr_detector.detect_all(frame)
+            t_qr = time.time() - t_qr_start
+            if _dbg:
+                _dbg_t['qr_detect_all'] = t_qr * 1000
+            
+            # Log detection timing periodically (every 10th detect frame)
+            if (self.state.frame_count // self._detect_interval) % 10 == 0:
+                logger.info(
+                    f"[QR-Timing] detect_all={t_qr*1000:.0f}ms "
+                    f"found={len(detections)} frame#{self.state.frame_count}"
+                )
             self._last_detection = detections[0] if detections else None
 
             for detection in detections:
@@ -1125,6 +1188,14 @@ class ContainerCounterApp:
         self.state.active_tracks = len(current_tracks)
         self.state.pending_snapshots = self._snapshot_queue.qsize()
         self.state.processing_time_ms = (time.time() - start_time) * 1000
+
+        if _dbg:
+            total_ms = self.state.processing_time_ms
+            parts = ' '.join(f"{k}={v:.1f}ms" for k, v in _dbg_t.items())
+            logger.info(
+                f"[Process-DBG] frame#{self.state.frame_count} "
+                f"detect={is_detect_frame} total={total_ms:.1f}ms {parts}"
+            )
 
         # Warn when a single frame takes longer than its time budget (× 1.2 headroom).
         # This is the earliest signal that the pipeline is falling behind real-time
@@ -1618,6 +1689,8 @@ class ContainerCounterApp:
                 # Config / deployment info for the health page
                 'config_info': {
                     'qr_rtsp_source': cfg.video_source or 'rtsp',
+                    'qr_engine_requested': self._qr_engine_requested,
+                    'qr_engine_resolved': self._qr_engine_resolved,
                     'content_recording_enabled': cfg.content_recording_enabled,
                     'content_rtsp_host': cfg.content_rtsp_host if cfg.content_recording_enabled else None,
                     'content_rtsp_port': cfg.content_rtsp_port if cfg.content_recording_enabled else None,

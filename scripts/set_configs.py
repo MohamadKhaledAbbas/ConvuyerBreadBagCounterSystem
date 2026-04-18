@@ -106,6 +106,7 @@ def configure_tracking(conn, ni):
         ("container_exit_zone_ratio",          "0.05", "Exit-zone width ratio (0–0.5)"),
         ("container_lost_timeout",             "2.0",  "Lost-track timeout (seconds)"),
         ("container_detect_interval",          "3",    "Run QR detection every N frames"),
+        ("container_qr_engine",               "auto", "QR engine: auto (prefer wechat), wechat, legacy"),
         ("container_min_detections_for_event", "3",    "Min detections to confirm an event"),
     ]
     for key, default, label in configs:

@@ -14,6 +14,7 @@ Usage:
         qr_result = detector.detect(frame)
 """
 
+import os
 import queue
 import time
 from typing import Iterator, Optional, Tuple
@@ -22,6 +23,8 @@ import cv2
 
 from src.utils.AppLogging import logger
 from src.utils.platform import IS_RDK
+
+_FRAME_DEBUG = int(os.environ.get('FRAME_DEBUG', '0') or '0')
 
 # Container camera topic
 CONTAINER_NV12_TOPIC = '/nv12_images_container'
@@ -188,7 +191,9 @@ if IS_RDK:
                 nv12_data, latency_ms, (height, width) = item
                 
                 # Lazy NV12 → BGR conversion
+                t_convert_start = time.time()
                 bgr_frame = cv2.cvtColor(nv12_data, cv2.COLOR_YUV2BGR_NV12)
+                t_convert_ms = (time.time() - t_convert_start) * 1000
                 
                 # Store for BPU optimization
                 self._last_nv12_data = nv12_data
@@ -201,6 +206,12 @@ if IS_RDK:
                     logger.info(
                         f"[ContainerFrameServer] First frame yielded! "
                         f"{width}x{height}"
+                    )
+                if _FRAME_DEBUG and (_FRAME_DEBUG >= 2 or frame_count % 50 == 0):
+                    logger.info(
+                        f"[Frame-DBG] mode=ros2 frame={frame_count} "
+                        f"convert_ms={t_convert_ms:.1f} latency_ms={latency_ms:.1f} "
+                        f"drained={drained}"
                     )
                 
                 # Log stats periodically
@@ -322,6 +333,7 @@ else:
             self._target_fps = 25.0
             self._frame_interval = 1.0 / self._target_fps
             self._last_frame_time = 0.0
+            self._read_time_total = 0.0
             
             if source:
                 self._cap = cv2.VideoCapture(source)
@@ -348,9 +360,19 @@ else:
                 raise StopIteration
             
             if self._cap and self._cap.isOpened():
+                t_read_start = time.time()
                 ret, frame = self._cap.read()
+                t_read_ms = (time.time() - t_read_start) * 1000
                 if ret:
                     self._frames_processed += 1
+                    self._read_time_total += t_read_ms
+                    if _FRAME_DEBUG and (_FRAME_DEBUG >= 2 or self._frames_processed % 50 == 0):
+                        mean_read_ms = self._read_time_total / max(1, self._frames_processed)
+                        logger.info(
+                            f"[Frame-DBG] mode=opencv frame={self._frames_processed} "
+                            f"read_ms={t_read_ms:.1f} mean_read_ms={mean_read_ms:.1f} "
+                            f"shape={frame.shape}"
+                        )
                     return (frame, 0.0)
                 else:
                     # Video ended

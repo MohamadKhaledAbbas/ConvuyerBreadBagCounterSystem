@@ -51,6 +51,9 @@
 + scripts/
 + scripts/***
 
++ tmp_test/
++ tmp_test/**
+
 # Main application files
 + main.py
 + container_main.py

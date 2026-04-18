@@ -252,13 +252,16 @@ The monitor only escalates when a recovery action **succeeds** (command ran) but
 ### Check Topic Flow
 
 ```bash
-# RTSP input (~17-18 Hz expected)
+# RTSP ingest (encoded H.264 NAL/message rate, NOT camera FPS)
+# This topic may be much higher than the camera frame rate because one
+# video frame can produce multiple H.264 messages. Use it only as a
+# liveness check for ingest, not as a decoded FPS metric.
 ros2 topic hz /rtsp_image_ch_0
 
-# Spool output (~17-18 Hz expected)
+# Spool output (same encoded H.264 message stream characteristics)
 ros2 topic hz /spool_image_ch_0
 
-# Codec output (~17-18 Hz expected, 0 = stalled)
+# Codec output (decoded frame rate; this should track camera FPS, 0 = stalled)
 ros2 topic hz /nv12_images
 ```
 

@@ -370,6 +370,8 @@ async def health() -> JSONResponse:
             "processing_time_ms": container_data.get("processing_time_ms", 0),
             "camera_mode": c_cfg.get("camera_mode", "single"),
             "event_video_source": c_cfg.get("event_video_source", "qr"),
+            "qr_engine_requested": c_cfg.get("qr_engine_requested"),
+            "qr_engine_resolved": c_cfg.get("qr_engine_resolved") or container_data.get("qr_detector", {}).get("engine"),
             "content_recording_enabled": c_cfg.get("content_recording_enabled", False),
             "content_rtsp_host": c_cfg.get("content_rtsp_host"),
             "content_rtsp_port": c_cfg.get("content_rtsp_port"),

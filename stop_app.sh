@@ -12,6 +12,11 @@ echo "[INFO] Stopping all breadcount services via Supervisor..."
 # Stopping the services in one command is generally fastest
 sudo supervisorctl stop breadcount-uvicorn breadcount-main breadcount-ros2 breadcount-container-main breadcount-container-ros2 2>/dev/null
 
+# Clean up stale container ROS2 child processes left by older supervisor runs
+echo "[INFO] Cleaning up stale container ROS2 child processes..."
+pkill -f '__node:=container_rtsp_client' 2>/dev/null || true
+pkill -f '__node:=container_codec' 2>/dev/null || true
+
 # Check status using supervisorctl
 echo "[INFO] Checking service status..."
 

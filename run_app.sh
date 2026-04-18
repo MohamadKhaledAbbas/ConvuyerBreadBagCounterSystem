@@ -41,6 +41,12 @@ echo "[INFO] Stale artifact cleanup complete"
 echo "[INFO] Stopping all breadcount services for controlled startup..."
 sudo supervisorctl stop breadcount-ros2 breadcount-main breadcount-uvicorn breadcount-container-ros2 breadcount-container-main > /dev/null 2>&1
 
+# --- Clean up stale container ROS2 child processes left by older supervisor runs ---
+echo "[INFO] Cleaning up stale container ROS2 child processes..."
+pkill -f '__node:=container_rtsp_client' 2>/dev/null || true
+pkill -f '__node:=container_codec' 2>/dev/null || true
+echo "[INFO] Container ROS2 child cleanup complete"
+
 # --- Start services based on is_production ---
 if [ "$IS_DEVELOPMENT" = "1" ]; then
     echo "[INFO] Starting DEVELOPMENT services (MAIN, UVICORN, CONTAINER-MAIN)..."

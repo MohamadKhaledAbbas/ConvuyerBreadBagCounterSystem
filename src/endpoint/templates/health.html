@@ -445,6 +445,10 @@
                     <div class="value" id="cVideoSource">—</div>
                 </div>
                 <div class="info-card">
+                    <div class="label"><i class="fa-solid fa-microchip"></i> محرك QR</div>
+                    <div class="value eng" id="cQrEngine">—</div>
+                </div>
+                <div class="info-card">
                     <div class="label"><i class="fa-solid fa-network-wired"></i> IP — كاميرا QR</div>
                     <div class="value eng" id="cQrIp" style="font-size:1rem;">—</div>
                 </div>
@@ -612,6 +616,16 @@ const compLabels = {
     container:       'وحدة تتبع الحاويات',
 };
 
+function formatQrEngine(cont) {
+    const requested = cont && cont.qr_engine_requested ? String(cont.qr_engine_requested) : '';
+    const resolved = cont && cont.qr_engine_resolved ? String(cont.qr_engine_resolved) : '';
+    if (!requested && !resolved) return '—';
+    if (!requested) return resolved;
+    if (!resolved) return requested;
+    if (requested.toLowerCase() === resolved.toLowerCase()) return resolved;
+    return requested + ' → ' + resolved;
+}
+
 function renderComponents(components) {
     const grid = $('compGrid');
     const c = components || {};
@@ -660,13 +674,16 @@ function renderComponents(components) {
     } else if (cont.stale) {
         contDot    = 'yellow';
         contSub    = 'بيانات قديمة · ' + (cont.age_seconds != null ? cont.age_seconds.toFixed(0) + 'ث' : '');
-        contDetail = '';
+        contDetail = formatQrEngine(cont) !== '—' ? 'qr: ' + formatQrEngine(cont) : '';
     } else {
         contDot    = cont.healthy ? 'green' : 'red';
         contSub    = cont.healthy ? 'تعمل بكفاءة' : 'تحقق من الخدمة';
         const mode = cont.camera_mode === 'dual' ? '2 cameras' : '1 camera';
         contDetail = mode + ' · ' + (cont.fps || 0).toFixed(1) + ' fps'
                    + (cont.content_rtsp_host ? ' · content: ' + cont.content_rtsp_host : '');
+        if (formatQrEngine(cont) !== '—') {
+            contDetail += ' · qr: ' + formatQrEngine(cont);
+        }
     }
 
     grid.innerHTML =
@@ -736,6 +753,11 @@ function renderContainerSection(c) {
     const vsEl = $('cVideoSource');
     const vs = c.event_video_source || 'qr';
     vsEl.innerHTML = '<span class="badge ' + (vs === 'content' ? 'blue' : 'gray') + '">' + esc(vs) + '</span>';
+
+    const qrEngineEl = $('cQrEngine');
+    const qrEngine = formatQrEngine(c);
+    qrEngineEl.textContent = qrEngine;
+    qrEngineEl.className = 'value eng ' + (qrEngine === '—' ? 'muted' : 'primary');
 
     // IPs
     const qrIpEl = $('cQrIp');
