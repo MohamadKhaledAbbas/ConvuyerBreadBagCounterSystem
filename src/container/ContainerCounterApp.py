@@ -246,7 +246,14 @@ class ContainerConfig:
     # Snapshots
     pre_event_seconds: float = 5.0
     post_event_seconds: float = 5.0
-    snapshot_dir: str = "data/container_snapshots"
+    # Use the same absolute path that the web API reads from (CONTAINER_SNAPSHOT_DIR).
+    # A hardcoded relative fallback would diverge from paths.py when DATA_DIR
+    # points to a USB/SSD drive, making every event-video lookup a 404.
+    snapshot_dir: str = field(
+        default_factory=lambda: __import__(
+            'src.config.paths', fromlist=['CONTAINER_SNAPSHOT_DIR']
+        ).CONTAINER_SNAPSHOT_DIR
+    )
     save_video: bool = False
 
     # QR-camera event video (used as primary when event_video_source="qr"

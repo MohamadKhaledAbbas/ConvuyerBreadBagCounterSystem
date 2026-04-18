@@ -40,6 +40,41 @@ def get_container_repo(db: DatabaseManager = Depends(get_db)) -> ContainerReposi
     return ContainerRepository(db)
 
 
+def _event_id_from_path(path: Optional[str]) -> Optional[str]:
+    """Extract the event id from a stored relative path."""
+    if not path:
+        return None
+
+    parts = [part for part in str(path).replace("\\", "/").split("/") if part]
+    if not parts:
+        return None
+
+    last = parts[-1]
+    if last == "video.mp4" and len(parts) >= 2:
+        return parts[-2]
+    if last.endswith(".mp4") and len(last) > 4:
+        return last[:-4]
+    return last
+
+
+def _attach_event_video_info(event: dict) -> dict:
+    """Annotate an event payload with actual clip availability."""
+    metadata = event.get("metadata") or {}
+    event_id = (
+        _event_id_from_path(metadata.get("video_relpath"))
+        or _event_id_from_path(event.get("snapshot_path"))
+    )
+    video_path = _resolve_event_video_path(event_id) if event_id else None
+
+    enriched = dict(event)
+    enriched["video_event_id"] = event_id
+    enriched["has_video"] = bool(video_path)
+    enriched["video_url"] = (
+        f"/container/event/{event_id}/video" if video_path and event_id else None
+    )
+    return enriched
+
+
 # =============================================================================
 # HTML Pages
 # =============================================================================
@@ -159,6 +194,7 @@ async def get_container_events(
         limit=limit,
         offset=offset,
     )
+    events = [_attach_event_video_info(event) for event in events]
     
     total = repo.get_event_count(
         start_time=start_time,
@@ -190,7 +226,7 @@ async def get_container_event(
             content={"error": "Event not found"}
         )
     
-    return JSONResponse(content=event)
+    return JSONResponse(content=_attach_event_video_info(event))
 
 
 @router.get("/api/hourly")

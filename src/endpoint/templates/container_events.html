@@ -929,9 +929,24 @@ function getEventId(snapshotPath) {
 }
 
 function getVideoUrl(event) {
-    const id = getEventId(event.snapshot_path);
+    if (!event) return null;
+    if (event.video_url) return event.video_url;
+    if (event.has_video === false) return null;
+    if (getRecordingStatus(event) === 'no_video') return null;
+    const id = event.video_event_id || getEventId(event.snapshot_path);
     if (!id) return null;
     return '/container/event/' + encodeURIComponent(id) + '/video';
+}
+
+function getRecordingStatus(event) {
+    const meta = (event && event.metadata) || {};
+    return meta.recording_status || (event && event.recording_status) || 'ok';
+}
+
+function getMissingVideoMessage(event) {
+    return getRecordingStatus(event) === 'no_video'
+        ? 'لا يوجد مقطع محفوظ'
+        : 'مقطع الفيديو غير متاح';
 }
 
 function getCameraInfo(event) {
@@ -1067,7 +1082,7 @@ function renderEventCard(event, idx) {
         : `
             <div class="empty-art">
                 <i class="fa-solid fa-video-slash"></i>
-                لا يوجد مقطع محفوظ
+                ${getMissingVideoMessage(event)}
             </div>
         `;
 
@@ -1201,7 +1216,7 @@ function openFootage(event) {
 
     const content = document.getElementById('footageContent');
     if (!videoUrl) {
-        content.innerHTML = '<div class="modal-empty"><i class="fa-solid fa-video-slash"></i><div>لا يوجد مقطع محفوظ لهذا الحدث</div></div>';
+        content.innerHTML = `<div class="modal-empty"><i class="fa-solid fa-video-slash"></i><div>${getMissingVideoMessage(event)}</div></div>`;
     } else {
         const directionLabel = getDirectionLabel(event.direction || 'unknown');
         content.innerHTML = `

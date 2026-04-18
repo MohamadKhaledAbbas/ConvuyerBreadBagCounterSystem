@@ -660,6 +660,26 @@
         return last;
     }
 
+    function getEventRecordingStatus(event) {
+        const meta = (event && event.metadata) || {};
+        return meta.recording_status || (event && event.recording_status) || 'ok';
+    }
+
+    function getEventVideoUrl(event) {
+        if (!event) return null;
+        if (event.video_url) return event.video_url;
+        if (event.has_video === false) return null;
+        if (getEventRecordingStatus(event) === 'no_video') return null;
+        const eventId = event.video_event_id || getEventIdFromPath(event.snapshot_path || '');
+        return eventId ? '/container/event/' + encodeURIComponent(eventId) + '/video' : null;
+    }
+
+    function getMissingVideoMessage(event) {
+        return getEventRecordingStatus(event) === 'no_video'
+            ? 'لا يوجد مقطع محفوظ'
+            : 'مقطع الفيديو غير متاح';
+    }
+
     function renderEvents(events) {
         const body = document.getElementById('eventsBody');
         if (!events || events.length === 0) {
@@ -680,14 +700,14 @@
                 ? `مدة العبور: ${e.duration_seconds.toFixed(1)}s`
                 : '';
             const duration = `<span class="numbers" title="${esc(transitTitle)}">${esc(clipDur)}</span>`;
-            const eventId = getEventIdFromPath(e.snapshot_path || '');
-            const snapBtn = eventId
+            const videoUrl = getEventVideoUrl(e);
+            const snapBtn = videoUrl
                 ? `<button class="snap-btn" onclick="openFootage(${idx})"><i class="fa-solid fa-play"></i> عرض</button>`
                 : '<span class="snap-btn no-snap">—</span>';
             const statusBadge = e.is_lost
                 ? '<span class="status-badge lost"><i class="fa-solid fa-triangle-exclamation"></i> مفقود</span>'
                 : '<span class="status-badge complete"><i class="fa-solid fa-circle-check"></i> سليم</span>';
-            const recStatus = (e.metadata && e.metadata.recording_status) || (e.recording_status) || 'ok';
+            const recStatus = getEventRecordingStatus(e);
             let recBadge = '';
             if (recStatus === 'capped') {
                 recBadge = '<span class="status-badge capped" title="التسجيل قُطع بسبب وقوف الحاوية طويلاً"><i class="fa-solid fa-stopwatch"></i> مقطوع</span>';
@@ -714,15 +734,14 @@
     function openFootage(idx) {
         const event = (window._dashboardEvents || [])[idx];
         if (!event) return;
-        const eventId = getEventIdFromPath(event.snapshot_path || '');
-        const videoUrl = eventId ? '/container/event/' + encodeURIComponent(eventId) + '/video' : null;
+        const videoUrl = getEventVideoUrl(event);
         const dirLabel = event.direction === 'positive' ? 'خروج' : event.direction === 'negative' ? 'عودة' : '';
         const stateLabel = event.is_lost ? 'مفقود ويحتاج مراجعة' : 'مكتمل بدون مشكلة';
         document.getElementById('modalEventTitle').textContent =
             `حاوية ${event.qr_code_value}${dirLabel ? ' — ' + dirLabel : ''} — ${stateLabel}`;
         const content = document.getElementById('footageContent');
         if (!videoUrl) {
-            content.innerHTML = '<div class="modal-error"><i class="fa-solid fa-video-slash"></i> لا يوجد مقطع محفوظ</div>';
+            content.innerHTML = `<div class="modal-error"><i class="fa-solid fa-video-slash"></i> ${getMissingVideoMessage(event)}</div>`;
         } else {
             const time = event.timestamp ? new Date(event.timestamp).toLocaleString('en-GB', {hour12: false}) : '';
             const evMeta = event.metadata || {};
