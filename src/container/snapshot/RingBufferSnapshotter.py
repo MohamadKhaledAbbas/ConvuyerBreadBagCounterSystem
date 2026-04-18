@@ -348,6 +348,9 @@ class RingBufferSnapshotter:
         """
         Create an MP4 video from frames.
         
+        Prefers ffmpeg (H.264 + yuv420p + faststart) for browser-compatible
+        output.  Falls back to OpenCV ``mp4v`` if ffmpeg is not available.
+
         Args:
             frames: List of BGR frames
             output_path: Output video path
@@ -360,18 +363,78 @@ class RingBufferSnapshotter:
         
         try:
             height, width = frames[0].shape[:2]
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            writer = cv2.VideoWriter(output_path, fourcc, self.fps, (width, height))
-            
-            for frame in frames:
-                writer.write(frame)
-            
-            writer.release()
+            tmp_path = output_path + ".writing.mp4"
+
+            try:
+                self._write_video_ffmpeg(frames, tmp_path, self.fps, width, height)
+            except Exception as e:
+                logger.warning(
+                    f"[RingBufferSnapshotter] ffmpeg failed ({e}), falling back to OpenCV"
+                )
+                self._write_video_opencv(frames, tmp_path, self.fps, width, height)
+
+            if not os.path.exists(tmp_path):
+                logger.error(f"[RingBufferSnapshotter] No video output produced")
+                return False
+
+            os.replace(tmp_path, output_path)
             return True
             
         except Exception as e:
             logger.error(f"[RingBufferSnapshotter] Video creation failed: {e}")
             return False
+
+    @staticmethod
+    def _write_video_ffmpeg(
+        frames: List[np.ndarray], out_path: str,
+        fps: float, w: int, h: int,
+    ) -> None:
+        import shutil, subprocess
+        ffmpeg_bin = shutil.which("ffmpeg")
+        if not ffmpeg_bin:
+            raise FileNotFoundError("ffmpeg not found on PATH")
+        cmd = [
+            ffmpeg_bin, "-y",
+            "-f", "rawvideo", "-vcodec", "rawvideo",
+            "-s", f"{w}x{h}", "-pix_fmt", "bgr24", "-r", str(fps),
+            "-i", "pipe:0",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+            "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+            out_path,
+        ]
+        proc = subprocess.Popen(
+            cmd, stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        )
+        try:
+            for f in frames:
+                if f.shape[1] != w or f.shape[0] != h:
+                    f = cv2.resize(f, (w, h))
+                proc.stdin.write(f.tobytes())
+            proc.stdin.close()
+        except BrokenPipeError:
+            pass
+        proc.wait(timeout=120)
+        if proc.returncode != 0:
+            stderr = proc.stderr.read().decode(errors="replace")[-400:]
+            raise RuntimeError(f"ffmpeg exited {proc.returncode}: {stderr}")
+
+    @staticmethod
+    def _write_video_opencv(
+        frames: List[np.ndarray], out_path: str,
+        fps: float, w: int, h: int,
+    ) -> None:
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        writer = cv2.VideoWriter(out_path, fourcc, fps, (w, h))
+        if not writer.isOpened():
+            raise RuntimeError(f"VideoWriter failed to open {out_path}")
+        try:
+            for f in frames:
+                if f.shape[1] != w or f.shape[0] != h:
+                    f = cv2.resize(f, (w, h))
+                writer.write(f)
+        finally:
+            writer.release()
     
     def get_buffer_status(self) -> dict:
         """Get current buffer status."""

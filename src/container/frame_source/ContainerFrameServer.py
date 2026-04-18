@@ -54,7 +54,8 @@ if IS_RDK:
             self,
             topic: str = CONTAINER_NV12_TOPIC,
             queue_size: int = 30,
-            node_name: str = 'container_frame_server'
+            node_name: str = 'container_frame_server',
+            target_fps: float = 20.0,
         ):
             """
             Initialize the container frame server.
@@ -63,11 +64,16 @@ if IS_RDK:
                 topic: ROS2 topic to subscribe to
                 queue_size: Maximum frames to buffer
                 node_name: ROS2 node name
+                target_fps: Maximum frame rate to deliver to the consumer.
+                    Excess frames are silently dropped; set 0 to disable.
             """
             super().__init__(node_name)
             
             self.topic = topic
             self.queue_size = queue_size
+            self._target_fps = float(target_fps) if target_fps and target_fps > 0 else 0.0
+            self._min_frame_interval = (1.0 / self._target_fps) if self._target_fps else 0.0
+            self._last_yielded_time: float = 0.0
             
             # Frame queue (thread-safe deque)
             self._queue = deque(maxlen=queue_size)
@@ -166,6 +172,10 @@ if IS_RDK:
             """
             Get the next frame from the queue.
             
+            Drops buffered frames that are older than the target_fps interval
+            so the consumer always gets the freshest frame and never processes
+            stale backlog faster than the configured rate.
+
             Returns:
                 Tuple of (BGR frame, latency_ms)
                 
@@ -174,13 +184,32 @@ if IS_RDK:
             """
             # Spin ROS2 to receive frames
             rclpy.spin_once(self, timeout_sec=0.001)
-            
+
+            now = time.time()
+
+            # Target-FPS gate: if not enough time has elapsed since the last
+            # yielded frame, drain the queue (keep camera buffer from filling)
+            # but return an empty sentinel so the main loop sleeps.
+            if self._min_frame_interval and (now - self._last_yielded_time) < self._min_frame_interval:
+                # Drain excess so the queue never lags behind
+                with self._lock:
+                    while len(self._queue) > 1:
+                        self._queue.popleft()
+                        self._frames_dropped += 1
+                return (np.zeros((1, 1, 3), dtype=np.uint8), 0.0)
+
             with self._lock:
+                # Drop all but the newest frame to avoid processing stale backlog
+                while len(self._queue) > 1:
+                    self._queue.popleft()
+                    self._frames_dropped += 1
+
                 if self._queue:
                     self._frames_processed += 1
+                    self._last_yielded_time = now
                     return self._queue.popleft()
-            
-            # Return empty frame if queue is empty
+
+            # Queue empty — return sentinel
             return (np.zeros((1, 1, 3), dtype=np.uint8), 0.0)
         
         def get_frame(self, timeout: float = 0.1) -> Optional[Tuple[np.ndarray, float]]:

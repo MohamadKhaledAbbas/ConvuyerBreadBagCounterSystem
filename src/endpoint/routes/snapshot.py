@@ -388,9 +388,13 @@ async def snapshot_debug() -> dict:
 
 
 @router.get("/snapshot/info")
-async def snapshot_info() -> dict:
+async def snapshot_info(
+    camera: str = Query("bread", description="Camera source: bread or container"),
+) -> dict:
     """Get information about the current snapshot."""
-    _, meta = await run_in_threadpool(_read_snapshot)
+    if camera not in ("bread", "container"):
+        camera = "bread"
+    _, meta = await run_in_threadpool(_read_snapshot, False, camera)
 
     if not meta:
         return {
@@ -916,6 +920,25 @@ async def snapshot_view(
         
         // Auto-refresh if configured
         {auto_refresh_js}
+
+        // On page load, pre-fill info-bar from the last known snapshot meta
+        // so the bar never shows all dashes on first visit.
+        (async function preloadInfo() {{
+            try {{
+                const r = await fetch('/snapshot/info?camera=' + currentCamera, {{ cache: 'no-store' }});
+                if (!r.ok) return;
+                const d = await r.json();
+                if (!d.available) return;
+                frameNumText.textContent = '#' + (d.frame_number || '-');
+                const ageMs = d.age_seconds != null ? d.age_seconds * 1000 : 0;
+                frameAgeText.textContent = formatAge(ageMs);
+                statusDot.className = ageMs < 30000 ? 'status-dot live' : 'status-dot stale';
+                statusText.textContent = ageMs < 30000 ? 'آخر صورة محفوظة' : 'قديمة — التقط صورة جديدة';
+                if (d.width && d.height) {{
+                    img.alt = d.width + '×' + d.height;
+                }}
+            }} catch(_) {{}}
+        }})();
     </script>
 </body>
 </html>

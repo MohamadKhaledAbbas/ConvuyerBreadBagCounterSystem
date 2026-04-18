@@ -254,8 +254,13 @@ class ContainerConfig:
     event_video_max_seconds: float = 5.0  # hard cap on per-track buffered history
     event_video_stationary_px: int = 5    # overwrite last frame if QR barely moved
     
-    # State publishing
-    state_file: str = "data/container_pipeline_state.json"
+    # State publishing — uses the canonical path from paths.py so the health
+    # endpoint (which also reads CONTAINER_PIPELINE_STATE_FILE) always agrees.
+    state_file: str = field(
+        default_factory=lambda: __import__(
+            'src.config.paths', fromlist=['CONTAINER_PIPELINE_STATE_FILE']
+        ).CONTAINER_PIPELINE_STATE_FILE
+    )
     state_publish_interval: float = 1.0
     
     # Mismatch detection
@@ -734,7 +739,7 @@ class ContainerCounterApp:
             init_ros2_context()
             
             from src.container.frame_source.ContainerFrameServer import ContainerFrameServer
-            self.frame_server = ContainerFrameServer()
+            self.frame_server = ContainerFrameServer(target_fps=float(self.config.fps))
 
     def _init_content_recorder(self) -> None:
         """Initialize the optional content camera recorder.
@@ -868,6 +873,14 @@ class ContainerCounterApp:
                 
                 if max_frames and frame_count >= max_frames:
                     break
+
+                # Skip sentinel frames (1×1 empty) returned by the frame
+                # server when the queue is empty or FPS-gated.
+                if frame.shape[0] < 4 or frame.shape[1] < 4:
+                    # Still pump stop-event so SIGTERM isn't blocked
+                    if self._stop_event.wait(timeout=0.001):
+                        break
+                    continue
                 
                 frame_start = time.time()
                 
@@ -882,14 +895,14 @@ class ContainerCounterApp:
                         f"| QR detections={self.state.qr_detections}"
                     )
                 
-                # Annotate only when needed: display is on, OR this is a snapshot
-                # check frame.  At detect_interval=3 and 20 fps this skips ~67% of
-                # annotation work in headless production mode.
+                # Annotate only when needed: display is on, OR this is a periodic
+                # check frame.  Snapshot capture always re-annotates on demand
+                # inside _maybe_capture_snapshot, so no DB read needed here.
                 need_annotated = self.enable_display or (self.state.frame_count % 5 == 0)
                 annotated = self._annotate_frame(frame) if need_annotated else frame
 
                 # Check on-demand snapshot request
-                self._maybe_capture_snapshot(frame, annotated)
+                self._maybe_capture_snapshot(frame)
                 
                 # Frame pacing + display
                 elapsed = time.time() - frame_start
@@ -1162,12 +1175,14 @@ class ContainerCounterApp:
         
         return annotated
     
-    def _maybe_capture_snapshot(self, frame, annotated_frame) -> None:
+    def _maybe_capture_snapshot(self, frame) -> None:
         """
         Check if on-demand snapshot is requested via DB flag and capture.
 
         This enables /snapshot?camera=container in the web UI.
         Throttled to 1 Hz (time-based) to avoid excessive DB reads.
+        Always annotates the frame at capture time so the overlay is
+        guaranteed regardless of the main-loop annotation cadence.
         """
         if self.db is None or self._snapshot_writer is None:
             return
@@ -1182,10 +1197,13 @@ class ContainerCounterApp:
             if requested != "1":
                 return
             
+            # Always produce a fresh overlay for the snapshot
+            annotated = self._annotate_frame(frame)
+
             # Write snapshot (raw + annotated overlay)
             success = self._snapshot_writer.write_snapshot(
                 frame=frame,
-                frame_with_overlay=annotated_frame,
+                frame_with_overlay=annotated,
                 frame_number=self.state.frame_count,
             )
             

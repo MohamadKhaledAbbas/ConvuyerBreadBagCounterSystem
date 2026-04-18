@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, RedirectResponse, Response
 
 from src.endpoint.shared import get_db, get_templates, render_template
 from src.endpoint.repositories.container_repository import ContainerRepository
@@ -408,7 +408,7 @@ def _resolve_event_video_path(event_id: str) -> Optional[str]:
 
 
 @router.get("/event/{event_id}/video")
-async def get_event_clip(event_id: str):
+async def get_event_clip(event_id: str, request: Request):
     """Stream the event MP4 regardless of which camera produced it.
 
     Resolves the clip by checking both the QR-camera and content-camera
@@ -418,10 +418,44 @@ async def get_event_clip(event_id: str):
     path = _resolve_event_video_path(event_id)
     if path is None:
         return JSONResponse(status_code=404, content={"error": "Video not found"})
+
+    file_size = os.path.getsize(path)
+    range_header = request.headers.get("range")
+
+    if range_header:
+        # Parse "bytes=START-END"
+        range_spec = range_header.strip().lower()
+        if range_spec.startswith("bytes="):
+            range_spec = range_spec[6:]
+        parts = range_spec.split("-", 1)
+        start = int(parts[0]) if parts[0] else 0
+        end = int(parts[1]) if len(parts) > 1 and parts[1] else file_size - 1
+        end = min(end, file_size - 1)
+        length = end - start + 1
+
+        with open(path, "rb") as f:
+            f.seek(start)
+            data = f.read(length)
+
+        return Response(
+            content=data,
+            status_code=206,
+            media_type="video/mp4",
+            headers={
+                "Content-Range": f"bytes {start}-{end}/{file_size}",
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(length),
+                "Cache-Control": "no-cache",
+            },
+        )
+
     return FileResponse(
         path,
         media_type="video/mp4",
-        headers={"Accept-Ranges": "bytes"},
+        headers={
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(file_size),
+        },
     )
 
 
