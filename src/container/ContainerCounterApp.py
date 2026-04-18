@@ -1585,15 +1585,28 @@ class ContainerCounterApp:
         try:
             state_dict = self.state.to_dict()
             
+            now = time.time()
+            cfg = self.config
             state_data = {
-                'timestamp': time.time(),
-                'updated_at': time.time(),
+                'timestamp': now,
+                'updated_at': now,
                 # Flatten state fields to top level for health monitoring
                 **state_dict,
                 # Sub-component stats
                 'tracker': self.tracker.get_stats() if self.tracker else {},
                 'snapshotter': self.snapshotter.get_stats() if self.snapshotter else {},
                 'qr_detector': self.qr_detector.get_stats() if self.qr_detector else {},
+                # Config / deployment info for the health page
+                'config_info': {
+                    'qr_rtsp_source': cfg.video_source or 'rtsp',
+                    'content_recording_enabled': cfg.content_recording_enabled,
+                    'content_rtsp_host': cfg.content_rtsp_host if cfg.content_recording_enabled else None,
+                    'content_rtsp_port': cfg.content_rtsp_port if cfg.content_recording_enabled else None,
+                    'event_video_source': cfg.event_video_source,
+                    'camera_mode': 'dual' if cfg.content_recording_enabled else 'single',
+                    'detect_interval': cfg.detect_interval,
+                    'min_detections_for_event': cfg.min_detections_for_event,
+                },
             }
             
             # Atomic write

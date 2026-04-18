@@ -324,10 +324,21 @@ async def health() -> JSONResponse:
 
     # ── App-level processing metrics ──
     app_metrics = pipeline.get("app_metrics", {})
+    app_fps = app_metrics.get("fps", 0)
+    updated_at = pipeline.get("_updated_at", 0)
+    app_stale = (time.time() - updated_at) > 60 if updated_at else True
+    components["app"] = {
+        "healthy": not app_stale and app_fps > 0,
+        "fps": app_fps,
+        "stale": app_stale,
+    }
+    if app_stale and is_rdk_platform():
+        overall_status = "degraded"
+        degraded_reasons.append("تطبيق خط الإنتاج متوقف أو غير مستجيب")
 
     # ── End-to-end throughput summary ──
     throughput = {
-        "app_fps": app_metrics.get("fps", 0),
+        "app_fps": app_fps,
     }
 
     # ── Container pipeline (sale point / صالة) ──
@@ -344,13 +355,28 @@ async def health() -> JSONResponse:
         c_ts = container_data.get("timestamp") or container_data.get("updated_at") or 0
         c_age = (time.time() - c_ts) if c_ts else None
         c_stale = (c_age is not None and c_age > 60)
+        c_cfg = container_data.get("config_info", {})
         components["container"] = {
             "healthy": not c_stale,
             "stale": c_stale,
+            "age_seconds": round(c_age, 1) if c_age is not None else None,
             "fps": container_data.get("fps", 0),
+            "frame_count": container_data.get("frame_count", 0),
+            "active_tracks": container_data.get("active_tracks", 0),
             "total_positive": container_data.get("total_positive", 0),
             "total_negative": container_data.get("total_negative", 0),
-            "active_tracks": container_data.get("active_tracks", 0),
+            "total_lost": container_data.get("total_lost", 0),
+            "mismatch": container_data.get("mismatch", 0),
+            "processing_time_ms": container_data.get("processing_time_ms", 0),
+            "camera_mode": c_cfg.get("camera_mode", "single"),
+            "event_video_source": c_cfg.get("event_video_source", "qr"),
+            "content_recording_enabled": c_cfg.get("content_recording_enabled", False),
+            "content_rtsp_host": c_cfg.get("content_rtsp_host"),
+            "content_rtsp_port": c_cfg.get("content_rtsp_port"),
+            "detect_interval": c_cfg.get("detect_interval"),
+            "min_detections_for_event": c_cfg.get("min_detections_for_event"),
+            "tracker": container_data.get("tracker", {}),
+            "qr_detector": container_data.get("qr_detector", {}),
         }
         throughput["container_fps"] = container_data.get("fps", 0)
     else:

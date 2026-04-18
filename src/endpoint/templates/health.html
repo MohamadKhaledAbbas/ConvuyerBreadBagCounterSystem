@@ -256,6 +256,57 @@
         .tp-stage.tp-bad  .tp-value { color: var(--accent-danger); }
         .tp-stage.tp-na   .tp-value { color: var(--text-muted); }
 
+        /* ── Container / QR section ── */
+        .container-section {
+            margin-bottom: 2rem;
+        }
+        .container-offline {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-md);
+            padding: 1.2rem 1.5rem;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: .9rem;
+        }
+        .badge {
+            display: inline-block;
+            padding: .15rem .6rem;
+            border-radius: 20px;
+            font-size: .75rem;
+            font-weight: 700;
+            font-family: 'Inter', sans-serif;
+        }
+        .badge.ok   { background: rgba(45,212,191,.12); color: var(--accent-success); border: 1px solid rgba(45,212,191,.3); }
+        .badge.warn { background: rgba(251,191,36,.12); color: var(--accent-warning); border: 1px solid rgba(251,191,36,.3); }
+        .badge.err  { background: rgba(248,113,113,.12); color: var(--accent-danger); border: 1px solid rgba(248,113,113,.3); }
+        .badge.gray { background: rgba(100,116,139,.12); color: var(--text-muted); border: 1px solid rgba(100,116,139,.2); }
+        .badge.blue { background: rgba(56,189,248,.12); color: var(--accent-primary); border: 1px solid rgba(56,189,248,.3); }
+
+        /* ── Container / QR section ── */
+        .badge {
+            display: inline-block;
+            padding: .15rem .6rem;
+            border-radius: 20px;
+            font-size: .75rem;
+            font-weight: 700;
+            font-family: 'Inter', sans-serif;
+        }
+        .badge.ok   { background: rgba(45,212,191,.12); color: var(--accent-success); border: 1px solid rgba(45,212,191,.3); }
+        .badge.warn { background: rgba(251,191,36,.12); color: var(--accent-warning); border: 1px solid rgba(251,191,36,.3); }
+        .badge.err  { background: rgba(248,113,113,.12); color: var(--accent-danger); border: 1px solid rgba(248,113,113,.3); }
+        .badge.gray { background: rgba(100,116,139,.12); color: var(--text-muted); border: 1px solid rgba(100,116,139,.2); }
+        .badge.blue { background: rgba(56,189,248,.12); color: var(--accent-primary); border: 1px solid rgba(56,189,248,.3); }
+        .container-offline {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-md);
+            padding: 1.2rem 1.5rem;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: .9rem;
+        }
+
         @media (max-width: 600px) {
             .info-grid { grid-template-columns: 1fr 1fr; }
             .hero-title { font-size: 1.3rem; }
@@ -324,11 +375,9 @@
         </div>
     </div>
 
-    <!-- Pipeline components health -->
-    <div class="section-title"><i class="fa-solid fa-cubes"></i> مكونات خط الإنتاج</div>
-    <div class="comp-grid" id="compGrid">
-        <div class="comp-card"><div class="comp-dot gray"></div><div><div class="comp-name">جارٍ التحميل...</div></div></div>
-    </div>
+    <!-- System Components -->
+    <div class="section-title"><i class="fa-solid fa-cubes"></i> System Components</div>
+    <div class="comp-grid" id="compGrid" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));"></div>
 
     <!-- Throughput Pipeline -->
     <div class="section-title"><i class="fa-solid fa-gauge-high"></i> إنتاجية خط المعالجة</div>
@@ -366,6 +415,73 @@
         <div class="info-card">
             <div class="label"><i class="fa-solid fa-stopwatch"></i> زمن المعالجة</div>
             <div class="value eng" id="amProcTime">—</div>
+        </div>
+    </div>
+
+    <!-- QR Container Tracking Module -->
+    <div class="section-title"><i class="fa-solid fa-qrcode"></i> وحدة تتبع الحاويات — صالة QR</div>
+    <div class="container-section" id="containerSection">
+        <div class="container-offline" id="containerOffline">
+            <i class="fa-solid fa-circle-pause" style="color:var(--text-muted);margin-left:6px;"></i>
+            الوحدة غير مفعّلة أو غير متصلة
+        </div>
+        <div id="containerOnline" style="display:none;">
+            <!-- Status + Config row -->
+            <div class="info-grid" style="margin-bottom:1rem;">
+                <div class="info-card">
+                    <div class="label"><i class="fa-solid fa-circle-dot"></i> الحالة</div>
+                    <div class="value" id="cStatus">—</div>
+                </div>
+                <div class="info-card">
+                    <div class="label"><i class="fa-solid fa-film"></i> معدل المعالجة</div>
+                    <div class="value eng" id="cFps">—</div>
+                </div>
+                <div class="info-card">
+                    <div class="label"><i class="fa-solid fa-camera"></i> وضع الكاميرا</div>
+                    <div class="value" id="cCameraMode">—</div>
+                </div>
+                <div class="info-card">
+                    <div class="label"><i class="fa-solid fa-video"></i> مصدر الفيديو</div>
+                    <div class="value" id="cVideoSource">—</div>
+                </div>
+                <div class="info-card">
+                    <div class="label"><i class="fa-solid fa-network-wired"></i> IP — كاميرا QR</div>
+                    <div class="value eng" id="cQrIp" style="font-size:1rem;">—</div>
+                </div>
+                <div class="info-card">
+                    <div class="label"><i class="fa-solid fa-camera-rotate"></i> IP — كاميرا المحتوى</div>
+                    <div class="value eng" id="cContentIp" style="font-size:1rem;">—</div>
+                </div>
+            </div>
+            <!-- Counts row -->
+            <div class="info-grid" style="margin-bottom:1rem;">
+                <div class="info-card">
+                    <div class="label"><i class="fa-solid fa-arrow-right-to-bracket"></i> دخل (+)</div>
+                    <div class="value eng primary" id="cPositive">—</div>
+                </div>
+                <div class="info-card">
+                    <div class="label"><i class="fa-solid fa-arrow-right-from-bracket"></i> خرج (−)</div>
+                    <div class="value eng" id="cNegative">—</div>
+                </div>
+                <div class="info-card">
+                    <div class="label"><i class="fa-solid fa-triangle-exclamation"></i> عدم تطابق</div>
+                    <div class="value eng" id="cMismatch">—</div>
+                </div>
+                <div class="info-card">
+                    <div class="label"><i class="fa-solid fa-ghost"></i> مسارات مفقودة</div>
+                    <div class="value eng" id="cLost">—</div>
+                </div>
+                <div class="info-card">
+                    <div class="label"><i class="fa-solid fa-route"></i> مسارات نشطة</div>
+                    <div class="value eng" id="cActiveTracks">—</div>
+                </div>
+                <div class="info-card">
+                    <div class="label"><i class="fa-solid fa-stopwatch"></i> زمن معالجة الإطار</div>
+                    <div class="value eng" id="cProcTime">—</div>
+                </div>
+            </div>
+            <!-- Tracker / QR detector stats -->
+            <div class="comp-grid" id="cTrackerStats"></div>
         </div>
     </div>
 
@@ -493,30 +609,70 @@ const compLabels = {
     database:        'قاعدة البيانات',
     codec:           'وحدة فك الترميز',
     rtsp:            'بث الكاميرا',
+    container:       'وحدة تتبع الحاويات',
 };
 
 function renderComponents(components) {
     const grid = $('compGrid');
-    const allComps = Object.assign({}, components);
+    const c = components || {};
 
-    if (!allComps || Object.keys(allComps).length === 0) {
-        grid.innerHTML = '<div class="comp-card"><div class="comp-dot gray"></div><div><div class="comp-name">لا تتوفر بيانات</div></div></div>';
-        return;
+    function compCard(dotClass, title, subtitle, detail) {
+        return '<div class="comp-card" style="flex-direction:column;align-items:flex-start;gap:.4rem;padding:1rem 1.2rem;">'  
+             + '<div style="display:flex;align-items:center;gap:.6rem;">'
+             + '<div class="comp-dot ' + dotClass + '"></div>'
+             + '<div class="comp-name" style="font-size:.9rem;">' + title + '</div>'
+             + '</div>'
+             + (subtitle ? '<div class="comp-detail" style="font-size:.75rem;color:var(--text-secondary);padding-right:1.4rem;">' + subtitle + '</div>' : '')
+             + (detail   ? '<div class="comp-detail eng-cell" style="font-size:.7rem;padding-right:1.4rem;">' + esc(detail) + '</div>' : '')
+             + '</div>';
     }
-    let html = '';
-    for (const [key, val] of Object.entries(allComps)) {
-        if (key === 'recovery_stage' || key === 'escalation_count') continue;
-        const label = esc(compLabels[key] || key);
-        const healthy = val.healthy;
-        const dot = healthy === true ? 'green' : healthy === false ? 'red' : 'yellow';
-        const detail = esc(val.state || val.reason || val.status || '');
-        html += '<div class="comp-card">'
-              + '<div class="comp-dot ' + dot + '"></div>'
-              + '<div><div class="comp-name">' + label + '</div>'
-              + (detail ? '<div class="comp-detail eng-cell">' + detail + '</div>' : '')
-              + '</div></div>';
+
+    // 1. Database
+    const db = c.database || {};
+    const dbDot = db.healthy === true ? 'green' : db.healthy === false ? 'red' : 'gray';
+    const dbSub = db.healthy === true ? 'متصلة' : db.healthy === false ? 'غير متصلة' : 'غير معروف';
+
+    // 2. Conveyor (codec + rtsp + app)
+    const codec = c.codec || {};
+    const rtsp  = c.rtsp  || {};
+    const app   = c.app   || {};
+    // Conveyor is only green if the app is confirmed running (healthy===true).
+    // codec/rtsp: null means "not applicable" (dev/non-RDK) → treat as ok.
+    const appRunning = app.healthy === true;
+    const codecOk    = codec.healthy !== false;  // null = not applicable on dev
+    const rtspOk     = rtsp.healthy !== false;   // null = no data, treated as ok
+    const conveyorOk = appRunning && codecOk && rtspOk;
+    const conveyorDot = conveyorOk ? 'green' : 'red';
+    const codecState = codec.state || (codec.healthy === null ? 'غير مطبق' : codec.healthy ? 'healthy' : 'degraded');
+    let conveyorDetail = '';
+    if (codec.healthy !== undefined) conveyorDetail += 'codec: ' + codecState;
+    if (rtsp.healthy  !== undefined) conveyorDetail += (conveyorDetail ? ' · ' : '') + 'rtsp: ' + (rtsp.healthy ? 'ok' : rtsp.reason || 'down');
+    if (app.fps       !== undefined) conveyorDetail += (conveyorDetail ? ' · ' : '') + 'app: ' + (app.fps || 0).toFixed(1) + ' fps';
+    const conveyorSub = conveyorOk ? 'تعمل بكفاءة' : 'تحقق من المكونات';
+
+    // 3. Container QR tracking
+    const cont = c.container || {};
+    let contDot, contSub, contDetail;
+    if (cont.healthy === null || cont.healthy === undefined) {
+        contDot    = 'gray';
+        contSub    = 'غير مفعّل';
+        contDetail = '';
+    } else if (cont.stale) {
+        contDot    = 'yellow';
+        contSub    = 'بيانات قديمة · ' + (cont.age_seconds != null ? cont.age_seconds.toFixed(0) + 'ث' : '');
+        contDetail = '';
+    } else {
+        contDot    = cont.healthy ? 'green' : 'red';
+        contSub    = cont.healthy ? 'تعمل بكفاءة' : 'تحقق من الخدمة';
+        const mode = cont.camera_mode === 'dual' ? '2 cameras' : '1 camera';
+        contDetail = mode + ' · ' + (cont.fps || 0).toFixed(1) + ' fps'
+                   + (cont.content_rtsp_host ? ' · content: ' + cont.content_rtsp_host : '');
     }
-    grid.innerHTML = html || '<div class="comp-card"><div class="comp-dot gray"></div><div><div class="comp-name">لا تتوفر بيانات</div></div></div>';
+
+    grid.innerHTML =
+        compCard(dbDot,       'قاعدة البيانات — Database',       dbSub,       null) +
+        compCard(conveyorDot, 'خط الإنتاج — Conveyor',     conveyorSub, conveyorDetail) +
+        compCard(contDot,     'تتبع الحاويات — Container QR', contSub,     contDetail);
 }
 
 function tempColor(val) {
@@ -538,6 +694,102 @@ function renderStoragePaths(sp) {
     setPath('pathLog',       sp.log_dir);
     setPath('pathDb',        sp.db_path);
     setPath('pathSnapshot',  sp.snapshot_dir);
+}
+
+function renderContainerSection(c) {
+    const offEl = $('containerOffline');
+    const onEl  = $('containerOnline');
+
+    if (!c || c.healthy === null || c.healthy === undefined) {
+        offEl.style.display = '';
+        onEl.style.display  = 'none';
+        return;
+    }
+    offEl.style.display = 'none';
+    onEl.style.display  = '';
+
+    // Status badge
+    const stEl = $('cStatus');
+    if (c.stale) {
+        stEl.innerHTML = '<span class="badge warn">بيانات قديمة · ' + (c.age_seconds != null ? c.age_seconds.toFixed(0) + 'ث' : '') + '</span>';
+    } else if (c.healthy) {
+        stEl.innerHTML = '<span class="badge ok">تعمل</span>';
+    } else {
+        stEl.innerHTML = '<span class="badge err">متوقفة</span>';
+    }
+
+    // FPS
+    const fpsEl = $('cFps');
+    const fps = c.fps || 0;
+    fpsEl.textContent = fps.toFixed(1) + ' fps';
+    fpsEl.className = 'value eng ' + (fps >= 20 ? 'success' : fps >= 5 ? 'warning' : 'danger');
+
+    // Camera mode
+    const modeEl = $('cCameraMode');
+    if (c.camera_mode === 'dual') {
+        modeEl.innerHTML = '<span class="badge blue">كاميرتان (QR + محتوى)</span>';
+    } else {
+        modeEl.innerHTML = '<span class="badge gray">كاميرا واحدة (QR فقط)</span>';
+    }
+
+    // Video source
+    const vsEl = $('cVideoSource');
+    const vs = c.event_video_source || 'qr';
+    vsEl.innerHTML = '<span class="badge ' + (vs === 'content' ? 'blue' : 'gray') + '">' + esc(vs) + '</span>';
+
+    // IPs
+    const qrIpEl = $('cQrIp');
+    // QR camera IP is parsed from the RTSP URL or shown as RTSP
+    qrIpEl.textContent = 'RTSP';
+    qrIpEl.className = 'value eng primary';
+
+    const cIpEl = $('cContentIp');
+    if (c.content_recording_enabled && c.content_rtsp_host) {
+        cIpEl.textContent = c.content_rtsp_host + ':' + (c.content_rtsp_port || '554');
+        cIpEl.className = 'value eng primary';
+    } else {
+        cIpEl.textContent = 'غير مفعّل';
+        cIpEl.className = 'value eng muted';
+    }
+
+    // Counts
+    function setC(id, val, colorFn) {
+        const el = $(id);
+        el.textContent = (val || 0).toLocaleString('en');
+        el.className = 'value eng ' + (colorFn ? colorFn(val || 0) : '');
+    }
+    setC('cPositive',     c.total_positive, () => 'primary');
+    setC('cNegative',     c.total_negative, () => '');
+    const mm = c.mismatch || 0;
+    const mmEl = $('cMismatch');
+    mmEl.textContent = (mm > 0 ? '+' : '') + mm.toLocaleString('en');
+    mmEl.className = 'value eng ' + (Math.abs(mm) >= 5 ? 'danger' : Math.abs(mm) > 0 ? 'warning' : 'success');
+    setC('cLost',         c.total_lost,     v => v > 10 ? 'warning' : '');
+    setC('cActiveTracks', c.active_tracks,  v => v > 0 ? 'primary' : '');
+
+    const ptEl = $('cProcTime');
+    const pt = c.processing_time_ms;
+    ptEl.textContent = pt != null ? pt.toFixed(1) + ' ms' : '—';
+    ptEl.className = 'value eng ' + (pt != null ? (pt >= 200 ? 'warning' : 'success') : 'muted');
+
+    // Tracker + QR detector stats as small badges
+    const trackerStats = c.tracker || {};
+    const qrStats = c.qr_detector || {};
+    const statsGrid = $('cTrackerStats');
+    let statsHtml = '';
+    const statItems = [
+        ['إطارات تم تحليلها',   qrStats.frames_processed, null],
+        ['QR تم اكتشافها',       qrStats.detections_total, null],
+        ['مسارات أُنشئت',       trackerStats.tracks_created, null],
+        ['فاصل الاكتشاف',       c.detect_interval != null ? '1/' + c.detect_interval : null, null],
+        ['حد التأكيد',          c.min_detections_for_event != null ? c.min_detections_for_event + ' اكتشافات' : null, null],
+    ];
+    for (const [label, val] of statItems) {
+        if (val == null) continue;
+        statsHtml += '<div class="comp-card"><div><div class="comp-name">' + esc(label) + '</div>'
+                   + '<div class="comp-detail eng-cell">' + esc(String(val)) + '</div></div></div>';
+    }
+    statsGrid.innerHTML = statsHtml || '';
 }
 
 function renderSystemInfo(si) {
@@ -763,6 +1015,10 @@ async function checkHealth() {
             ? 'إطار/ث · ' + (data.app_metrics.processing_time_ms || 0).toFixed(1) + 'ms'
             : 'إطار/ث';
         setTpStage('tpApp', tp.app_fps, appSub);
+
+        // ── Container QR section ──
+        const cComp = (data.components || {}).container;
+        renderContainerSection(cComp);
 
         // ── App metrics ──
         const am = data.app_metrics || {};
