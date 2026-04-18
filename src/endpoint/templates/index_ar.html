@@ -4,9 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>منظومة إحصاء أكياس الخبز</title>
-    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" media="print" onload="this.media='all'">
     <style>
         :root {
             --bg-deep: #0f172a;
@@ -57,9 +58,11 @@
         }
         .particle {
             position: absolute;
-            background: radial-gradient(circle, rgba(56, 189, 248, 0.15), transparent);
+            background: radial-gradient(circle, rgba(56, 189, 248, 0.12), transparent);
             border-radius: 50%;
             animation: float 20s infinite;
+            will-change: transform;
+            contain: strict;
         }
         @keyframes float {
             0%, 100% { transform: translate(0, 0) scale(1); opacity: 0.3; }
@@ -108,13 +111,12 @@
 
         /* Status Banner */
         .status-banner {
-            background: var(--glass-bg);
+            background: rgba(30, 41, 59, 0.92);
             border: 1px solid var(--glass-border);
             border-radius: var(--radius-lg);
             padding: 2rem 2.5rem 1.5rem;
             margin-bottom: 3rem;
-            backdrop-filter: blur(10px);
-            animation: fadeIn 1s ease-out;
+            animation: fadeIn 0.3s ease-out;
             transition: border-color .5s, box-shadow .5s;
         }
         .status-banner.healthy {
@@ -226,18 +228,18 @@
         }
 
         .nav-card {
-            background: var(--glass-bg);
+            background: rgba(30, 41, 59, 0.92);
             border: 1px solid var(--glass-border);
             border-radius: var(--radius-lg);
             padding: 2rem;
             text-decoration: none;
             color: var(--text-primary);
-            transition: all 0.3s ease;
-            backdrop-filter: blur(10px);
+            transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
             position: relative;
             overflow: hidden;
-            animation: fadeInUp 0.6s ease-out;
+            animation: fadeInUp 0.25s ease-out;
             animation-fill-mode: both;
+            will-change: transform;
         }
         .nav-card:nth-child(1) { animation-delay: 0.1s; }
         .nav-card:nth-child(2) { animation-delay: 0.2s; }
@@ -359,10 +361,8 @@
 <body>
     <!-- Animated background -->
     <div class="particles">
-        <div class="particle" style="width: 100px; height: 100px; top: 10%; right: 20%; animation-delay: 0s;"></div>
-        <div class="particle" style="width: 150px; height: 150px; top: 50%; right: 70%; animation-delay: 3s;"></div>
-        <div class="particle" style="width: 80px; height: 80px; top: 70%; right: 30%; animation-delay: 6s;"></div>
-        <div class="particle" style="width: 120px; height: 120px; top: 20%; right: 80%; animation-delay: 9s;"></div>
+        <div class="particle" style="width: 120px; height: 120px; top: 15%; right: 20%; animation-delay: 0s;"></div>
+        <div class="particle" style="width: 100px; height: 100px; top: 60%; right: 75%; animation-delay: 5s;"></div>
     </div>
 
     <main>
@@ -413,6 +413,7 @@
 
         <!-- Navigation Grid -->
         <div class="nav-grid">
+            {% if show_counts_card %}
             <!-- Real-time Counts -->
             <a href="/counts" class="nav-card">
                 <div class="nav-card-icon success">
@@ -424,7 +425,9 @@
                 </div>
                 <i class="fa-solid fa-arrow-right nav-card-arrow"></i>
             </a>
+            {% endif %}
 
+            {% if show_analytics_card %}
             <!-- Analytics Dashboard -->
             <a href="/analytics" class="nav-card">
                 <div class="nav-card-icon primary">
@@ -436,7 +439,9 @@
                 </div>
                 <i class="fa-solid fa-arrow-right nav-card-arrow"></i>
             </a>
+            {% endif %}
 
+            {% if show_analytics_daily_card %}
             <!-- Analytics Daily -->
             <a href="/analytics/daily" class="nav-card">
                 <div class="nav-card-icon orange">
@@ -448,7 +453,9 @@
                 </div>
                 <i class="fa-solid fa-arrow-right nav-card-arrow"></i>
             </a>
+            {% endif %}
 
+            {% if show_lost_tracks_card %}
             <!-- Lost Tracks -->
             <a href="/lost-tracks" class="nav-card">
                 <div class="nav-card-icon danger">
@@ -460,7 +467,9 @@
                 </div>
                 <i class="fa-solid fa-arrow-right nav-card-arrow"></i>
             </a>
+            {% endif %}
 
+            {% if show_track_events_card %}
             <!-- Track Lifecycle Events -->
             <a href="/track-events" class="nav-card">
                 <div class="nav-card-icon warning">
@@ -472,7 +481,9 @@
                 </div>
                 <i class="fa-solid fa-arrow-right nav-card-arrow"></i>
             </a>
+            {% endif %}
 
+            {% if show_snapshot_card %}
             <!-- Camera Snapshot -->
             <a href="/snapshot/view" class="nav-card">
                 <div class="nav-card-icon purple">
@@ -484,7 +495,9 @@
                 </div>
                 <i class="fa-solid fa-arrow-right nav-card-arrow"></i>
             </a>
+            {% endif %}
 
+            {% if show_container_card %}
             <!-- Container Monitoring (Sale Point / صالة) -->
             <a href="/container" class="nav-card">
                 <div class="nav-card-icon" style="background: linear-gradient(135deg, #06b6d4, #0891b2);">
@@ -496,7 +509,9 @@
                 </div>
                 <i class="fa-solid fa-arrow-right nav-card-arrow"></i>
             </a>
+            {% endif %}
 
+            {% if show_endpoints_card %}
             <!-- API Documentation (separate page) -->
             <a href="/endpoints" class="nav-card">
                 <div class="nav-card-icon" style="background: linear-gradient(135deg, var(--accent-danger), var(--accent-orange));">
@@ -508,7 +523,9 @@
                 </div>
                 <i class="fa-solid fa-arrow-right nav-card-arrow"></i>
             </a>
+            {% endif %}
 
+            {% if show_guidelines_card %}
             <!-- Guidelines -->
             <a href="/guidelines" class="nav-card">
                 <div class="nav-card-icon" style="background:rgba(168,139,250,0.15);color:#a78bfa;">
@@ -520,6 +537,7 @@
                 </div>
                 <i class="fa-solid fa-arrow-right nav-card-arrow"></i>
             </a>
+            {% endif %}
         </div>
 
         <!-- Footer -->

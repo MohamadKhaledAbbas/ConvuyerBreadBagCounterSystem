@@ -20,6 +20,17 @@ container_rtsp_username = "container_rtsp_username"  # Same credentials
 container_rtsp_password = "container_rtsp_password"  # Same credentials
 container_snapshot_requested_key = "container_snapshot_requested"
 container_enable_display_key = "container_enable_display"
+container_ui_card_visible = "container_ui_card_visible"
+
+# UI card visibility toggles (each defaults to '1' = visible, except container)
+ui_card_counts_visible          = "ui_card_counts_visible"
+ui_card_analytics_visible       = "ui_card_analytics_visible"
+ui_card_analytics_daily_visible = "ui_card_analytics_daily_visible"
+ui_card_lost_tracks_visible     = "ui_card_lost_tracks_visible"
+ui_card_track_events_visible    = "ui_card_track_events_visible"
+ui_card_snapshot_visible        = "ui_card_snapshot_visible"
+ui_card_endpoints_visible       = "ui_card_endpoints_visible"
+ui_card_guidelines_visible      = "ui_card_guidelines_visible"
 
 # Container tracking configuration keys
 container_exit_zone_ratio = "container_exit_zone_ratio"  # Default: 0.15

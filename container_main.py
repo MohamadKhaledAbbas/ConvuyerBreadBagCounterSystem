@@ -41,9 +41,16 @@ import src.constants as constants
 # =============================================================================
 # Configuration — edit these variables instead of using command-line args
 # =============================================================================
-DEVELOPMENT = True             # Force development mode (video file instead of ROS2)
-ENABLE_DISPLAY = True           # Force enable cv2 display window
-VIDEO_PATH = os.path.expanduser('~/Downloads/cam_qr.mp4') # Path to video file (development only)
+if IS_RDK:
+    logger.info("Running on RDK platform - using RTSP stream by default")
+    DEVELOPMENT = False             # Force development mode (video file instead of ROS2)
+    ENABLE_DISPLAY = False           # Force enable cv2 display window
+    VIDEO_PATH = ""                # Path to video file (development only)
+else:
+    logger.info("Not running on RDK platform - using video file by default")
+    DEVELOPMENT = True              # Force development mode (video file instead of ROS2)
+    ENABLE_DISPLAY = True            # Force enable cv2 display window
+    VIDEO_PATH = os.path.expanduser('~/Downloads/cam_qr.mp4') # Path to video file (development only)
 MAX_FRAMES = None               # Max frames to process (None = infinite)
 DATABASE_PATH = str(DB_PATH)    # Path to database file
 

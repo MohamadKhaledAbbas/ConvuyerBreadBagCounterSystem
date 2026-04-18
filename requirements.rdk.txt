@@ -7,7 +7,18 @@
 # ============================================================================
 
 # Computer Vision
-opencv-python>=4.8.0,<5.0.0
+# opencv-contrib-python-headless is a strict superset of opencv-python (headless variant
+# removes GUI/GTK deps, better for embedded boards with no display).
+# It adds cv2.wechat_qrcode_WeChatQRCode (CNN QR detector) used by the container module.
+# DO NOT install plain opencv-python alongside this — they conflict.
+#
+# IMPORTANT: capped at <4.10.0 because opencv-contrib 4.10+ requires numpy>=2,
+# which breaks hobot_dnn (BPU library compiled against numpy 1.x).
+# 4.9.x has full WeChatQRCode support and is numpy-1.x compatible.
+opencv-contrib-python-headless>=4.8.0,<4.10.0
+
+# numpy MUST stay <2.0 — hobot_dnn (BPU) was compiled against numpy 1.x ABI.
+# opencv-contrib <4.10.0 is also compatible with this range.
 numpy>=1.24.0,<2.0.0
 
 # Scientific Computing (for Hungarian algorithm in tracking)

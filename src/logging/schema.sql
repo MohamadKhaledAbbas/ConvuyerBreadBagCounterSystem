@@ -301,11 +301,55 @@ CREATE INDEX IF NOT EXISTS idx_container_stats_period ON container_stats(period_
 -- ============================================================================
 
 INSERT OR IGNORE INTO config (key, value) VALUES
-    ('container_rtsp_host', '192.168.2.118'),
-    ('container_exit_zone_ratio', '0.10'),
-    ('container_lost_timeout', '2.0'),
-    ('container_pre_event_seconds', '5.0'),
-    ('container_post_event_seconds', '5.0');
+    -- Camera connection
+    ('container_rtsp_host',     '192.168.2.118'),
+    ('container_rtsp_port',     '554'),
+    ('container_rtsp_username', 'admin'),
+    ('container_rtsp_password', ''),
+    -- Tracking behaviour
+    ('container_exit_zone_ratio',          '0.05'),
+    ('container_lost_timeout',             '2.0'),
+    ('container_detect_interval',          '3'),
+    ('container_min_detections_for_event', '3'),
+    -- Snapshot ring buffer
+    ('container_pre_event_seconds',  '5.0'),
+    ('container_post_event_seconds', '5.0'),
+    -- Event video (QR-camera clip)
+    ('container_event_video_source',       'qr'),
+    ('container_event_video_fps',          '20'),
+    ('container_event_video_max_seconds',  '5.0'),
+    ('container_event_video_stationary_px','5'),
+    -- Content camera (3D-angle recorder, optional)
+    ('content_recording_enabled',    '0'),
+    ('content_rtsp_host',            '192.168.2.128'),
+    ('content_rtsp_port',            '554'),
+    ('content_rtsp_username',        'admin'),
+    ('content_rtsp_password',        ''),
+    ('content_rtsp_subtype',         '0'),
+    ('content_pre_event_seconds',    '3.0'),
+    ('content_post_event_seconds',   '2.0'),
+    ('content_buffer_seconds',       '5.0'),
+    ('content_video_fps',            '10'),
+    ('content_max_recording_seconds','15.0'),
+    -- Display
+    ('container_enable_display', '0'),
+    -- UI card visibility (1=visible, 0=hidden)
+    ('container_ui_card_visible',       '0'),
+    ('ui_card_counts_visible',          '1'),
+    ('ui_card_analytics_visible',       '1'),
+    ('ui_card_analytics_daily_visible', '1'),
+    ('ui_card_lost_tracks_visible',     '1'),
+    ('ui_card_track_events_visible',    '1'),
+    ('ui_card_snapshot_visible',        '1'),
+    ('ui_card_endpoints_visible',       '1'),
+    ('ui_card_guidelines_visible',      '1'),
+    -- Automatic data retention / purge
+    ('container_snapshots_retention_hours',      '72.0'),
+    ('container_snapshots_max_count',            '500'),
+    ('container_content_videos_retention_hours', '72.0'),
+    ('container_content_videos_max_count',       '200'),
+    ('container_db_events_retention_hours',      '168.0'),
+    ('container_purge_interval_minutes',         '60.0');
 
 -- ============================================================================
 -- Initial Data: Default Bag Types

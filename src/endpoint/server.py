@@ -131,7 +131,39 @@ async def root(request: Request):
         HTMLResponse: Main dashboard page with navigation cards in Arabic
     """
     templates = get_templates()
-    return render_template(templates, request, 'index_ar.html', {'version': APP_VERSION})
+    # Defaults (used if DB is unavailable)
+    card_flags = {
+        'show_counts_card':          True,
+        'show_analytics_card':       True,
+        'show_analytics_daily_card': True,
+        'show_lost_tracks_card':     True,
+        'show_track_events_card':    True,
+        'show_snapshot_card':        True,
+        'show_container_card':       False,
+        'show_endpoints_card':       True,
+        'show_guidelines_card':      True,
+    }
+    _card_keys = {
+        'show_counts_card':          ('ui_card_counts_visible',          '1'),
+        'show_analytics_card':       ('ui_card_analytics_visible',       '1'),
+        'show_analytics_daily_card': ('ui_card_analytics_daily_visible', '1'),
+        'show_lost_tracks_card':     ('ui_card_lost_tracks_visible',     '1'),
+        'show_track_events_card':    ('ui_card_track_events_visible',    '0'),
+        'show_snapshot_card':        ('ui_card_snapshot_visible',        '1'),
+        'show_container_card':       ('container_ui_card_visible',       '0'),
+        'show_endpoints_card':       ('ui_card_endpoints_visible',       '0'),
+        'show_guidelines_card':      ('ui_card_guidelines_visible',      '1'),
+    }
+    try:
+        db = get_db()
+        if db is not None:
+            # Single query for all config keys instead of N individual lookups
+            all_cfg = db.get_all_config()
+            for flag, (key, default) in _card_keys.items():
+                card_flags[flag] = all_cfg.get(key, default) == '1'
+    except Exception:
+        pass
+    return render_template(templates, request, 'index_ar.html', {'version': APP_VERSION, **card_flags})
 
 
 @app.get("/endpoints", response_class=HTMLResponse)

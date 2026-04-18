@@ -50,10 +50,15 @@
 
 # Main application files
 + main.py
++ container_main.py
 + run_endpoint.py
 + rtsp_h264_recorder.py
 + analyze_track_events.py
 + check_gpu.py
+
+# Supervisor program configs (deployed separately to /etc/supervisor/conf.d/)
++ supervisor/
++ supervisor/***
 
 # Configuration and requirements
 + .gitignore
@@ -78,6 +83,9 @@
 - data/model_converter/calibration_images
 - data/model_converter/Classify_Calibration
 + data/model_converter/***
+
++ data/model/wechat_qrcode/
++ data/model/wechat_qrcode/***
 
 # + data/db/
 # + data/db/***
