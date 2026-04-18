@@ -77,6 +77,8 @@ class ContainerVisualizer:
         detection: Optional[QRDetection],
         active_tracks: Dict[int, TrackedContainer],
         fps: float = 0.0,
+        avg_slack_ms: float = 0.0,
+        estimated_max_fps: float = 0.0,
         total_positive: int = 0,
         total_negative: int = 0,
         total_lost: int = 0,
@@ -134,7 +136,8 @@ class ContainerVisualizer:
 
         # Draw status panel
         self._draw_status_panel(
-            frame, fps, total_positive, total_negative, total_lost,
+            frame, fps, avg_slack_ms, estimated_max_fps,
+            total_positive, total_negative, total_lost,
             len(active_tracks), qr_positive, qr_negative,
             frame_mode=frame_mode,
         )
@@ -259,6 +262,8 @@ class ContainerVisualizer:
         self,
         frame: np.ndarray,
         fps: float,
+        avg_slack_ms: float,
+        estimated_max_fps: float,
         total_positive: int,
         total_negative: int,
         total_lost: int,
@@ -269,7 +274,7 @@ class ContainerVisualizer:
     ) -> None:
         """Draw the status/stats panel on top-left."""
         x, y = 10, 10
-        w, h_panel = 260, 255
+        w, h_panel = 260, 280
 
         if qr_positive:
             h_panel += 25 * len(qr_positive)
@@ -295,6 +300,22 @@ class ContainerVisualizer:
         )
         cv2.putText(
             frame, f"Active: {active_tracks}", (x + 140, cy),
+            self.FONT, self.FONT_SCALE_MEDIUM, self.COLORS['text_info'], 1
+        )
+
+        # Rolling pacing / headroom estimate
+        cy += 25
+        slack_color = (
+            self.COLORS['text_success'] if avg_slack_ms >= 15.0 else
+            self.COLORS['text_warning'] if avg_slack_ms >= 5.0 else
+            self.COLORS['text_error']
+        )
+        cv2.putText(
+            frame, f"Slack~: {avg_slack_ms:.0f}ms", (x + 10, cy),
+            self.FONT, self.FONT_SCALE_MEDIUM, slack_color, 1
+        )
+        cv2.putText(
+            frame, f"Est: {estimated_max_fps:.0f}", (x + 140, cy),
             self.FONT, self.FONT_SCALE_MEDIUM, self.COLORS['text_info'], 1
         )
 
@@ -457,7 +478,11 @@ class ContainerVisualizer:
             cv2.moveWindow(self.window_name, 100, 100)
             self._window_created = True
 
-        display_frame = cv2.resize(frame, self.display_size)
+        h, w = frame.shape[:2]
+        if (w, h) == self.display_size:
+            display_frame = frame
+        else:
+            display_frame = cv2.resize(frame, self.display_size)
         cv2.imshow(self.window_name, display_frame)
 
         key = cv2.waitKey(delay_ms) & 0xFF

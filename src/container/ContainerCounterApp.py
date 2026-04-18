@@ -238,6 +238,7 @@ class ContainerConfig:
     lost_timeout: float = 2.0
     min_displacement_ratio: float = 0.3
     detect_interval: int = 4  # Run QR detection every N-th frame
+    motion_threshold: float = 3.0  # Motion-gate mean abs diff threshold (0-255)
     # False-positive gate: a track must accumulate this many *real* QR
     # detections before it can emit an event.  Drops single-frame decoder
     # glitches that would otherwise count as containers.
@@ -341,6 +342,15 @@ class ContainerConfig:
         try:
             config.detect_interval = max(1, int(
                 db.get_config(constants.container_detect_interval, str(config.detect_interval))
+            ))
+        except ValueError:
+            pass
+        try:
+            config.motion_threshold = max(0.0, float(
+                db.get_config(
+                    constants.container_motion_threshold,
+                    str(config.motion_threshold),
+                )
             ))
         except ValueError:
             pass
@@ -488,6 +498,10 @@ class ContainerState:
     frame_count: int = 0
     qr_detections: int = 0
     processing_time_ms: float = 0.0
+    avg_work_ms: float = 0.0
+    avg_slack_ms: float = 0.0
+    estimated_max_fps: float = 0.0
+    budget_utilization_pct: float = 0.0
     
     # Recent events (last 10)
     recent_events: List[Dict] = field(default_factory=list)
@@ -519,6 +533,29 @@ class ContainerState:
             if len(self.recent_events) > 10:
                 self.recent_events.pop(0)
             self.last_event_time = event.get('timestamp')
+
+    def update_pacing_metrics(
+        self,
+        work_ms: float,
+        slack_ms: float,
+        budget_ms: float,
+        alpha: float = 0.3,
+    ) -> None:
+        """Update rolling pacing metrics used for logs and UI."""
+        with self._lock:
+            if self.avg_work_ms > 0.0:
+                self.avg_work_ms = alpha * work_ms + (1.0 - alpha) * self.avg_work_ms
+                self.avg_slack_ms = alpha * slack_ms + (1.0 - alpha) * self.avg_slack_ms
+            else:
+                self.avg_work_ms = work_ms
+                self.avg_slack_ms = slack_ms
+
+            self.estimated_max_fps = (
+                1000.0 / self.avg_work_ms if self.avg_work_ms > 0.001 else 0.0
+            )
+            self.budget_utilization_pct = (
+                self.avg_work_ms / budget_ms * 100.0 if budget_ms > 0.001 else 0.0
+            )
     
     def to_dict(self) -> Dict:
         """Convert state to dictionary for JSON serialization."""
@@ -534,6 +571,10 @@ class ContainerState:
                 'frame_count': self.frame_count,
                 'qr_detections': self.qr_detections,
                 'processing_time_ms': round(self.processing_time_ms, 2),
+                'avg_work_ms': round(self.avg_work_ms, 2),
+                'avg_slack_ms': round(self.avg_slack_ms, 2),
+                'estimated_max_fps': round(self.estimated_max_fps, 1),
+                'budget_utilization_pct': round(self.budget_utilization_pct, 1),
                 'active_tracks': self.active_tracks,
                 'pending_snapshots': self.pending_snapshots,
                 'recent_events': self.recent_events.copy(),
@@ -613,12 +654,9 @@ class ContainerCounterApp:
         # below the threshold the frame is treated as a predict frame.
         self._prev_detect_gray = None  # numpy array or None
         # Mean absolute pixel difference threshold (0-255 scale).
-        # 3.0 is conservative — typical static-scene noise is <1.5,
-        # a moving container produces >8.
-        _MOTION_THRESHOLD_DEFAULT = 3.0
-        self._motion_threshold: float = float(
-            os.environ.get('QR_MOTION_THRESHOLD', _MOTION_THRESHOLD_DEFAULT)
-        )
+        # Typical static-scene noise is <1.5, while real movement is often >8,
+        # but some cameras need a higher threshold because of compression noise.
+        self._motion_threshold: float = self.config.motion_threshold
         
         # Per-track rolling buffer for event-video frames.  Decoupled
         # from ``detect_interval`` so the final clip can run at full fps.
@@ -710,9 +748,11 @@ class ContainerCounterApp:
                 frame_w=self._frame_size[0],
                 frame_h=self._frame_size[1],
             )
+        self._motion_threshold = max(0.0, float(self.config.motion_threshold))
         logger.info(
             f"[ContainerCounterApp] Display enabled: {self.enable_display}, "
-            f"detect_interval={self._detect_interval} (from DB config)"
+            f"detect_interval={self._detect_interval}, "
+            f"motion_threshold={self._motion_threshold:.1f} (from DB config)"
         )
         
         # QR Detector
@@ -992,7 +1032,12 @@ class ContainerCounterApp:
                     _next_frame_time = now
                     remaining = 0.0
                 
+                budget_ms = frame_interval * 1000.0
+                work_ms = max(0.0, (now - frame_start) * 1000.0)
+                slack_ms = max(0.0, remaining * 1000.0)
+                self.state.update_pacing_metrics(work_ms, slack_ms, budget_ms)
                 remaining_ms = max(1, int(remaining * 1000))
+                t_present_start = time.time()
                 
                 if self.enable_display and self._visualizer:
                     # waitKey handles both event-loop pumping and frame pacing
@@ -1004,16 +1049,25 @@ class ContainerCounterApp:
                     # Headless: only sleep if we're ahead of schedule
                     if self._stop_event.wait(timeout=remaining):
                         break
+                t_present = time.time() - t_present_start
                 
                 # Log per-frame timing every 50 frames
                 if frame_count % 50 == 0:
-                    is_det = ((self.state.frame_count - 1) % self._detect_interval == 0)
+                    mode_label = {
+                        'detect': 'DETECT',
+                        'predict': 'PREDICT',
+                        'gate': 'GATE',
+                    }.get(self._frame_mode, str(self._frame_mode).upper())
                     logger.info(
                         f"[Timing] frame={frame_count} "
-                        f"{'DETECT' if is_det else 'predict'} "
+                        f"{mode_label} "
                         f"process={t_process*1000:.0f}ms "
                         f"annotate={t_annotate*1000:.1f}ms "
-                        f"sleep={remaining_ms}ms"
+                        f"present={t_present*1000:.1f}ms "
+                        f"sleep={remaining_ms}ms "
+                        f"work_avg={self.state.avg_work_ms:.1f}ms "
+                        f"slack_avg={self.state.avg_slack_ms:.1f}ms "
+                        f"est_app_max={self.state.estimated_max_fps:.1f}fps"
                     )
                 
                 # Update FPS
@@ -1285,6 +1339,8 @@ class ContainerCounterApp:
             detection=self._last_detection,
             active_tracks=self._current_tracks,
             fps=self.state.fps,
+            avg_slack_ms=self.state.avg_slack_ms,
+            estimated_max_fps=self.state.estimated_max_fps,
             total_positive=self.state.total_positive,
             total_negative=self.state.total_negative,
             total_lost=self.state.total_lost,
@@ -1894,6 +1950,7 @@ class ContainerCounterApp:
                     'event_video_source': cfg.event_video_source,
                     'camera_mode': 'dual' if cfg.content_recording_enabled else 'single',
                     'detect_interval': cfg.detect_interval,
+                    'motion_threshold': cfg.motion_threshold,
                     'min_detections_for_event': cfg.min_detections_for_event,
                 },
             }

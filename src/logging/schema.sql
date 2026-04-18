@@ -310,6 +310,7 @@ INSERT OR IGNORE INTO config (key, value) VALUES
     ('container_exit_zone_ratio',          '0.05'),
     ('container_lost_timeout',             '2.0'),
     ('container_detect_interval',          '3'),
+    ('container_motion_threshold',         '3.0'),
     ('container_min_detections_for_event', '3'),
     -- Snapshot ring buffer
     ('container_pre_event_seconds',  '5.0'),

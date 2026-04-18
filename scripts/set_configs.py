@@ -106,6 +106,7 @@ def configure_tracking(conn, ni):
         ("container_exit_zone_ratio",          "0.05", "Exit-zone width ratio (0–0.5)"),
         ("container_lost_timeout",             "2.0",  "Lost-track timeout (seconds)"),
         ("container_detect_interval",          "3",    "Run QR detection every N frames"),
+        ("container_motion_threshold",         "3.0",  "Motion-gate threshold (raise if idle scene still detects)"),
         ("container_qr_engine",               "auto", "QR engine: auto or wechat (WeChatQRCode CNN)"),
         ("container_min_detections_for_event", "3",    "Min detections to confirm an event"),
     ]

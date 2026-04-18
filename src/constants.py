@@ -38,6 +38,7 @@ container_lost_timeout = "container_lost_timeout"  # Default: 2.0 seconds
 container_pre_event_seconds = "container_pre_event_seconds"  # Default: 5.0
 container_post_event_seconds = "container_post_event_seconds"  # Default: 5.0
 container_detect_interval = "container_detect_interval"  # Default: 3 (detect every N-th frame)
+container_motion_threshold = "container_motion_threshold"  # Default: 3.0 (motion-gate mean diff)
 container_qr_engine = "container_qr_engine"  # 'wechat' or 'auto' (default: 'auto')
 
 # Minimum number of confirmed QR detections before a track emits an event.
@@ -107,6 +108,7 @@ CONTAINER_CONFIG_KEYS = [
     container_pre_event_seconds,
     container_post_event_seconds,
     container_detect_interval,
+    container_motion_threshold,
     container_qr_engine,
     container_min_detections_for_event,
     container_event_video_source,

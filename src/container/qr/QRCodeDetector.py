@@ -341,6 +341,7 @@ class QRCodeDetector:
         """Get detection statistics."""
         return {
             'engine': self._engine_name,
+            'detect_width': self._detect_width,
             'total_frames': self._frame_count,
             'total_detections': self.detection_count,
             'detection_rate': (
