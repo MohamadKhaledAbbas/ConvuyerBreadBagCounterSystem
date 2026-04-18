@@ -3,7 +3,10 @@ QR Code Detector using OpenCV WeChatQRCode (CNN-based).
 
 Uses the WeChat neural-network QR detector from opencv-contrib for robust
 detection under perspective distortion, tilt, blur, and compression artefacts.
-Falls back to the classic cv2.QRCodeDetector when WeChatQRCode is unavailable.
+
+Input frames are resized to 640px width before detection for performance
+(~4× faster on RDK); detected bounding boxes are scaled back to original
+frame coordinates so callers are unaffected.
 
 Container QR codes contain values 1-5 representing the container number.
 
@@ -60,64 +63,57 @@ class QRCodeDetector:
     """
     QR code detector for container tracking.
     
-    Primary engine: WeChatQRCode (CNN-based, handles perspective/tilt/blur).
-    Fallback engine: cv2.QRCodeDetector (traditional, no model files needed).
-    
-    The detector is transparent to callers — all public methods return the
-    same QRDetection objects regardless of which engine is active.
+    Engine: WeChatQRCode (CNN-based, handles perspective/tilt/blur).
+    Frames are resized to ``detect_width`` (default 640) before detection
+    for performance; bounding boxes are scaled back to original coordinates.
     """
     
     # Valid container QR code values
     VALID_QR_VALUES = {'1', '2', '3', '4', '5'}
+
+    # Default width for the detection frame (px).  640 gives ~4× speedup
+    # over 1280 on RDK while preserving QR decode accuracy.
+    DEFAULT_DETECT_WIDTH = 640
     
-    def __init__(self, model_dir: Optional[str] = None, engine: str = 'auto'):
+    def __init__(self, model_dir: Optional[str] = None, engine: str = 'auto',
+                 detect_width: int = DEFAULT_DETECT_WIDTH):
         """
         Initialize QR detector.
         
         Args:
             model_dir: Path to WeChatQRCode model files.
-            engine: 'wechat' — force CNN detector,
-                    'legacy'  — force classic cv2.QRCodeDetector,
-                    'auto'    — try WeChatQRCode first, fall back to legacy.
+            engine: 'wechat' or 'auto' — both use WeChatQRCode CNN detector.
+                    'legacy' is no longer supported and will raise an error.
+            detect_width: Resize frames to this width before detection (0 = no resize).
         """
         self.last_detection: Optional[QRDetection] = None
         self.detection_count: int = 0
         self._frame_count: int = 0
+        self._detect_width: int = max(0, detect_width)
         
         self._wechat: Optional[cv2.wechat_qrcode_WeChatQRCode] = None
-        self._legacy: Optional[cv2.QRCodeDetector] = None
         self._engine_name: str = "unknown"
         
         mdir = model_dir or _DEFAULT_MODEL_DIR
-        
+
         if engine == 'legacy':
-            # Explicit legacy — skip WeChatQRCode entirely
-            self._legacy = cv2.QRCodeDetector()
-            self._has_multi = hasattr(self._legacy, 'detectAndDecodeMulti')
-            self._engine_name = "cv2.QRCodeDetector"
-        elif engine == 'wechat':
-            self._wechat = self._try_init_wechat(mdir)
-            if self._wechat is None:
-                raise RuntimeError(
-                    f"engine='wechat' requested but WeChatQRCode init failed "
-                    f"(model_dir={mdir})"
-                )
-            self._engine_name = "WeChatQRCode"
-        else:
-            # auto: try WeChatQRCode, fall back to legacy
-            self._wechat = self._try_init_wechat(mdir)
-            if self._wechat is not None:
-                self._engine_name = "WeChatQRCode"
-            else:
-                self._legacy = cv2.QRCodeDetector()
-                self._has_multi = hasattr(self._legacy, 'detectAndDecodeMulti')
-                self._engine_name = "cv2.QRCodeDetector"
-                logger.warning(
-                    "[QRCodeDetector] WeChatQRCode unavailable — using legacy "
-                    "cv2.QRCodeDetector (reduced perspective tolerance)"
-                )
+            raise ValueError(
+                "engine='legacy' is no longer supported. "
+                "Use 'wechat' or 'auto' (WeChatQRCode CNN detector)."
+            )
         
-        logger.info(f"[QRCodeDetector] Initialized with engine={self._engine_name}")
+        self._wechat = self._try_init_wechat(mdir)
+        if self._wechat is None:
+            raise RuntimeError(
+                f"WeChatQRCode init failed (model_dir={mdir}). "
+                f"Ensure opencv-contrib-python is installed and model files exist."
+            )
+        self._engine_name = "WeChatQRCode"
+        
+        logger.info(
+            f"[QRCodeDetector] Initialized engine={self._engine_name} "
+            f"detect_width={self._detect_width or 'native'}"
+        )
 
     @property
     def engine_name(self) -> str:
@@ -158,26 +154,11 @@ class QRCodeDetector:
             logger.warning(f"[QRCodeDetector] WeChatQRCode init failed: {e}")
             return None
     
-    @staticmethod
-    def _preprocess(frame: np.ndarray) -> np.ndarray:
-        """Convert to grayscale and apply adaptive threshold to sharpen QR modules."""
-        if len(frame.shape) == 3:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        else:
-            gray = frame
-        # Adaptive threshold recovers sharp black/white QR modules
-        # even through MJPG / lossy codec compression artifacts.
-        return cv2.adaptiveThreshold(
-            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY, blockSize=51, C=10
-        )
-    
+    # ── WeChatQRCode engine ──────────────────────────────────────────────
+
     def detect(self, frame: np.ndarray) -> Optional[QRDetection]:
         """
         Detect and decode a single QR code in the given frame.
-        
-        Tries raw frame first, then falls back to preprocessed version
-        for better accuracy on compressed video frames.
         
         Args:
             frame: BGR or grayscale image (numpy array)
@@ -187,13 +168,12 @@ class QRCodeDetector:
         """
         results = self.detect_all(frame)
         return results[0] if results else None
-    
+
     def detect_all(self, frame: np.ndarray) -> List[QRDetection]:
         """
-        Detect all QR codes in the frame.
-        
-        Uses WeChatQRCode (CNN) when available, otherwise falls back to
-        the legacy detector with preprocessing variants.
+        Detect all QR codes in the frame using WeChatQRCode CNN detector.
+        Frames wider than ``detect_width`` are resized down before detection;
+        bounding boxes are scaled back to original coordinates.
         
         Args:
             frame: BGR or grayscale image
@@ -225,11 +205,19 @@ class QRCodeDetector:
                 f"contiguous={frame.flags['C_CONTIGUOUS']} engine={self._engine_name}"
             )
 
-        t0 = time.time()
-        if self._wechat is not None:
-            detections = self._detect_wechat(frame)
+        # Resize to detect_width for faster CNN inference.
+        # Bounding boxes are scaled back to original coordinates below.
+        h_orig, w_orig = frame.shape[:2]
+        scale = 1.0
+        if self._detect_width and w_orig > self._detect_width:
+            scale = w_orig / self._detect_width
+            new_h = max(1, int(h_orig / scale))
+            frame_det = cv2.resize(frame, (self._detect_width, new_h))
         else:
-            detections = self._detect_legacy(frame)
+            frame_det = frame
+
+        t0 = time.time()
+        detections = self._detect_wechat(frame_det, scale)
         t_engine = (time.time() - t0) * 1000
 
         if _QR_DEBUG and (_QR_DEBUG >= 2 or self._frame_count % 20 == 1):
@@ -250,10 +238,13 @@ class QRCodeDetector:
         
         return detections
     
-    # ── WeChatQRCode engine ──────────────────────────────────────────────
-    
-    def _detect_wechat(self, frame: np.ndarray) -> List[QRDetection]:
-        """Detect QR codes using WeChatQRCode CNN detector."""
+    def _detect_wechat(self, frame: np.ndarray, scale: float = 1.0) -> List[QRDetection]:
+        """Detect QR codes using WeChatQRCode CNN detector.
+        
+        Args:
+            frame: (possibly resized) BGR image.
+            scale: factor to multiply bbox coordinates by to map back to original resolution.
+        """
         detections: List[QRDetection] = []
         try:
             t0 = time.time()
@@ -262,13 +253,13 @@ class QRCodeDetector:
             if _QR_DEBUG and (_QR_DEBUG >= 2 or self._frame_count % 20 == 1):
                 logger.info(
                     f"[QR-DBG] wechat.detectAndDecode={t_call:.1f}ms "
-                    f"texts={len(texts) if texts else 0}"
+                    f"texts={len(texts) if texts else 0} scale={scale:.2f}"
                 )
             if texts and points is not None:
                 for text, pts in zip(texts, points):
                     if not text:
                         continue
-                    det = self._build_detection(text, pts)
+                    det = self._build_detection(text, pts, scale)
                     if det:
                         detections.append(det)
         except Exception as e:
@@ -276,84 +267,19 @@ class QRCodeDetector:
                 logger.warning(f"[QRCodeDetector] WeChatQRCode error: {e}")
         return detections
     
-    # ── Legacy engine (fallback) ─────────────────────────────────────────
-    
-    def _detect_legacy(self, frame: np.ndarray) -> List[QRDetection]:
-        """Detect using cv2.QRCodeDetector with preprocessing fallbacks."""
-        t0 = time.time()
-        raw_dets = self._detect_multi_legacy(frame)
-        t_raw = (time.time() - t0) * 1000
-
-        seen_values = {d.value for d in raw_dets}
-        merged = list(raw_dets)
-
-        if len(frame.shape) == 3:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        else:
-            gray = frame
-
-        t_pp_passes = []
-        for label, preprocess_fn in (
-            ('adaptive', lambda g: cv2.adaptiveThreshold(
-                g, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                cv2.THRESH_BINARY, blockSize=51, C=10)),
-            ('otsu', lambda g: cv2.threshold(
-                g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]),
-        ):
-            try:
-                tp0 = time.time()
-                pp = preprocess_fn(gray)
-                t_pp = (time.time() - tp0) * 1000
-                td0 = time.time()
-                pp_dets = self._detect_multi_legacy(pp)
-                t_det = (time.time() - td0) * 1000
-                t_pp_passes.append((label, t_pp, t_det, len(pp_dets)))
-                for d in pp_dets:
-                    if d.value not in seen_values:
-                        merged.append(d)
-                        seen_values.add(d.value)
-            except Exception:
-                pass
-
-        if _QR_DEBUG and (_QR_DEBUG >= 2 or self._frame_count % 20 == 1):
-            extra = ' '.join(
-                f"{lbl}=pp{pp:.0f}+det{det:.0f}ms({n})"
-                for lbl, pp, det, n in t_pp_passes
-            )
-            logger.info(
-                f"[QR-DBG] legacy raw_pass={t_raw:.0f}ms({len(raw_dets)}) {extra}"
-            )
-
-        return merged
-    
-    def _detect_multi_legacy(self, image: np.ndarray) -> List[QRDetection]:
-        """Run legacy detection on a single image."""
-        detections: List[QRDetection] = []
-        try:
-            if self._has_multi:
-                retval, decoded_texts, points, _ = self._legacy.detectAndDecodeMulti(image)
-                if retval and decoded_texts is not None:
-                    for i, text in enumerate(decoded_texts):
-                        if not text:
-                            continue
-                        det = self._build_detection(text, points[i])
-                        if det:
-                            detections.append(det)
-            else:
-                decoded_text, points, _ = self._legacy.detectAndDecode(image)
-                if decoded_text and points is not None:
-                    det = self._build_detection(decoded_text, points)
-                    if det:
-                        detections.append(det)
-        except Exception as e:
-            if self._frame_count % 1000 == 0:
-                logger.warning(f"[QRCodeDetector] Legacy detection error: {e}")
-        return detections
-    
     @staticmethod
-    def _build_detection(text: str, points: np.ndarray) -> Optional[QRDetection]:
-        """Create a QRDetection from decoded text and raw points."""
-        pts = points.reshape(-1, 2).astype(np.int32)
+    def _build_detection(text: str, points: np.ndarray, scale: float = 1.0) -> Optional[QRDetection]:
+        """Create a QRDetection from decoded text and raw points.
+        
+        Args:
+            text: Decoded QR string.
+            points: Corner points from the detector (in detection-frame coords).
+            scale: Factor to multiply coords by to map back to original resolution.
+        """
+        pts = points.reshape(-1, 2)
+        if scale != 1.0:
+            pts = pts * scale
+        pts = pts.astype(np.int32)
         if len(pts) != 4:
             return None
         center_x = int(np.mean(pts[:, 0]))

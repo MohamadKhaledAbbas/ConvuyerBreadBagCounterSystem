@@ -38,7 +38,7 @@ container_lost_timeout = "container_lost_timeout"  # Default: 2.0 seconds
 container_pre_event_seconds = "container_pre_event_seconds"  # Default: 5.0
 container_post_event_seconds = "container_post_event_seconds"  # Default: 5.0
 container_detect_interval = "container_detect_interval"  # Default: 3 (detect every N-th frame)
-container_qr_engine = "container_qr_engine"  # 'legacy', 'wechat', or 'auto' (default: 'auto')
+container_qr_engine = "container_qr_engine"  # 'wechat' or 'auto' (default: 'auto')
 
 # Minimum number of confirmed QR detections before a track emits an event.
 # Filters out single-frame decoder glitches that would otherwise count as
@@ -50,8 +50,10 @@ container_min_detections_for_event = "container_min_detections_for_event"  # Def
 # per-track ring buffer used to build the event clip when the content
 # camera is unavailable or when event_video_source == "qr".
 container_event_video_fps = "container_event_video_fps"              # Default: 20 (fps)
-container_event_video_max_seconds = "container_event_video_max_seconds"  # Default: 5.0 (hard cap)
-container_event_video_stationary_px = "container_event_video_stationary_px"  # Default: 5 (dedup px)
+container_event_video_max_seconds = "container_event_video_max_seconds"  # Default: 10.0 (hard cap)
+container_event_video_stationary_px = "container_event_video_stationary_px"  # Default: 0 (dedup px, 0=disabled)
+container_event_video_pre_seconds = "container_event_video_pre_seconds"    # Default: 2.0 (pre-entry capture)
+container_event_video_post_seconds = "container_event_video_post_seconds"  # Default: 2.0 (post-exit capture)
 
 # Event video recording:
 #   "qr"      -> encode from QR camera frames (always available, single camera)
@@ -111,6 +113,8 @@ CONTAINER_CONFIG_KEYS = [
     container_event_video_fps,
     container_event_video_max_seconds,
     container_event_video_stationary_px,
+    container_event_video_pre_seconds,
+    container_event_video_post_seconds,
 ]
 
 # Content camera configuration keys

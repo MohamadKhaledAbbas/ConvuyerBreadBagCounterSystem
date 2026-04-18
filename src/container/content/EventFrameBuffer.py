@@ -58,8 +58,8 @@ FrameEntry = Tuple[float, np.ndarray, int]
 class EventFrameBufferConfig:
     """Runtime config for :class:`EventFrameBuffer`."""
     target_fps: float = 20.0            # sampling + output fps
-    max_seconds: float = 5.0            # hard cap on buffered history
-    stationary_px: int = 5              # <= this X-shift → overwrite last frame
+    max_seconds: float = 10.0           # hard cap on buffered history
+    stationary_px: int = 0              # <= this X-shift → overwrite last frame (0=disabled)
     # When True, frames arriving faster than target_fps are dropped by
     # walltime (keeps memory bounded with very high fps cameras).
     throttle_to_target_fps: bool = True
@@ -140,7 +140,8 @@ class EventFrameBuffer:
             # Stationary dedup: overwrite the last entry when the tracked
             # point has barely moved.  This keeps the buffer from filling
             # with near-duplicates while a container is stationary.
-            if self._ring:
+            # Disabled when stationary_px <= 0 (e.g. global pre-roll buffer).
+            if self._config.stationary_px > 0 and self._ring:
                 prev_ts, _, prev_cx = self._ring[-1]
                 if abs(center_x - prev_cx) <= self._config.stationary_px:
                     self._ring[-1] = (now, frame, center_x)

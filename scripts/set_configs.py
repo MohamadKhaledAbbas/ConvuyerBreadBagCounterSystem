@@ -106,7 +106,7 @@ def configure_tracking(conn, ni):
         ("container_exit_zone_ratio",          "0.05", "Exit-zone width ratio (0–0.5)"),
         ("container_lost_timeout",             "2.0",  "Lost-track timeout (seconds)"),
         ("container_detect_interval",          "3",    "Run QR detection every N frames"),
-        ("container_qr_engine",               "auto", "QR engine: auto (prefer wechat), wechat, legacy"),
+        ("container_qr_engine",               "auto", "QR engine: auto or wechat (WeChatQRCode CNN)"),
         ("container_min_detections_for_event", "3",    "Min detections to confirm an event"),
     ]
     for key, default, label in configs:
@@ -127,9 +127,11 @@ def configure_event_video(conn, ni):
     _section("Event Video (QR-camera clip saved on each container event)")
     configs = [
         ("container_event_video_source",        "qr",  "Video source (qr / content)"),
-        ("container_event_video_fps",           "20",  "Output FPS"),
-        ("container_event_video_max_seconds",   "5.0", "Max clip length (seconds)"),
-        ("container_event_video_stationary_px", "5",   "Stationary pixel threshold"),
+        ("container_event_video_fps",           "20",   "Output FPS"),
+        ("container_event_video_max_seconds",   "10.0", "Max clip length (seconds)"),
+        ("container_event_video_stationary_px", "0",    "Stationary pixel threshold (0=disabled)"),
+        ("container_event_video_pre_seconds",   "2.0",  "Pre-entry recording (seconds)"),
+        ("container_event_video_post_seconds",  "2.0",  "Post-exit recording (seconds)"),
         ("content_pre_event_seconds",           "3.0", "Content pre-event (seconds)"),
         ("content_post_event_seconds",          "2.0", "Content post-event (seconds)"),
         ("content_buffer_seconds",              "5.0", "Content ring buffer size (seconds)"),
