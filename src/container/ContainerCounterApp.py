@@ -617,6 +617,7 @@ class ContainerCounterApp:
         self._event_video = None       # EventVideoCoordinator (always set in _init_components)
         self._qr_engine_requested: str = 'auto'
         self._qr_engine_resolved: str = 'unknown'
+        self._source_is_live_paced: bool = False
         
         # Display
         self.enable_display = self.config.enable_display
@@ -834,6 +835,7 @@ class ContainerCounterApp:
                 )
             
             self.frame_server = ContainerFrameServer(source=video_source)
+            self._source_is_live_paced = False
             
         else:
             # Production RDK mode: use ROS2
@@ -845,6 +847,7 @@ class ContainerCounterApp:
             
             from src.container.frame_source.ContainerFrameServer import ContainerFrameServer
             self.frame_server = ContainerFrameServer(target_fps=float(self.config.fps))
+            self._source_is_live_paced = True
 
     def _init_content_recorder(self) -> None:
         """Initialize the optional content camera recorder.
@@ -1018,13 +1021,20 @@ class ContainerCounterApp:
                 self._maybe_capture_snapshot(frame)
                 
                 # ── Budget-aware frame pacing ──
-                # Instead of sleeping (frame_interval - elapsed) per frame,
-                # maintain a running deadline.  If a detect frame overruns
-                # (e.g. 300 ms) the next 3 prediction frames skip the sleep
-                # entirely until the budget catches up.
-                _next_frame_time += frame_interval
                 now = time.time()
-                remaining = _next_frame_time - now
+                budget_ms = frame_interval * 1000.0
+                work_ms = max(0.0, (now - frame_start) * 1000.0)
+                slack_ms = max(0.0, budget_ms - work_ms)
+
+                if self._source_is_live_paced:
+                    # Live ROS2/camera input is already paced by the source.
+                    # Sleeping again here artificially lowers throughput.
+                    remaining = 0.0
+                else:
+                    # File playback / synthetic sources are not externally paced,
+                    # so maintain a target cadence in the app loop.
+                    _next_frame_time += frame_interval
+                    remaining = _next_frame_time - now
                 
                 # If we're more than 1 second behind, reset the deadline
                 # to avoid a burst catch-up after a long stall.
@@ -1032,11 +1042,8 @@ class ContainerCounterApp:
                     _next_frame_time = now
                     remaining = 0.0
                 
-                budget_ms = frame_interval * 1000.0
-                work_ms = max(0.0, (now - frame_start) * 1000.0)
-                slack_ms = max(0.0, remaining * 1000.0)
                 self.state.update_pacing_metrics(work_ms, slack_ms, budget_ms)
-                remaining_ms = max(1, int(remaining * 1000))
+                remaining_ms = 1 if self._source_is_live_paced else max(1, int(remaining * 1000))
                 t_present_start = time.time()
                 
                 if self.enable_display and self._visualizer:
@@ -1949,6 +1956,7 @@ class ContainerCounterApp:
                     'content_rtsp_port': cfg.content_rtsp_port if cfg.content_recording_enabled else None,
                     'event_video_source': cfg.event_video_source,
                     'camera_mode': 'dual' if cfg.content_recording_enabled else 'single',
+                    'source_pacing': 'live' if self._source_is_live_paced else 'app',
                     'detect_interval': cfg.detect_interval,
                     'motion_threshold': cfg.motion_threshold,
                     'min_detections_for_event': cfg.min_detections_for_event,
