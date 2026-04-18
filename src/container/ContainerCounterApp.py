@@ -1879,6 +1879,7 @@ class ContainerCounterApp:
                 # Flatten state fields to top level for health monitoring
                 **state_dict,
                 # Sub-component stats
+                'frame_server': self.frame_server.get_stats() if self.frame_server else {},
                 'tracker': self.tracker.get_stats() if self.tracker else {},
                 'snapshotter': self.snapshotter.get_stats() if self.snapshotter else {},
                 'qr_detector': self.qr_detector.get_stats() if self.qr_detector else {},

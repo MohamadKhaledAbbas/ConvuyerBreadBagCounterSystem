@@ -74,6 +74,9 @@ if IS_RDK:
             self._frames_received = 0
             self._frames_dropped = 0
             self._frames_processed = 0
+            self._frames_processed_interval = 0
+            self._spin_poll_time_interval_ms = 0.0
+            self._convert_time_interval_ms = 0.0
             self._last_stats_time = time.time()
             self._stats_log_interval = 5.0
             
@@ -149,6 +152,22 @@ if IS_RDK:
                 
             except Exception as e:
                 logger.error(f"[ContainerFrameServer] Frame callback error: {e}")
+
+        def _drain_queue_to_newest(self):
+            """Return the newest queued frame and count older queued ones as dropped."""
+            item = None
+            drained = 0
+            while not self._queue.empty():
+                try:
+                    latest = self._queue.get_nowait()
+                    if item is not None:
+                        drained += 1
+                    item = latest
+                except queue.Empty:
+                    break
+            if drained:
+                self._frames_dropped += drained
+            return item, drained
         
         def frames(self) -> Iterator[Tuple[np.ndarray, float]]:
             """
@@ -165,27 +184,28 @@ if IS_RDK:
             frame_count = 0
             
             while rclpy.ok():
-                # Pump ALL pending ROS2 callbacks into our queue.
-                # spin_once(0.0) returns immediately if nothing is ready.
-                for _ in range(self.queue_size):
+                # Wait for at least one callback when the local queue is empty,
+                # then do a *small* zero-timeout burst to coalesce any ready
+                # callbacks. The previous O(queue_size) spin loop added hidden
+                # per-frame cost on RDK and depressed end-to-end FPS.
+                if self._queue.empty():
+                    rclpy.spin_once(self, timeout_sec=0.05)
+
+                t_spin_start = time.time()
+                prev_qsize = self._queue.qsize()
+                for _ in range(3):
                     rclpy.spin_once(self, timeout_sec=0.0)
-                
-                # Drain queue to newest frame
-                item = None
-                drained = 0
-                while not self._queue.empty():
-                    try:
-                        latest = self._queue.get_nowait()
-                        if item is not None:
-                            drained += 1
-                        item = latest
-                    except queue.Empty:
+                    qsize = self._queue.qsize()
+                    if qsize <= prev_qsize:
                         break
-                self._frames_dropped += drained
+                    prev_qsize = qsize
+                spin_poll_ms = (time.time() - t_spin_start) * 1000
+
+                # Drain queue to newest frame
+                item, drained = self._drain_queue_to_newest()
                 
                 if item is None:
                     # Nothing available — block briefly for new data
-                    rclpy.spin_once(self, timeout_sec=0.05)
                     continue
                 
                 nv12_data, latency_ms, (height, width) = item
@@ -201,6 +221,9 @@ if IS_RDK:
                 
                 frame_count += 1
                 self._frames_processed += 1
+                self._frames_processed_interval += 1
+                self._spin_poll_time_interval_ms += spin_poll_ms
+                self._convert_time_interval_ms += t_convert_ms
                 
                 if frame_count == 1:
                     logger.info(
@@ -210,6 +233,7 @@ if IS_RDK:
                 if _FRAME_DEBUG and (_FRAME_DEBUG >= 2 or frame_count % 50 == 0):
                     logger.info(
                         f"[Frame-DBG] mode=ros2 frame={frame_count} "
+                        f"spin_poll_ms={spin_poll_ms:.1f} "
                         f"convert_ms={t_convert_ms:.1f} latency_ms={latency_ms:.1f} "
                         f"drained={drained}"
                     )
@@ -219,21 +243,38 @@ if IS_RDK:
                 if now - self._last_stats_time >= self._stats_log_interval:
                     elapsed = now - self._last_stats_time
                     recv_fps = self._frames_received / elapsed if elapsed > 0 else 0
+                    processed_fps = (
+                        self._frames_processed_interval / elapsed if elapsed > 0 else 0
+                    )
                     drop_rate = (
                         self._frames_dropped / self._frames_received * 100
                         if self._frames_received > 0 else 0
                     )
+                    mean_spin_poll_ms = (
+                        self._spin_poll_time_interval_ms / self._frames_processed_interval
+                        if self._frames_processed_interval > 0 else 0.0
+                    )
+                    mean_convert_ms = (
+                        self._convert_time_interval_ms / self._frames_processed_interval
+                        if self._frames_processed_interval > 0 else 0.0
+                    )
                     logger.info(
                         f"[ContainerFrameServer] Stats: "
                         f"recv_fps={recv_fps:.1f}, "
+                        f"processed_fps={processed_fps:.1f}, "
                         f"processed={self._frames_processed}, "
                         f"dropped={self._frames_dropped}, "
                         f"drop_rate={drop_rate:.1f}%, "
+                        f"spin_poll_ms={mean_spin_poll_ms:.1f}, "
+                        f"convert_ms={mean_convert_ms:.1f}, "
                         f"queue={self._queue.qsize()}"
                     )
                     # Reset counters for next interval
                     self._frames_received = 0
                     self._frames_dropped = 0
+                    self._frames_processed_interval = 0
+                    self._spin_poll_time_interval_ms = 0.0
+                    self._convert_time_interval_ms = 0.0
                     self._last_stats_time = now
                 
                 yield bgr_frame, latency_ms
@@ -258,10 +299,14 @@ if IS_RDK:
                 rclpy.spin_once(self, timeout_sec=0.001)
                 try:
                     nv12_data, latency_ms, (height, width) = self._queue.get_nowait()
+                    t_convert_start = time.time()
                     bgr_frame = cv2.cvtColor(nv12_data, cv2.COLOR_YUV2BGR_NV12)
+                    t_convert_ms = (time.time() - t_convert_start) * 1000
                     self._last_nv12_data = nv12_data
                     self._last_frame_size = (width, height)
                     self._frames_processed += 1
+                    self._frames_processed_interval += 1
+                    self._convert_time_interval_ms += t_convert_ms
                     return (bgr_frame, latency_ms)
                 except queue.Empty:
                     pass
@@ -286,6 +331,15 @@ if IS_RDK:
                     self._frames_dropped / self._frames_received * 100
                     if self._frames_received > 0 else 0
                 ),
+                'processed_fps': round(
+                    self._frames_processed_interval / elapsed, 1
+                ) if elapsed > 0 else 0.0,
+                'mean_spin_poll_ms': round(
+                    self._spin_poll_time_interval_ms / self._frames_processed_interval, 1
+                ) if self._frames_processed_interval > 0 else 0.0,
+                'mean_convert_ms': round(
+                    self._convert_time_interval_ms / self._frames_processed_interval, 1
+                ) if self._frames_processed_interval > 0 else 0.0,
             }
         
         @property
