@@ -14,6 +14,15 @@ Production-grade logging with:
 
 Track event details are stored in the database (track_event_details table),
 so structured JSON logging is not duplicated here.
+
+Environment overrides:
+- APP_LOG_BASENAME: per-process log file basename (default: convuyer_counter)
+- APP_LOG_CONSOLE_STREAM: stdout, stderr, or none (default: stdout)
+- APP_LOG_MAX_BYTES: max bytes before main log rotation
+- APP_LOG_BACKUP_COUNT: number of rotated main log backups
+- APP_ERROR_LOG_MAX_BYTES: max bytes before error log rotation
+- APP_ERROR_LOG_BACKUP_COUNT: number of rotated error log backups
+- APP_LOG_RETENTION_DAYS: days to retain rotated/compressed logs
 """
 
 import gzip
@@ -25,9 +34,40 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 from src.config.paths import LOG_DIR
+
+
+def _resolve_log_basename() -> str:
+    """Return the per-process log basename used for active log files."""
+    name = (os.getenv("APP_LOG_BASENAME", "convuyer_counter") or "").strip()
+    if not name:
+        return "convuyer_counter"
+    # Keep filenames predictable and filesystem-safe.
+    return "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in name)
+
+
+def _resolve_console_stream() -> str:
+    """Return stdout, stderr, or none for the console handler."""
+    stream = (os.getenv("APP_LOG_CONSOLE_STREAM", "stdout") or "").strip().lower()
+    if stream in {"stdout", "stderr", "none"}:
+        return stream
+    return "stdout"
+
+
+def _resolve_int_env(name: str, default: int, minimum: int = 0) -> int:
+    """Return a validated integer env override, or *default* when invalid."""
+    raw_value = (os.getenv(name, "") or "").strip()
+    if not raw_value:
+        return default
+    try:
+        parsed_value = int(raw_value)
+    except ValueError:
+        return default
+    if parsed_value < minimum:
+        return default
+    return parsed_value
 
 # ============================================================================
 # Logging Configuration Constants
@@ -119,13 +159,15 @@ def _rotator(source: str, dest: str) -> None:
 # ============================================================================
 
 def setup_logging(
-    log_dir: str = LOG_DIR,
-    log_max_bytes: int = LOG_MAX_BYTES,
-    log_backup_count: int = LOG_BACKUP_COUNT,
-    error_log_max_bytes: int = ERROR_LOG_MAX_BYTES,
-    error_log_backup_count: int = ERROR_LOG_BACKUP_COUNT,
-    retention_days: int = LOG_RETENTION_DAYS,
+    log_dir: Optional[str] = None,
+    log_max_bytes: Optional[int] = None,
+    log_backup_count: Optional[int] = None,
+    error_log_max_bytes: Optional[int] = None,
+    error_log_backup_count: Optional[int] = None,
+    retention_days: Optional[int] = None,
     console_level: int = logging.INFO,
+    log_basename: Optional[str] = None,
+    console_stream: Optional[str] = None,
 ) -> logging.Logger:
     """
     Setup production-grade application logging.
@@ -151,6 +193,33 @@ def setup_logging(
     Returns:
         Configured root application logger.
     """
+    resolved_log_dir = LOG_DIR if log_dir is None else log_dir
+    resolved_log_max_bytes = (
+        _resolve_int_env("APP_LOG_MAX_BYTES", LOG_MAX_BYTES, minimum=1)
+        if log_max_bytes is None
+        else log_max_bytes
+    )
+    resolved_log_backup_count = (
+        _resolve_int_env("APP_LOG_BACKUP_COUNT", LOG_BACKUP_COUNT, minimum=0)
+        if log_backup_count is None
+        else log_backup_count
+    )
+    resolved_error_log_max_bytes = (
+        _resolve_int_env("APP_ERROR_LOG_MAX_BYTES", ERROR_LOG_MAX_BYTES, minimum=1)
+        if error_log_max_bytes is None
+        else error_log_max_bytes
+    )
+    resolved_error_log_backup_count = (
+        _resolve_int_env("APP_ERROR_LOG_BACKUP_COUNT", ERROR_LOG_BACKUP_COUNT, minimum=0)
+        if error_log_backup_count is None
+        else error_log_backup_count
+    )
+    resolved_retention_days = (
+        _resolve_int_env("APP_LOG_RETENTION_DAYS", LOG_RETENTION_DAYS, minimum=0)
+        if retention_days is None
+        else retention_days
+    )
+
     # Ensure log directory exists, falling back to local data/logs if the
     # primary path (e.g. an SSD mount) is not writable by this user.
     _FALLBACK_LOG_DIR = os.path.join("data", "logs")
@@ -169,25 +238,32 @@ def setup_logging(
         except (PermissionError, OSError):
             return False
 
-    if not _try_prepare_log_dir(log_dir):
+    if not _try_prepare_log_dir(resolved_log_dir):
         print(
-            f"[Logging] WARNING: cannot write to '{log_dir}' "
+            f"[Logging] WARNING: cannot write to '{resolved_log_dir}' "
             f"(permission denied) — falling back to '{_FALLBACK_LOG_DIR}'",
             flush=True,
         )
-        log_dir = _FALLBACK_LOG_DIR
-        if not _try_prepare_log_dir(log_dir):
+        resolved_log_dir = _FALLBACK_LOG_DIR
+        if not _try_prepare_log_dir(resolved_log_dir):
             # Last resort: console-only logging
             print(
-                f"[Logging] ERROR: fallback log dir '{log_dir}' also not writable"
+                f"[Logging] ERROR: fallback log dir '{resolved_log_dir}' also not writable"
                 " — file logging disabled, console only.",
                 flush=True,
             )
-            log_dir = ""
+            resolved_log_dir = ""
 
-    if log_dir:
+    resolved_basename = log_basename or _resolve_log_basename()
+    resolved_console_stream = (console_stream or _resolve_console_stream()).lower()
+
+    if resolved_log_dir:
         # Proactive cleanup of aged log artefacts
-        _cleanup_old_logs(log_dir, retention_days=retention_days)
+        _cleanup_old_logs(
+            resolved_log_dir,
+            retention_days=resolved_retention_days,
+            log_basename=resolved_basename,
+        )
 
     # Logger setup
     app_logger = logging.getLogger("ConvuyerBreadBagCounter")
@@ -201,13 +277,13 @@ def setup_logging(
     detailed_formatter = logging.Formatter(_DETAILED_FMT, datefmt=_DETAILED_DATEFMT)
     console_formatter = logging.Formatter(_CONSOLE_FMT, datefmt=_CONSOLE_DATEFMT)
 
-    if log_dir:
+    if resolved_log_dir:
         # --- 1. Rotating main log (DEBUG+) ---
-        main_log_path = os.path.join(log_dir, "convuyer_counter.log")
+        main_log_path = os.path.join(resolved_log_dir, f"{resolved_basename}.log")
         main_handler = logging.handlers.RotatingFileHandler(
             main_log_path,
-            maxBytes=log_max_bytes,
-            backupCount=log_backup_count,
+            maxBytes=resolved_log_max_bytes,
+            backupCount=resolved_log_backup_count,
             encoding="utf-8",
         )
         main_handler.setLevel(logging.DEBUG)
@@ -217,11 +293,11 @@ def setup_logging(
         app_logger.addHandler(main_handler)
 
         # --- 2. Rotating error log (WARNING+) ---
-        error_log_path = os.path.join(log_dir, "convuyer_counter_error.log")
+        error_log_path = os.path.join(resolved_log_dir, f"{resolved_basename}_error.log")
         error_handler = logging.handlers.RotatingFileHandler(
             error_log_path,
-            maxBytes=error_log_max_bytes,
-            backupCount=error_log_backup_count,
+            maxBytes=resolved_error_log_max_bytes,
+            backupCount=resolved_error_log_backup_count,
             encoding="utf-8",
         )
         error_handler.setLevel(logging.WARNING)
@@ -231,23 +307,26 @@ def setup_logging(
         app_logger.addHandler(error_handler)
 
     # --- 3. Console handler (INFO+ by default) ---
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(console_level)
-    console_handler.setFormatter(console_formatter)
-    app_logger.addHandler(console_handler)
+    if resolved_console_stream != "none":
+        stream = sys.stderr if resolved_console_stream == "stderr" else sys.stdout
+        console_handler = logging.StreamHandler(stream)
+        console_handler.setLevel(console_level)
+        console_handler.setFormatter(console_formatter)
+        app_logger.addHandler(console_handler)
 
     # Startup banner
-    if log_dir:
+    if resolved_log_dir:
         app_logger.info(
             "[Logging] Initialised — main=%s (max %s MB × %d backups), "
-            "error=%s (max %s MB × %d backups), retention=%d days",
-            os.path.join(log_dir, "convuyer_counter.log"),
-            round(log_max_bytes / (1024 * 1024), 1),
-            log_backup_count,
-            os.path.join(log_dir, "convuyer_counter_error.log"),
-            round(error_log_max_bytes / (1024 * 1024), 1),
-            error_log_backup_count,
-            retention_days,
+            "error=%s (max %s MB × %d backups), retention=%d days, console=%s",
+            os.path.join(resolved_log_dir, f"{resolved_basename}.log"),
+            round(resolved_log_max_bytes / (1024 * 1024), 1),
+            resolved_log_backup_count,
+            os.path.join(resolved_log_dir, f"{resolved_basename}_error.log"),
+            round(resolved_error_log_max_bytes / (1024 * 1024), 1),
+            resolved_error_log_backup_count,
+            resolved_retention_days,
+            resolved_console_stream,
         )
     else:
         app_logger.warning("[Logging] File logging disabled — console only (no writable log directory found)")
@@ -259,7 +338,11 @@ def setup_logging(
 # Retention / cleanup
 # ============================================================================
 
-def _cleanup_old_logs(log_dir: str, retention_days: int = LOG_RETENTION_DAYS) -> None:
+def _cleanup_old_logs(
+    log_dir: str,
+    retention_days: int = LOG_RETENTION_DAYS,
+    log_basename: Optional[str] = None,
+) -> None:
     """
     Delete log files (including compressed rotated backups) older than
     *retention_days*.
@@ -278,11 +361,12 @@ def _cleanup_old_logs(log_dir: str, retention_days: int = LOG_RETENTION_DAYS) ->
     """
     cutoff = time.time() - (retention_days * 86400)
     deleted = 0
+    basename = log_basename or _resolve_log_basename()
     patterns = [
-        "convuyer_counter*.log",
-        "convuyer_counter*.log.*",
-        "convuyer_counter*.gz",
-        "convuyer_counter*.rotating",  # intermediate files from non-blocking log rotation
+        f"{basename}*.log",
+        f"{basename}*.log.*",
+        f"{basename}*.gz",
+        f"{basename}*.rotating",  # intermediate files from non-blocking log rotation
     ]
     try:
         log_path = Path(log_dir)
@@ -321,16 +405,17 @@ def get_log_file_paths() -> Dict[str, str]:
         pointing to the active log file paths.
     """
     log_dir = LOG_DIR
+    basename = _resolve_log_basename()
     if not os.path.exists(log_dir):
         return {}
 
     result: Dict[str, str] = {}
 
-    main_log = os.path.join(log_dir, "convuyer_counter.log")
+    main_log = os.path.join(log_dir, f"{basename}.log")
     if os.path.isfile(main_log):
         result["main_log"] = main_log
 
-    error_log = os.path.join(log_dir, "convuyer_counter_error.log")
+    error_log = os.path.join(log_dir, f"{basename}_error.log")
     if os.path.isfile(error_log):
         result["error_log"] = error_log
 

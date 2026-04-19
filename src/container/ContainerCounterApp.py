@@ -33,6 +33,7 @@ from typing import Dict, List, Optional, Tuple
 import cv2
 
 from src.container.qr.QRCodeDetector import QRCodeDetector, QRDetection
+from src.container.qr.AsyncQRDetector import AsyncQRDetector
 from src.container.tracking.ContainerTracker import (
     ContainerTracker,
     ContainerEvent,
@@ -137,10 +138,12 @@ class _LinearPredictor:
     """
 
     # Max consecutive predict() calls without a real detection before dropping.
-    # At detect_interval=3 this gives 4 calls ≈ 2 missed detect cycles ≈ 0.3 s @20 fps.
-    # Kept small deliberately: a real exit means the QR leaves the decoder's view
-    # immediately; generous prediction budgets only produce ghost overlays.
-    MAX_PRED_FRAMES = 4
+    # With async detection, predict() is called on every non-detect frame
+    # (roughly every frame). At 20 FPS a BG detection pass takes ~100 ms
+    # (≈ 2 frames), so 2 missed passes ≈ 4-6 predict calls. A budget of
+    # 12 ≈ 0.6 s @ 20 FPS keeps predictions alive across short BG stalls
+    # without producing long-lived ghosts.
+    MAX_PRED_FRAMES = 12
 
     def __init__(self, detect_interval: int = 5,
                  frame_w: int = 1280, frame_h: int = 720):
@@ -148,6 +151,12 @@ class _LinearPredictor:
         self._frame_w = frame_w
         self._frame_h = frame_h
         self._entries: Dict[int, _TrackEntry] = {}
+        # Monotonic main-loop frame counter — updated by tick() once per
+        # processed frame so velocity estimation can use the *actual* frame
+        # distance between detections even when the detector runs async.
+        self._frame_seq: int = 0
+        # Per-QR last-seen frame sequence.
+        self._last_detect_seq: Dict[int, int] = {}
 
     def set_frame_size(self, w: int, h: int) -> None:
         """Notify predictor of frame size (call when first frame arrives)."""
@@ -171,19 +180,38 @@ class _LinearPredictor:
         if existing is None:
             entry = _TrackEntry(cx, cy, bw, bh, self._frame_w, self._frame_h)
             self._entries[qr_val] = entry
+            self._last_detect_seq[qr_val] = self._frame_seq
             return
 
-        # Raw per-frame X-velocity (displacement ÷ detect_interval frames)
-        elapsed_frames = max(1, self._interval + existing.age)
+        # Use actual elapsed main-loop frames between detections when
+        # available; fall back to interval+age for cold-start rebuilds.
+        prev_seq = self._last_detect_seq.get(qr_val)
+        if prev_seq is not None and self._frame_seq > prev_seq:
+            elapsed_frames = self._frame_seq - prev_seq
+        else:
+            elapsed_frames = max(1, self._interval + existing.age)
+        self._last_detect_seq[qr_val] = self._frame_seq
+
+        # Raw per-frame X-velocity (displacement ÷ elapsed frames)
         vx_raw = (cx - existing.cx) / elapsed_frames
 
         existing.update(cx, cy, vx_raw, bw, bh)
+
+    def tick(self) -> None:
+        """Advance the internal frame counter by one main-loop frame.
+
+        Must be called exactly once per _process_frame iteration, before the
+        detect/predict branch, so velocity calculations use the true elapsed
+        main-loop frame count.
+        """
+        self._frame_seq += 1
 
     def predict(self, step: int = 1) -> list:
         """
         Return predictions for all entries that are still within their age limit.
 
-        step: how many frames since the last detection (1 .. detect_interval-1).
+        step: how many frames ahead to project the position.
+              With async detection this is typically 1 (every frame).
         Returns list of (qr_val, (cx, cy), (x0, y0, bw, bh)).
         Entries whose projected centre leaves the frame are silently skipped.
         """
@@ -213,9 +241,11 @@ class _LinearPredictor:
     def remove(self, qr_val: int) -> None:
         """Remove a QR entry (call on track exit to stop ghost predictions)."""
         self._entries.pop(qr_val, None)
+        self._last_detect_seq.pop(qr_val, None)
 
     def clear(self) -> None:
         self._entries.clear()
+        self._last_detect_seq.clear()
 
     @property
     def tracked_qr_values(self) -> set:
@@ -671,15 +701,23 @@ class ContainerCounterApp:
         self._track_buffers: Dict[int, EventFrameBuffer] = {}
         self._TRACK_SNAPSHOT_QUALITY: int = 60        # JPEG quality (passed to coordinator)
 
-        # Global frame ring buffer.  Stores the last N seconds of
-        # half-res frames *regardless* of whether a track exists.
-        # At finalization time the video is sliced from this single
-        # continuous buffer — no per-track buffers or stitching needed.
+        # Per-track video frame lists.  Keyed by qr_value.
+        # Seeded with pre-roll frames from the global ring at track creation,
+        # then every main-loop frame is appended while the track is active
+        # (and during the post-exit deferral period).
+        # At finalization the list IS the video — no slicing or stitching.
+        self._track_video_frames: Dict[int, list] = {}
+        # QR values with pending (deferred) video writes that still need
+        # post-exit frames appended.  Separate from _track_video_frames
+        # keys so we know which tracks are truly active vs post-exited.
+        self._post_exit_qr: set = set()
+
+        # Global frame ring buffer for pre-roll only.
+        # Holds the last ``event_video_pre_seconds + margin`` so that
+        # new track creations can seed their frame list with pre-event
+        # context.  Does NOT need to hold transit or post frames.
         _preroll_seconds = (
-            float(self.config.event_video_pre_seconds)
-            + float(self.config.event_video_max_seconds)
-            + float(self.config.event_video_post_seconds)
-            + 2.0  # safety margin
+            float(self.config.event_video_pre_seconds) + 2.0
         )
         self._qr_preroll = EventFrameBuffer(EventFrameBufferConfig(
             target_fps=float(self.config.event_video_fps),
@@ -755,8 +793,24 @@ class ContainerCounterApp:
             f"detect_interval={self._detect_interval}, "
             f"motion_threshold={self._motion_threshold:.1f} (from DB config)"
         )
+
+        # Rebuild the global QR preroll ring from the effective DB-backed
+        # config.  Only needs to hold pre-event seconds (+ margin) since
+        # per-track lists handle transit and post-exit frames.
+        qr_preroll_seconds = (
+            float(self.config.event_video_pre_seconds) + 2.0
+        )
+        self._qr_preroll = self._EventFrameBuffer(self._EventFrameBufferConfig(
+            target_fps=float(self.config.event_video_fps),
+            max_seconds=qr_preroll_seconds,
+            stationary_px=0,
+        ))
+        logger.info(
+            f"[ContainerCounterApp] QR preroll ready: "
+            f"{qr_preroll_seconds:.1f}s @ {self.config.event_video_fps}fps"
+        )
         
-        # QR Detector
+        # QR Detector (async worker)
         qr_engine = self.db.get_config(constants.container_qr_engine, 'auto')
         # Legacy engine was removed — silently upgrade stale DB values.
         if qr_engine == 'legacy':
@@ -765,12 +819,17 @@ class ContainerCounterApp:
                 "[ContainerCounterApp] container_qr_engine='legacy' is no longer "
                 "supported — falling back to 'auto' (WeChatQRCode)."
             )
-        self.qr_detector = QRCodeDetector(engine=qr_engine)
+        sync_detector = QRCodeDetector(engine=qr_engine)
+        self.qr_detector = AsyncQRDetector(
+            detector=sync_detector,
+            motion_threshold=self._motion_threshold,
+        )
+        self.qr_detector.start()
         self._qr_engine_requested = qr_engine
-        self._qr_engine_resolved = self.qr_detector.engine_name
+        self._qr_engine_resolved = sync_detector.engine_name
         logger.info(
             f"[ContainerCounterApp] QR engine requested={qr_engine} "
-            f"resolved={self.qr_detector.engine_name}"
+            f"resolved={sync_detector.engine_name} (async)"
         )
         
         # Container Tracker
@@ -881,12 +940,25 @@ class ContainerCounterApp:
                 f"/cam/realmonitor?channel=1&subtype={subtype}"
             )
 
+            unified_pre = max(
+                float(self.config.content_pre_event_seconds),
+                float(self.config.event_video_pre_seconds),
+            )
+            unified_post = max(
+                float(self.config.content_post_event_seconds),
+                float(self.config.event_video_post_seconds),
+            )
+            unified_buffer = max(
+                float(self.config.content_buffer_seconds),
+                unified_pre + unified_post + 3.0,
+            )
+
             rc_cfg = ContentRecorderConfig(
                 rtsp_url=rtsp_url,
                 output_dir=CONTAINER_CONTENT_VIDEOS_DIR,
-                buffer_seconds=self.config.content_buffer_seconds,
-                pre_event_seconds=self.config.content_pre_event_seconds,
-                post_event_seconds=self.config.content_post_event_seconds,
+                buffer_seconds=unified_buffer,
+                pre_event_seconds=unified_pre,
+                post_event_seconds=unified_post,
                 target_fps=self.config.content_video_fps,
                 max_recording_seconds=self.config.content_max_recording_seconds,
             )
@@ -1058,6 +1130,10 @@ class ContainerCounterApp:
                         break
                 t_present = time.time() - t_present_start
                 
+                # Periodic QR system summary (every 600 frames ≈ 30 s @ 20 FPS)
+                if frame_count % 600 == 0:
+                    self._log_qr_system_summary(frame_count)
+
                 # Log per-frame timing every 50 frames
                 if frame_count % 50 == 0:
                     mode_label = {
@@ -1141,104 +1217,100 @@ class ContainerCounterApp:
         # <1 ms so the overhead is negligible.
         _t = time.time()
         half = cv2.resize(frame, (max(1, w // 2), max(1, h // 2)))
-        self._qr_preroll.add(half, center_x=0)
+        now_mono = time.monotonic()
+        self._qr_preroll.add(half, center_x=0, timestamp=now_mono)
+
+        # Append to every per-track video frame list (active + post-exit).
+        for _tvf_list in self._track_video_frames.values():
+            _tvf_list.append((now_mono, half))
+
         if _dbg:
             _dbg_t['half+preroll'] = (time.time() - _t) * 1000
 
-        is_detect_frame = ((self.state.frame_count - 1) % self._detect_interval == 0)
         self._frame_detections = []   # reset per-frame viz list
-        # _frame_mode set after we know what actually ran this frame
+        # Advance predictor frame counter once per main-loop frame so
+        # velocity estimates use the true elapsed frame count.
+        self._linear_predictor.tick()
 
-        # ── Motion gate ──
-        # On detect-eligible frames with no active tracks, skip the expensive
-        # QR CNN when the scene hasn't changed.  If tracks exist we always
-        # run detection so the tracker stays fed.
-        if is_detect_frame and not self._current_tracks:
-            _t = time.time()
-            small = cv2.resize(frame, (160, 90))
-            gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-            if self._prev_detect_gray is not None:
-                diff = cv2.absdiff(gray, self._prev_detect_gray).mean()
-                if diff < self._motion_threshold:
-                    is_detect_frame = False
-                    self._frame_mode = "gate"
-                    if _dbg:
-                        _dbg_t['motion_gate'] = f'skip(diff={diff:.1f})'
-                elif _dbg:
-                    _dbg_t['motion_gate'] = f'pass(diff={diff:.1f})'
-            elif _dbg:
-                _dbg_t['motion_gate'] = 'first'
-            self._prev_detect_gray = gray
-            if _dbg and 'motion_gate' not in _dbg_t:
-                _dbg_t['motion_gate_ms'] = (time.time() - _t) * 1000
+        # ── Submit frame to async QR detector and poll latest result ──
+        self.qr_detector.submit(frame, seq=self.state.frame_count)
 
-        if is_detect_frame:
-            # ── Full QR detection ──
+        async_result = self.qr_detector.poll_result()
+        has_new_detections = (
+            async_result is not None and len(async_result.detections) > 0
+        )
+
+        if has_new_detections:
             self._frame_mode = "detect"
-            t_qr_start = time.time()
-            detections = self.qr_detector.detect_all(frame)
-            t_qr = time.time() - t_qr_start
+            detections = async_result.detections
             if _dbg:
-                _dbg_t['qr_detect_all'] = t_qr * 1000
-            
-            # Log detection timing periodically (every 10th detect frame)
-            if (self.state.frame_count // self._detect_interval) % 10 == 0:
+                _dbg_t['qr_async_ms'] = async_result.elapsed_ms
+                _dbg_t['qr_async_lag'] = self.state.frame_count - async_result.frame_seq
+
+            if self.state.frame_count % 40 == 0:
                 logger.info(
-                    f"[QR-Timing] detect_all={t_qr*1000:.0f}ms "
-                    f"found={len(detections)} frame#{self.state.frame_count}"
+                    f"[QR-Timing] async detect={async_result.elapsed_ms:.0f}ms "
+                    f"found={len(detections)} frame#{async_result.frame_seq} "
+                    f"(lag={self.state.frame_count - async_result.frame_seq})"
                 )
-            self._last_detection = detections[0] if detections else None
+
+            self._last_detection = detections[0]
+            now_mono = time.monotonic()
+            now_wall = time.time()
+            detection_wall = now_wall - max(0.0, now_mono - async_result.submit_mono)
 
             for detection in detections:
                 self.state.qr_detections += 1
-                self._frame_detections.append((detection, False))  # False = not predicted
+                self._frame_detections.append((detection, False))
 
-                # Feed to container tracker
                 event = self.tracker.update(
                     qr_value=detection.qr_number,
                     center=detection.center,
+                    timestamp=detection_wall,
+                    monotonic_time=async_result.submit_mono,
                 )
                 if event:
                     self._handle_container_event(event)
                 else:
-                    # Check if this detection just reached the QR-threshold.
-                    # If so, start content-camera recording immediately so
-                    # the full transit is captured (begin/end model).
+                    # Seed per-track frame list when a new track appears.
+                    # Pre-roll frames come from the global ring; subsequent
+                    # frames are appended every iteration in the main loop.
+                    if detection.qr_number not in self._track_video_frames:
+                        track = self.tracker.get_track(detection.qr_number)
+                        if track is not None:
+                            pre_s = float(self.config.event_video_pre_seconds)
+                            cut = async_result.submit_mono - pre_s
+                            pre_frames = self._qr_preroll.snapshot_frames(
+                                since_monotonic=cut
+                            )
+                            # Convert ring entries (mono, frame, cx) to (mono, frame)
+                            self._track_video_frames[detection.qr_number] = [
+                                (ts, f) for ts, f, _ in pre_frames
+                            ]
                     self._maybe_begin_content_recording(detection.qr_number)
 
-                # Update linear predictor with real detection
-                bbox_rect = cv2.boundingRect(detection.bbox)  # (x, y, w, h)
+                bbox_rect = cv2.boundingRect(detection.bbox)
                 self._linear_predictor.update_from_detection(
                     detection.qr_number,
                     detection.center,
                     (bbox_rect[2], bbox_rect[3]),
                 )
         else:
-            # ── Prediction frame: linear extrapolation ──
             self._last_detection = None
-            step = (self.state.frame_count % self._detect_interval)
-            if step == 0:
-                step = self._detect_interval
-
-            current_tracks = self.tracker.get_active_tracks()  # single call; reused below
+            current_tracks = self.tracker.get_active_tracks()
             if current_tracks:
                 self._frame_mode = "predict"
             else:
                 self._frame_mode = "gate"
-            for qr_val, center, bbox_xywh in self._linear_predictor.predict(step):
-                # Only predict for QR values that have an active track.
-                # If the track was silently dropped (FP gate, etc.) remove the
-                # orphaned predictor entry so it doesn't linger until MAX_PRED_FRAMES.
+
+            for qr_val, center, bbox_xywh in self._linear_predictor.predict(step=1):
                 if qr_val not in current_tracks:
                     self._linear_predictor.remove(qr_val)
                     continue
 
                 pred_det = _PredictedDetection(qr_val, center, bbox_xywh)
-                self._frame_detections.append((pred_det, True))  # True = predicted
+                self._frame_detections.append((pred_det, True))
 
-                # Feed predicted centre to container tracker.
-                # is_prediction=True so the tracker does NOT count this
-                # toward its false-positive min-detections gate.
                 event = self.tracker.update(
                     qr_value=qr_val,
                     center=center,
@@ -1268,9 +1340,9 @@ class ContainerCounterApp:
             except queue.Full:
                 logger.warning("[ContainerCounterApp] Snapshot queue full, dropping capture")
 
-        # Refresh current_tracks on detect frames (tracks may have been
-        # added/removed by the tracker).
-        if is_detect_frame:
+        # Refresh current_tracks when the async worker returned a new real
+        # detection result (tracks may have been added/removed).
+        if has_new_detections:
             current_tracks = self.tracker.get_active_tracks()
 
         # Clean up orphaned content-camera recordings whose tracks were
@@ -1291,6 +1363,18 @@ class ContainerCounterApp:
                         f"[ContainerCounterApp] Cleaned up orphan content "
                         f"recording QR={q} event_id={eid}"
                     )
+                self._track_video_frames.pop(q, None)
+                self._post_exit_qr.discard(q)
+
+        # Also clean up orphan per-track video frame lists for tracks
+        # silently dropped (FP gate) that had no content recording.
+        if self._track_video_frames:
+            stale_video = [
+                q for q in self._track_video_frames
+                if q not in current_tracks and q not in self._post_exit_qr
+            ]
+            for q in stale_video:
+                self._track_video_frames.pop(q, None)
 
         # Finalize any deferred event-video writes whose post-exit
         # buffering period has elapsed.
@@ -1310,7 +1394,7 @@ class ContainerCounterApp:
             parts = ' '.join(f"{k}={v:.1f}ms" for k, v in _dbg_t.items())
             logger.info(
                 f"[Process-DBG] frame#{self.state.frame_count} "
-                f"detect={is_detect_frame} total={total_ms:.1f}ms {parts}"
+                f"mode={self._frame_mode} total={total_ms:.1f}ms {parts}"
             )
 
         # Warn when a single frame takes longer than its time budget (× 1.2 headroom).
@@ -1324,6 +1408,111 @@ class ContainerCounterApp:
                 f"(frame #{self.state.frame_count})"
             )
     
+    def _log_qr_system_summary(self, frame_count: int) -> None:
+        """Emit a single structured summary log covering every QR-pipeline
+        subsystem.  Fires every 600 main-loop frames (≈30 s @ 20 FPS).
+
+        Keyword tag ``[QR_SUMMARY]`` makes it trivially grep-able:
+            grep QR_SUMMARY data/logs/convuyer_counter.log
+        """
+        try:
+            # ── Async QR detector ──────────────────────────────────────
+            bg = self.qr_detector.get_stats() if self.qr_detector else {}
+            submitted   = bg.get('submitted', 0)
+            processed   = bg.get('processed', 0)
+            detected    = bg.get('with_detections', 0)
+            skipped_mot = bg.get('skipped_motion', 0)
+            drop_inbox  = bg.get('dropped_overwritten', 0)
+            drop_outbox = bg.get('dropped_unconsumed', 0)
+            errors      = bg.get('errors', 0)
+            avg_ms      = bg.get('avg_elapsed_ms', 0.0)
+            max_ms      = bg.get('max_elapsed_ms', 0.0)
+            last_ms     = bg.get('last_elapsed_ms', 0.0)
+            detect_fps  = bg.get('detect_fps', 0.0)
+            engine      = bg.get('engine', '?')
+            mot_thr     = bg.get('motion_threshold', 0.0)
+            uptime_s    = bg.get('uptime_s', 0.0)
+
+            # Derived: detection-hit rate from non-skipped passes
+            actual_passes = processed  # motion-gated frames already excluded
+            hit_rate_pct = (detected / actual_passes * 100) if actual_passes else 0.0
+            # Overwrite pressure: how many frames the worker couldn't keep up with
+            overwrite_pct = (drop_inbox / submitted * 100) if submitted else 0.0
+
+            # ── Container tracking ────────────────────────────────────
+            trk = self.tracker.get_stats() if self.tracker else {}
+            trk_pos   = trk.get('total_positive', 0)
+            trk_neg   = trk.get('total_negative', 0)
+            trk_lost  = trk.get('total_lost', 0)
+            trk_active = trk.get('active_tracks', 0)
+            qr_stats  = trk.get('qr_stats', {})   # per-QR {pos, neg, lost}
+
+            # ── App-level state ───────────────────────────────────────
+            st = self.state
+            app_detections = st.qr_detections      # cumulative real detections fed to tracker
+            app_fps   = round(st.fps, 1)
+            work_avg  = round(st.avg_work_ms, 1)
+            slack_avg = round(st.avg_slack_ms, 1)
+            budget_pct = round(st.budget_utilization_pct, 1)
+            est_max   = round(st.estimated_max_fps, 1)
+
+            # ── Frame source ──────────────────────────────────────────
+            fs = self.frame_server.get_stats() if self.frame_server else {}
+            fs_recv    = fs.get('frames_received', fs.get('frames_processed', '?'))
+            fs_proc    = fs.get('frames_processed', '?')
+            fs_dropped = fs.get('frames_dropped', '?')
+            fs_drop_pct = fs.get('drop_rate', '?')
+
+            # ── Per-QR breakdown (compact one-liner) ──────────────────
+            qr_breakdown = '  '.join(
+                f"QR{q}:[+{v.get('positive',0)}/-{v.get('negative',0)}/L{v.get('lost',0)}]"
+                for q, v in sorted(qr_stats.items())
+                if any(v.values())
+            ) or 'none'
+
+            logger.info(
+                f"[QR_SUMMARY] frame={frame_count} uptime={uptime_s:.0f}s\n"
+                f"  ── AsyncQR (engine={engine} mot_thr={mot_thr:.1f}) ──\n"
+                f"    submitted={submitted}  processed={processed}  "
+                f"detect_fps={detect_fps:.2f}/s\n"
+                f"    with_QR={detected} ({hit_rate_pct:.1f}% hit rate of non-gated passes)\n"
+                f"    skipped_motion={skipped_mot}  "
+                f"drop_inbox={drop_inbox} ({overwrite_pct:.1f}% overwrite)  "
+                f"drop_outbox={drop_outbox}  errors={errors}\n"
+                f"    detect_ms  avg={avg_ms:.1f}  max={max_ms:.1f}  last={last_ms:.1f}\n"
+                f"  ── Tracking ──\n"
+                f"    events: +{trk_pos} positive  -{trk_neg} negative  "
+                f"lost={trk_lost}  active_now={trk_active}\n"
+                f"    per-QR: {qr_breakdown}\n"
+                f"    app_qr_detections={app_detections}\n"
+                f"  ── Frame pipeline ──\n"
+                f"    source: recv={fs_recv}  proc={fs_proc}  "
+                f"dropped={fs_dropped} ({fs_drop_pct}%)\n"
+                f"    loop:   fps={app_fps}  work_avg={work_avg}ms  "
+                f"slack_avg={slack_avg}ms  budget={budget_pct}%  "
+                f"est_max={est_max}fps"
+            )
+
+            # Warn on anomalies so they stand out even without grep
+            if errors > 0:
+                logger.warning(
+                    f"[QR_SUMMARY] {errors} detector error(s) since start — "
+                    f"check logs above for tracebacks"
+                )
+            if overwrite_pct > 30:
+                logger.warning(
+                    f"[QR_SUMMARY] High inbox overwrite rate {overwrite_pct:.1f}% "
+                    f"— detector is slower than frame submission rate"
+                )
+            if drop_outbox > 0:
+                logger.info(
+                    f"[QR_SUMMARY] {drop_outbox} outbox overwrite(s): main loop "
+                    f"did not poll older worker results before newer ones arrived"
+                )
+
+        except Exception as e:
+            logger.warning(f"[QR_SUMMARY] Failed to emit summary: {e}")
+
     def _annotate_frame(self, frame):
         """
         Create annotated frame with QR detections and tracking overlays.
@@ -1488,11 +1677,11 @@ class ContainerCounterApp:
         post_seconds = float(self.config.event_video_post_seconds)
 
         # ── Defer the QR video write so post-exit frames are captured ──
-        # The global preroll buffer has every frame continuously.
-        # At finalization time we slice it by timestamp range:
-        #   [entry_mono - pre_seconds, exit_mono + post_seconds]
-        # This gives a seamless clip with no boundary gaps.
+        # The per-track frame list already contains pre + transit frames.
+        # Mark this QR for continued frame collection during the post-exit
+        # deferral window.  At finalization the list IS the video.
         entry_mono = event.entry_time_monotonic if event.entry_time_monotonic > 0.0 else exit_mono
+        self._post_exit_qr.add(event.qr_value)
 
         pending = {
             'event': event,
@@ -1612,21 +1801,24 @@ class ContainerCounterApp:
         exit_mono = pw['exit_mono']
         pre_seconds = pw['pre_seconds']
         post_deadline = pw['deadline']
+        post_seconds = max(0.0, post_deadline - exit_mono)
         content_already_started = pw['content_already_started']
+
+        # Stop collecting post-exit frames for this QR.
+        self._post_exit_qr.discard(event.qr_value)
 
         # Content-camera events were written immediately — nothing to finalize.
         if content_already_started:
+            self._track_video_frames.pop(event.qr_value, None)
             return
 
-        # Single continuous slice from the global preroll buffer.
-        # No boundary stitching — one source of truth, zero gaps.
-        clip_start = entry_mono - pre_seconds
-        clip_end = post_deadline
-        all_entries = [
-            e for e in self._qr_preroll.snapshot_frames()
-            if clip_start <= e[0] <= clip_end
-        ]
-        track_frames = [frame for _, frame, _ in all_entries]
+        # Grab the per-track frame list (pre + transit + post, continuous).
+        all_entries = self._track_video_frames.pop(event.qr_value, [])
+        track_frames = [frame for _, frame in all_entries]
+
+        pre_count = sum(1 for ts, _ in all_entries if ts < entry_mono)
+        post_count = sum(1 for ts, _ in all_entries if ts > exit_mono)
+        transit_count = len(all_entries) - pre_count - post_count
 
         # Compute measured fps from timestamps for real-time playback.
         qr_measured_fps: Optional[float] = None
@@ -1648,9 +1840,16 @@ class ContainerCounterApp:
             f"[ContainerCounterApp] Finalizing video "
             f"event={event_id} QR={event.qr_value} "
             f"frames={len(all_entries)} "
+            f"(pre={pre_count}/transit={transit_count}/post={post_count}) "
             f"fps={f'{qr_measured_fps:.1f}' if qr_measured_fps else 'n/a'} "
-            f"clip={clip_duration_seconds:.1f}s"
+            f"clip={clip_duration_seconds:.1f}s "
+            f"want_pre={pre_seconds:.1f}s want_post={post_seconds:.1f}s"
         )
+
+        if pre_count == 0 and pre_seconds > 0.05:
+            logger.warning(
+                f"[ContainerCounterApp] No pre-event frames for {event_id}"
+            )
 
         # Dispatch to coordinator.
         video_result = self._capture_event_video(
@@ -2215,6 +2414,9 @@ class ContainerCounterApp:
     def _cleanup(self) -> None:
         """Clean up resources."""
         logger.info("[ContainerCounterApp] Cleaning up...")
+
+        if hasattr(self, 'qr_detector') and isinstance(self.qr_detector, AsyncQRDetector):
+            self.qr_detector.stop()
 
         # Flush any pending deferred video writes immediately.
         for pw in self._pending_video_writes:

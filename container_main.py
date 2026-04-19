@@ -31,6 +31,27 @@ import os
 # Ensure project root is in path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# This process is isolated, but many imported modules initialize logging at
+# import time. Set container_main-specific logging env before any project
+# imports so the first AppLogging setup in this process uses these values.
+CONTAINER_LOG_BASENAME = "container_main"
+CONTAINER_LOG_MAX_BYTES = 20 * 1024 * 1024
+CONTAINER_LOG_BACKUP_COUNT = 10
+CONTAINER_ERROR_LOG_MAX_BYTES = 5 * 1024 * 1024
+CONTAINER_ERROR_LOG_BACKUP_COUNT = 3
+CONTAINER_LOG_RETENTION_DAYS = 7
+
+_CONTAINER_LOG_ENV_DEFAULTS = (
+    ("APP_LOG_BASENAME", CONTAINER_LOG_BASENAME),
+    ("APP_LOG_MAX_BYTES", str(CONTAINER_LOG_MAX_BYTES)),
+    ("APP_LOG_BACKUP_COUNT", str(CONTAINER_LOG_BACKUP_COUNT)),
+    ("APP_ERROR_LOG_MAX_BYTES", str(CONTAINER_ERROR_LOG_MAX_BYTES)),
+    ("APP_ERROR_LOG_BACKUP_COUNT", str(CONTAINER_ERROR_LOG_BACKUP_COUNT)),
+    ("APP_LOG_RETENTION_DAYS", str(CONTAINER_LOG_RETENTION_DAYS)),
+)
+for env_name, env_value in _CONTAINER_LOG_ENV_DEFAULTS:
+    os.environ.setdefault(env_name, env_value)
+
 from src.container.ContainerCounterApp import ContainerCounterApp, ContainerConfig
 from src.logging.Database import DatabaseManager
 from src.utils.AppLogging import logger
@@ -50,7 +71,7 @@ else:
     logger.info("Not running on RDK platform - using video file by default")
     DEVELOPMENT = True              # Force development mode (video file instead of ROS2)
     ENABLE_DISPLAY = True            # Force enable cv2 display window
-    VIDEO_PATH = os.path.expanduser('~/Downloads/cam_qr2.mp4') # Path to video file (development only)
+    VIDEO_PATH = os.path.expanduser('~/Downloads/cam_qr.mp4') # Path to video file (development only)
 MAX_FRAMES = None               # Max frames to process (None = infinite)
 DATABASE_PATH = str(DB_PATH)    # Path to database file
 

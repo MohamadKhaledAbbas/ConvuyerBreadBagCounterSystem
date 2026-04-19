@@ -217,6 +217,7 @@ class ContainerTracker:
         qr_value: int,
         center: Tuple[int, int],
         timestamp: Optional[float] = None,
+        monotonic_time: Optional[float] = None,
         is_prediction: bool = False,
     ) -> Optional[ContainerEvent]:
         """
@@ -226,6 +227,9 @@ class ContainerTracker:
             qr_value: QR code value (1-5)
             center: (x, y) center position of QR code
             timestamp: Detection timestamp (defaults to current time)
+            monotonic_time: Monotonic timestamp aligned to the frame that
+                produced this update. When omitted, defaults to the current
+                monotonic clock.
             is_prediction: ``True`` when ``center`` is extrapolated from a
                 linear predictor rather than an actual QR decoder output.
                 Predicted positions maintain the track's trajectory but
@@ -237,12 +241,14 @@ class ContainerTracker:
         """
         if timestamp is None:
             timestamp = time.time()
+        if monotonic_time is None:
+            monotonic_time = time.monotonic()
         
         x, y = center
         # Monotonic timestamp captured alongside the wall-clock one so
         # downstream consumers (EventVideoCoordinator, ContentCameraRecorder)
         # can align the pre-roll ring buffer precisely.
-        t_mono = time.monotonic()
+        t_mono = monotonic_time
 
         # Check if we have an existing track for this QR value
         if qr_value in self._tracks:
