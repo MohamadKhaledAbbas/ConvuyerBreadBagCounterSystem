@@ -475,8 +475,8 @@ async def snapshot_view(
     # Camera selector options
     bread_selected = 'selected' if camera == 'bread' else ''
     container_selected = 'selected' if camera == 'container' else ''
-    page_title = "البث المباشر — كاميرا الحاويات" if camera == "container" else "البث المباشر — منظومة إحصاء أكياس الخبز"
-    page_subtitle = "عرض حي لكاميرا مراقبة الحاويات (صالة)" if camera == "container" else "عرض حي للكاميرا مع إطارات الكشف والتعرف"
+    page_title = "البث المباشر — كاميرا العربات" if camera == "container" else "البث المباشر — منظومة إحصاء أكياس الخبز"
+    page_subtitle = "عرض حي لكاميرا مراقبة العربات (صالة)" if camera == "container" else "عرض حي للكاميرا مع إطارات الكشف والتعرف"
     auto_refresh_js = f"setInterval(refreshNow, {int(refresh * 1000)});" if refresh > 0 else ""
 
     html_content = f"""
@@ -690,7 +690,7 @@ async def snapshot_view(
         <a href="/" class="back-home"><i class="fa-solid fa-home"></i> الرئيسية</a>
         
         <div class="page-header">
-            <h1><i class="fa-solid fa-camera"></i> {'البث المباشر — الحاويات' if camera == 'container' else 'البث المباشر'}</h1>
+            <h1><i class="fa-solid fa-camera"></i> {'البث المباشر — العربات' if camera == 'container' else 'البث المباشر'}</h1>
             <p class="subtitle">{page_subtitle}</p>
         </div>
         
@@ -759,7 +759,7 @@ async def snapshot_view(
             </button>
             <select id="cameraSelect" onchange="switchCamera()">
                 <option value="bread" {bread_selected}>🍞 كاميرا الخبز</option>
-                <option value="container" {container_selected}>📦 كاميرا الحاويات</option>
+                <option value="container" {container_selected}>📦 كاميرا العربات</option>
             </select>
             <select id="autoRefresh" onchange="updateAutoRefresh()">
                 <option value="0" {"selected" if refresh == 0 else ""}>يدوي</option>

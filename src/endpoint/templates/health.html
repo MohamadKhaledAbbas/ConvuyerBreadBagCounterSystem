@@ -419,7 +419,7 @@
     </div>
 
     <!-- QR Container Tracking Module -->
-    <div class="section-title"><i class="fa-solid fa-qrcode"></i> وحدة تتبع الحاويات — صالة QR</div>
+    <div class="section-title"><i class="fa-solid fa-qrcode"></i> وحدة تتبع العربات — صالة QR</div>
     <div class="container-section" id="containerSection">
         <div class="container-offline" id="containerOffline">
             <i class="fa-solid fa-circle-pause" style="color:var(--text-muted);margin-left:6px;"></i>
@@ -613,7 +613,7 @@ const compLabels = {
     database:        'قاعدة البيانات',
     codec:           'وحدة فك الترميز',
     rtsp:            'بث الكاميرا',
-    container:       'وحدة تتبع الحاويات',
+    container:       'وحدة تتبع العربات',
 };
 
 function formatQrEngine(cont) {
@@ -689,7 +689,7 @@ function renderComponents(components) {
     grid.innerHTML =
         compCard(dbDot,       'قاعدة البيانات — Database',       dbSub,       null) +
         compCard(conveyorDot, 'خط الإنتاج — Conveyor',     conveyorSub, conveyorDetail) +
-        compCard(contDot,     'تتبع الحاويات — Container QR', contSub,     contDetail);
+        compCard(contDot,     'تتبع العربات — Container QR', contSub,     contDetail);
 }
 
 function tempColor(val) {

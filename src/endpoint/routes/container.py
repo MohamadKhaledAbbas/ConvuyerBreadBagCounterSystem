@@ -100,7 +100,7 @@ async def container_dashboard(
         request,
         "container.html",
         {
-            "title": "صالة - مراقبة الحاويات",
+            "title": "صالة - مراقبة العربات",
             "page": "container",
         }
     )
@@ -117,7 +117,7 @@ async def container_events_page(
         request,
         "container_events.html",
         {
-            "title": "سجل الحاويات",
+            "title": "سجل العربات",
             "page": "container_events",
         }
     )
@@ -518,7 +518,7 @@ async def container_content_page(
         request,
         "container_content.html",
         {
-            "title": "محتويات الحاويات - تسجيلات",
+            "title": "محتويات العربات - تسجيلات",
             "page": "container_content",
         },
     )

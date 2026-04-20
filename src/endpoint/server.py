@@ -384,7 +384,7 @@ async def health() -> JSONResponse:
     else:
         components["container"] = {
             "healthy": None,
-            "note": "مراقبة الحاويات غير مفعّلة أو غير متصلة",
+            "note": "مراقبة العربات غير مفعّلة أو غير متصلة",
         }
 
     # ── Monitoring log summary (24h) ──

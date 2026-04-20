@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>سجل الحاويات</title>
+    <title>سجل العربات</title>
     <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -222,24 +222,24 @@
 </head>
 <body>
 <main>
-    <a href="/container" class="back-link"><i class="fa-solid fa-arrow-right"></i> لوحة الحاويات</a>
+    <a href="/container" class="back-link"><i class="fa-solid fa-arrow-right"></i> لوحة العربات</a>
 
     <div class="header">
-        <h1><i class="fa-solid fa-clock-rotate-left"></i> سجل الحاويات</h1>
-        <p class="subtitle">جميع عمليات دخول وخروج الحاويات مع التفاصيل</p>
+        <h1><i class="fa-solid fa-clock-rotate-left"></i> سجل العربات</h1>
+        <p class="subtitle">جميع عمليات دخول وخروج العربات مع التفاصيل</p>
     </div>
 
     <!-- Filters -->
     <div class="filter-bar">
         <div class="field">
-            <label for="filterQR"><i class="fa-solid fa-qrcode"></i> الحاوية</label>
+            <label for="filterQR"><i class="fa-solid fa-qrcode"></i> العربة</label>
             <select id="filterQR">
                 <option value="">الكل</option>
-                <option value="1">حاوية 1</option>
-                <option value="2">حاوية 2</option>
-                <option value="3">حاوية 3</option>
-                <option value="4">حاوية 4</option>
-                <option value="5">حاوية 5</option>
+                <option value="1">عربة 1</option>
+                <option value="2">عربة 2</option>
+                <option value="3">عربة 3</option>
+                <option value="4">عربة 4</option>
+                <option value="5">عربة 5</option>
             </select>
         </div>
         <div class="field">
@@ -269,7 +269,7 @@
                 <tr>
                     <th>#</th>
                     <th>الوقت</th>
-                    <th>الحاوية</th>
+                    <th>العربة</th>
                     <th>الاتجاه</th>
                     <th>المدة</th>
                     <th>لقطة</th>
@@ -289,7 +289,7 @@
     </div>
 
     <div class="footer">
-        <a href="/container">&larr; لوحة الحاويات</a> &nbsp;•&nbsp;
+        <a href="/container">&larr; لوحة العربات</a> &nbsp;•&nbsp;
         <a href="/">الرئيسية</a>
     </div>
 </main>
