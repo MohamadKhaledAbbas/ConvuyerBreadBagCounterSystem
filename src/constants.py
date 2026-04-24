@@ -19,6 +19,7 @@ container_rtsp_port = "container_rtsp_port"  # Same as bread camera port
 container_rtsp_username = "container_rtsp_username"  # Same credentials
 container_rtsp_password = "container_rtsp_password"  # Same credentials
 container_snapshot_requested_key = "container_snapshot_requested"
+content_snapshot_requested_key = "content_snapshot_requested"
 container_enable_display_key = "container_enable_display"
 container_ui_card_visible = "container_ui_card_visible"
 
@@ -125,6 +126,7 @@ CONTENT_CONFIG_KEYS = [
     content_rtsp_port,
     content_rtsp_username,
     content_rtsp_password,
+    content_snapshot_requested_key,
     content_recording_enabled_key,
     content_pre_event_seconds,
     content_post_event_seconds,

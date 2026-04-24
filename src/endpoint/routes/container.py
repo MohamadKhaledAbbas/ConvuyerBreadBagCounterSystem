@@ -298,7 +298,21 @@ async def get_container_events(
         limit=limit,
         offset=offset,
     )
-    events = [_attach_event_video_info(event) for event in events]
+    enriched_events = []
+    for event in events:
+        try:
+            enriched_events.append(_attach_event_video_info(event))
+        except Exception as e:
+            logger.warning(
+                f"[container.routes] Failed to attach video info for event id={event.get('id')} - falling back: {e}",
+                exc_info=True,
+            )
+            fallback = dict(event)
+            fallback["video_sources"] = {}
+            fallback["video_event_id"] = None
+            fallback["has_video"] = False
+            enriched_events.append(fallback)
+    events = enriched_events
     
     total = repo.get_event_count(
         start_time=start_time,
@@ -330,7 +344,15 @@ async def get_container_event(
             content={"error": "Event not found"}
         )
     
-    return JSONResponse(content=_attach_event_video_info(event))
+    try:
+        payload = _attach_event_video_info(event)
+    except Exception as e:
+        logger.warning(f"[container.routes] Failed to attach video info for event id={event.get('id')}: {e}", exc_info=True)
+        payload = dict(event)
+        payload["video_sources"] = {}
+        payload["video_event_id"] = None
+        payload["has_video"] = False
+    return JSONResponse(content=payload)
 
 
 @router.get("/api/hourly")
@@ -526,6 +548,9 @@ _EVENT_ID_RE = __import__('re').compile(r'^[A-Za-z0-9_\-]+$')
 def _resolve_event_video_paths(event_id: str) -> dict:
     """Return the resolved MP4 path for each supported camera."""
     paths = {"qr": None, "content": None}
+    # Defensive: accept None or non-string event_id values (legacy rows).
+    if not event_id or not isinstance(event_id, str):
+        return paths
     if not _EVENT_ID_RE.match(event_id):
         return paths
 

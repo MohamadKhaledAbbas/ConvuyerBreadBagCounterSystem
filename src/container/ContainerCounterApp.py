@@ -648,7 +648,9 @@ class ContainerCounterApp:
         self.frame_server = None
         self._visualizer: Optional[ContainerVisualizer] = None
         self._snapshot_writer: Optional[SnapshotWriter] = None
+        self._content_snapshot_writer: Optional[SnapshotWriter] = None
         self._content_recorder = None  # ContentCameraRecorder (optional)
+        self._last_content_snapshot_check: float = 0.0
         self._event_video = None       # EventVideoCoordinator (always set in _init_components)
         self._qr_engine_requested: str = 'auto'
         self._qr_engine_resolved: str = 'unknown'
@@ -865,6 +867,11 @@ class ContainerCounterApp:
         self._snapshot_writer = SnapshotWriter(
             snapshot_dir=SNAPSHOT_DIR,
             prefix="container_",
+        )
+        # Content camera on-demand snapshot writer (writes content_latest_*.jpg)
+        self._content_snapshot_writer = SnapshotWriter(
+            snapshot_dir=SNAPSHOT_DIR,
+            prefix="content_",
         )
         
         # Frame Server (platform-dependent)
@@ -1560,40 +1567,93 @@ class ContainerCounterApp:
         Always annotates the frame at capture time so the overlay is
         guaranteed regardless of the main-loop annotation cadence.
         """
-        if self.db is None or self._snapshot_writer is None:
+        if self.db is None:
             return
 
         now = time.time()
         if now - self._last_snapshot_check < 1.0:
             return
         self._last_snapshot_check = now
-        
+
+        # ---- Container snapshot (existing behavior) ----
         try:
             requested = self.db.get_config(constants.container_snapshot_requested_key, "0")
-            if requested != "1":
-                return
-            
-            # Always produce a fresh overlay for the snapshot
-            annotated = self._annotate_frame(frame)
+            if requested == "1":
+                # Always produce a fresh overlay for the snapshot
+                try:
+                    annotated = self._annotate_frame(frame)
+                except Exception:
+                    annotated = None
 
-            # Write snapshot (raw + annotated overlay)
-            success = self._snapshot_writer.write_snapshot(
-                frame=frame,
-                frame_with_overlay=annotated,
-                frame_number=self.state.frame_count,
-            )
-            
-            # Clear the flag immediately
-            self.db.set_config(constants.container_snapshot_requested_key, "0")
-            
-            if success:
-                logger.debug(
-                    f"[ContainerCounterApp] Snapshot captured at frame {self.state.frame_count}"
-                )
+                success = False
+                try:
+                    if self._snapshot_writer is not None:
+                        success = self._snapshot_writer.write_snapshot(
+                            frame=frame,
+                            frame_with_overlay=annotated,
+                            frame_number=self.state.frame_count,
+                        )
+                except Exception as e:
+                    logger.error(f"[ContainerCounterApp] Container snapshot write failed: {e}")
+
+                # Clear the flag immediately
+                try:
+                    self.db.set_config(constants.container_snapshot_requested_key, "0")
+                except Exception:
+                    pass
+
+                if success:
+                    logger.debug(
+                        f"[ContainerCounterApp] Snapshot captured at frame {self.state.frame_count}"
+                    )
+                else:
+                    logger.warning(f"[ContainerCounterApp] Snapshot capture failed at frame {self.state.frame_count}")
         except Exception as e:
             logger.error(f"[ContainerCounterApp] Snapshot error: {e}")
             try:
                 self.db.set_config(constants.container_snapshot_requested_key, "0")
+            except Exception:
+                pass
+
+        # ---- Content camera snapshot (new) ----
+        try:
+            requested = self.db.get_config(constants.content_snapshot_requested_key, "0")
+            if requested == "1":
+                # Try to get the latest decoded frame from the content recorder
+                frame_c = None
+                try:
+                    if self._content_recorder is not None:
+                        frame_c = self._content_recorder.get_latest_frame()
+                except Exception as e:
+                    logger.error(f"[ContainerCounterApp] Failed to get latest content frame: {e}")
+
+                success = False
+                try:
+                    if frame_c is not None and self._content_snapshot_writer is not None:
+                        success = self._content_snapshot_writer.write_snapshot(
+                            frame=frame_c,
+                            frame_with_overlay=None,
+                            frame_number=self.state.frame_count,
+                        )
+                    else:
+                        logger.warning("[ContainerCounterApp] No content frame available to capture")
+                except Exception as e:
+                    logger.error(f"[ContainerCounterApp] Content snapshot write failed: {e}")
+
+                # Clear the flag immediately
+                try:
+                    self.db.set_config(constants.content_snapshot_requested_key, "0")
+                except Exception:
+                    pass
+
+                if success:
+                    logger.debug("[ContainerCounterApp] Content snapshot captured")
+                else:
+                    logger.warning("[ContainerCounterApp] Content snapshot capture failed")
+        except Exception as e:
+            logger.error(f"[ContainerCounterApp] Content snapshot error: {e}")
+            try:
+                self.db.set_config(constants.content_snapshot_requested_key, "0")
             except Exception:
                 pass
     

@@ -42,12 +42,18 @@ SNAPSHOT_META_PATH = os.path.join(SNAPSHOT_DIR, "latest_meta.json")
 CONTAINER_SNAPSHOT_RAW_PATH = os.path.join(SNAPSHOT_DIR, "container_latest_raw.jpg")
 CONTAINER_SNAPSHOT_OVERLAY_PATH = os.path.join(SNAPSHOT_DIR, "container_latest_overlay.jpg")
 CONTAINER_SNAPSHOT_META_PATH = os.path.join(SNAPSHOT_DIR, "container_latest_meta.json")
+# Content camera snapshot paths (side/3D-angle camera, e.g. 192.168.2.128)
+CONTENT_SNAPSHOT_RAW_PATH = os.path.join(SNAPSHOT_DIR, "content_latest_raw.jpg")
+CONTENT_SNAPSHOT_OVERLAY_PATH = os.path.join(SNAPSHOT_DIR, "content_latest_overlay.jpg")
+CONTENT_SNAPSHOT_META_PATH = os.path.join(SNAPSHOT_DIR, "content_latest_meta.json")
 
 
 def _get_snapshot_paths(camera: str = "bread") -> tuple[str, str, str]:
     """Get snapshot file paths for a given camera."""
     if camera == "container":
         return CONTAINER_SNAPSHOT_RAW_PATH, CONTAINER_SNAPSHOT_OVERLAY_PATH, CONTAINER_SNAPSHOT_META_PATH
+    if camera == "content":
+        return CONTENT_SNAPSHOT_RAW_PATH, CONTENT_SNAPSHOT_OVERLAY_PATH, CONTENT_SNAPSHOT_META_PATH
     return SNAPSHOT_RAW_PATH, SNAPSHOT_OVERLAY_PATH, SNAPSHOT_META_PATH
 
 
@@ -56,6 +62,9 @@ def _get_snapshot_flag_key(camera: str = "bread") -> str:
     if camera == "container":
         from src.constants import container_snapshot_requested_key
         return container_snapshot_requested_key
+    if camera == "content":
+        from src.constants import content_snapshot_requested_key
+        return content_snapshot_requested_key
     return snapshot_requested_key
 
 
@@ -242,7 +251,7 @@ async def snapshot(
         JPEG image response or 503 if capture failed
     """
     # Validate camera parameter
-    if camera not in ("bread", "container"):
+    if camera not in ("bread", "container", "content"):
         camera = "bread"
 
     # Get current snapshot timestamp before requesting new one
@@ -467,7 +476,7 @@ async def snapshot_view(
         overlay: Include detection overlays
         camera: Which camera to view ("bread" or "container")
     """
-    if camera not in ("bread", "container"):
+    if camera not in ("bread", "container", "content"):
         camera = "bread"
     overlay_param = "true" if overlay else "false"
     auto_refresh_js = f"setInterval(refreshNow, {int(refresh * 1000)});" if refresh > 0 else ""
@@ -475,8 +484,16 @@ async def snapshot_view(
     # Camera selector options
     bread_selected = 'selected' if camera == 'bread' else ''
     container_selected = 'selected' if camera == 'container' else ''
-    page_title = "البث المباشر — كاميرا العربات" if camera == "container" else "البث المباشر — منظومة إحصاء أكياس الخبز"
-    page_subtitle = "عرض حي لكاميرا مراقبة العربات (صالة)" if camera == "container" else "عرض حي للكاميرا مع إطارات الكشف والتعرف"
+    content_selected = 'selected' if camera == 'content' else ''
+    if camera == 'container':
+        page_title = "البث المباشر — كاميرا العربات"
+        page_subtitle = "عرض حي لكاميرا مراقبة العربات (صالة)"
+    elif camera == 'content':
+        page_title = "البث المباشر — كاميرا المحتوى"
+        page_subtitle = "عرض حي لكاميرا المحتوى (زاوية 3D)"
+    else:
+        page_title = "البث المباشر"
+        page_subtitle = "عرض حي للكاميرا مع إطارات الكشف والتعرف"
     auto_refresh_js = f"setInterval(refreshNow, {int(refresh * 1000)});" if refresh > 0 else ""
 
     html_content = f"""
@@ -760,6 +777,7 @@ async def snapshot_view(
             <select id="cameraSelect" onchange="switchCamera()">
                 <option value="bread" {bread_selected}>🍞 كاميرا الخبز</option>
                 <option value="container" {container_selected}>📦 كاميرا العربات</option>
+                <option value="content" {content_selected}>🎥 كاميرا المحتوى</option>
             </select>
             <select id="autoRefresh" onchange="updateAutoRefresh()">
                 <option value="0" {"selected" if refresh == 0 else ""}>يدوي</option>

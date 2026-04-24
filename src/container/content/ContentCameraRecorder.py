@@ -427,6 +427,22 @@ class ContentCameraRecorder:
             "total_reconnects": self._total_reconnects,
         }
 
+    def get_latest_frame(self) -> Optional[np.ndarray]:
+        """Return a copy of the most recent decoded BGR frame, or None.
+
+        This is a lightweight accessor intended for on-demand snapshots.
+        It does not block the reader thread for long — a shallow copy is
+        returned to avoid callers mutating the internally-stored frame.
+        """
+        with self._lock:
+            if not self._ring:
+                return None
+            frame = self._ring[-1][1]
+            try:
+                return frame.copy()
+            except Exception:
+                return frame
+
     # ----- reader thread --------------------------------------------------
 
     def _reader_loop(self) -> None:

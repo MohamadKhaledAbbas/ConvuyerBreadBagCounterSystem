@@ -36,6 +36,25 @@ class ContainerRepository:
         """
         self.db = db
     
+    def _safe_load_metadata(self, raw) -> Dict:
+        """Safely parse the metadata JSON stored in the DB.
+
+        Returns an empty dict when parsing fails or when the raw value
+        is empty or not a dict.
+        """
+        if not raw:
+            return {}
+        try:
+            if isinstance(raw, (bytes, bytearray)):
+                raw = raw.decode('utf-8', errors='ignore')
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return parsed
+            return {}
+        except Exception:
+            logger.warning("[ContainerRepository] failed to parse metadata JSON; returning empty dict")
+            return {}
+    
     def get_events(
         self,
         start_time: Optional[str] = None,
@@ -107,7 +126,7 @@ class ContainerRepository:
                 'exit_x': row[6],
                 'duration_seconds': row[7],
                 'snapshot_path': row[8],
-                'metadata': json.loads(row[9]) if row[9] else {},
+                'metadata': self._safe_load_metadata(row[9]),
                 'is_lost': bool(row[10]) if len(row) > 10 else False,
             }
             for row in rows
@@ -386,7 +405,13 @@ class ContainerRepository:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
         
-        metadata_json = json.dumps(metadata) if metadata else None
+        metadata_json = None
+        if metadata:
+            try:
+                metadata_json = json.dumps(metadata)
+            except Exception:
+                logger.warning("[ContainerRepository] failed to serialize metadata for insert; storing null")
+                metadata_json = None
         
         cursor = self.db.execute(
             query,
@@ -422,5 +447,5 @@ class ContainerRepository:
             'exit_x': row[6],
             'duration_seconds': row[7],
             'snapshot_path': row[8],
-            'metadata': json.loads(row[9]) if row[9] else {},
+            'metadata': self._safe_load_metadata(row[9]),
         }
