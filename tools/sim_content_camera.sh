@@ -18,7 +18,13 @@
 # (credentials are accepted by MediaMTX because auth is disabled in
 # tools/mediamtx.yml)
 #
-# To configure the app DB to use this sim camera, run:
+# ``container_main.py`` now auto-detects this local simulator in
+# development mode when it is reachable at 127.0.0.1:8554, so the
+# normal local workflow is simply:
+#   1. ./tools/sim_content_camera.sh
+#   2. python container_main.py
+#
+# Manual DB configuration is still available if needed:
 #   python tools/configure_sim.py --enable
 #
 # Stop:
@@ -106,6 +112,7 @@ RTSP_PUSH="rtsp://127.0.0.1:8554/cam/realmonitor"
 echo "[sim] Streaming $VIDEO → $RTSP_PUSH (looping)"
 echo "[sim] Content recorder should connect to:"
 echo "      rtsp://sim:sim@127.0.0.1:8554/cam/realmonitor"
+echo "[sim] Start container_main.py after this; local dev auto-detect will enable the content camera."
 echo ""
 echo "[sim] Press Ctrl-C to stop."
 echo ""

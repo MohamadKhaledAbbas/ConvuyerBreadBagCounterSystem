@@ -58,20 +58,124 @@ def _event_id_from_path(path: Optional[str]) -> Optional[str]:
 
 
 def _attach_event_video_info(event: dict) -> dict:
-    """Annotate an event payload with actual clip availability."""
+    """Annotate an event payload with actual per-camera clip availability."""
     metadata = event.get("metadata") or {}
+    hinted_sources = metadata.get("video_sources")
+    if not isinstance(hinted_sources, dict):
+        hinted_sources = {}
     event_id = (
-        _event_id_from_path(metadata.get("video_relpath"))
+        metadata.get("event_id")
+        or _event_id_from_path(metadata.get("video_relpath"))
+        or _event_id_from_path((hinted_sources.get("qr") or {}).get("video_relpath"))
+        or _event_id_from_path((hinted_sources.get("content") or {}).get("video_relpath"))
         or _event_id_from_path(event.get("snapshot_path"))
     )
-    video_path = _resolve_event_video_path(event_id) if event_id else None
 
     enriched = dict(event)
     enriched["video_event_id"] = event_id
-    enriched["has_video"] = bool(video_path)
-    enriched["video_url"] = (
-        f"/container/event/{event_id}/video" if video_path and event_id else None
-    )
+
+    if not event_id:
+        enriched["video_sources"] = {
+            "qr": {
+                "camera": "qr",
+                "label": "كاميرا QR",
+                "available": False,
+                "url": None,
+                "video_relpath": None,
+                "recording_status": "no_video",
+                "clip_duration_seconds": None,
+                "is_default": False,
+                "preferred": False,
+            },
+            "content": {
+                "camera": "content",
+                "label": "كاميرا المحتوى",
+                "available": False,
+                "url": None,
+                "video_relpath": None,
+                "recording_status": "no_video",
+                "clip_duration_seconds": None,
+                "is_default": False,
+                "preferred": False,
+            },
+        }
+        enriched["available_cameras"] = []
+        enriched["preferred_video_camera"] = "qr"
+        enriched["default_video_camera"] = None
+        enriched["has_qr_video"] = False
+        enriched["has_content_video"] = False
+        enriched["has_video"] = False
+        enriched["video_fallback"] = False
+        enriched["video_url"] = None
+        return enriched
+
+    qr_relroot = os.path.basename(CONTAINER_SNAPSHOT_DIR.rstrip("/"))
+    content_relroot = os.path.basename(CONTAINER_CONTENT_VIDEOS_DIR.rstrip("/"))
+    actual_paths = _resolve_event_video_paths(event_id)
+
+    sources = {}
+    for camera, relpath in (
+        ("qr", f"{qr_relroot}/{event_id}/video.mp4"),
+        ("content", f"{content_relroot}/{event_id}.mp4"),
+    ):
+        hinted = hinted_sources.get(camera) if isinstance(hinted_sources, dict) else {}
+        path = actual_paths.get(camera)
+        hinted_status = hinted.get("recording_status")
+        if path:
+            recording_status = (
+                hinted_status if hinted_status == "capped" else "ok"
+            )
+        else:
+            recording_status = hinted_status or "no_video"
+        sources[camera] = {
+            "camera": camera,
+            "label": "كاميرا QR" if camera == "qr" else "كاميرا المحتوى",
+            "available": bool(path),
+            "url": (
+                f"/container/event/{event_id}/video?camera={camera}"
+                if path else None
+            ),
+            "video_relpath": hinted.get("video_relpath") or relpath,
+            "recording_status": recording_status,
+            "clip_duration_seconds": hinted.get("clip_duration_seconds"),
+        }
+
+    preferred_camera = str(
+        metadata.get("preferred_camera") or metadata.get("camera") or "qr"
+    ).strip().lower()
+    if preferred_camera not in ("qr", "content"):
+        preferred_camera = "qr"
+
+    default_camera = None
+    if sources[preferred_camera]["available"]:
+        default_camera = preferred_camera
+    elif sources["content"]["available"]:
+        default_camera = "content"
+    elif sources["qr"]["available"]:
+        default_camera = "qr"
+
+    for camera, source in sources.items():
+        source["preferred"] = (camera == preferred_camera)
+        source["is_default"] = (camera == default_camera)
+
+    default_source = sources.get(default_camera) if default_camera else None
+    enriched["video_sources"] = sources
+    enriched["available_cameras"] = [
+        camera for camera, source in sources.items() if source["available"]
+    ]
+    enriched["preferred_video_camera"] = preferred_camera
+    enriched["default_video_camera"] = default_camera
+    enriched["has_qr_video"] = sources["qr"]["available"]
+    enriched["has_content_video"] = sources["content"]["available"]
+    enriched["has_video"] = bool(default_source)
+    enriched["video_fallback"] = bool(default_camera and default_camera != preferred_camera)
+    enriched["video_url"] = default_source.get("url") if default_source else None
+    if default_source:
+        enriched["recording_status"] = default_source.get("recording_status")
+        enriched["clip_duration_seconds"] = default_source.get("clip_duration_seconds")
+    else:
+        enriched["recording_status"] = metadata.get("recording_status")
+        enriched["clip_duration_seconds"] = metadata.get("clip_duration_seconds")
     return enriched
 
 
@@ -399,12 +503,16 @@ async def get_event_metadata(event_id: str):
 
 
 @router.get("/snapshot/event/{event_id}/video")
-async def get_event_video(event_id: str):
+async def get_event_video(
+    event_id: str,
+    request: Request,
+    camera: str = Query("auto", pattern="^(auto|qr|content)$"),
+):
     """Legacy alias — see :func:`get_event_clip`.
 
     Kept so older clients keep working; prefer ``/container/event/{id}/video``.
     """
-    return await get_event_clip(event_id)
+    return await get_event_clip(event_id=event_id, request=request, camera=camera)
 
 
 # =============================================================================
@@ -415,22 +523,23 @@ async def get_event_video(event_id: str):
 _EVENT_ID_RE = __import__('re').compile(r'^[A-Za-z0-9_\-]+$')
 
 
-def _resolve_event_video_path(event_id: str) -> Optional[str]:
-    """Return the absolute path of the MP4 for ``event_id`` if it exists.
-
-    Tries the QR-camera location first (``container_snapshots/{id}/video.mp4``),
-    then the content-camera location (``container_content_videos/{id}.mp4``).
-    Returns ``None`` when neither exists.  Also verifies the resolved path
-    stays inside the expected roots (defence in depth against traversal).
-    """
+def _resolve_event_video_paths(event_id: str) -> dict:
+    """Return the resolved MP4 path for each supported camera."""
+    paths = {"qr": None, "content": None}
     if not _EVENT_ID_RE.match(event_id):
-        return None
+        return paths
 
-    candidates = [
-        (CONTAINER_SNAPSHOT_DIR, os.path.join(CONTAINER_SNAPSHOT_DIR, event_id, "video.mp4")),
-        (CONTAINER_CONTENT_VIDEOS_DIR, os.path.join(CONTAINER_CONTENT_VIDEOS_DIR, f"{event_id}.mp4")),
-    ]
-    for root, candidate in candidates:
+    candidates = {
+        "qr": (
+            CONTAINER_SNAPSHOT_DIR,
+            os.path.join(CONTAINER_SNAPSHOT_DIR, event_id, "video.mp4"),
+        ),
+        "content": (
+            CONTAINER_CONTENT_VIDEOS_DIR,
+            os.path.join(CONTAINER_CONTENT_VIDEOS_DIR, f"{event_id}.mp4"),
+        ),
+    }
+    for camera, (root, candidate) in candidates.items():
         try:
             abs_root = os.path.realpath(root)
             abs_file = os.path.realpath(candidate)
@@ -439,19 +548,48 @@ def _resolve_event_video_path(event_id: str) -> Optional[str]:
         if not abs_file.startswith(abs_root + os.sep):
             continue
         if os.path.isfile(abs_file):
-            return abs_file
+            paths[camera] = abs_file
+    return paths
+
+
+def _resolve_event_video_path(
+    event_id: str,
+    camera: str = "auto",
+) -> Optional[str]:
+    """Return the absolute path of the selected MP4 for ``event_id``.
+
+    ``camera="auto"`` preserves the legacy behaviour of preferring the
+    QR-camera clip and falling back to the content-camera clip.
+    Returns ``None`` when neither exists.  Also verifies the resolved path
+    stays inside the expected roots (defence in depth against traversal).
+    """
+    camera = (camera or "auto").strip().lower()
+    if camera not in ("auto", "qr", "content"):
+        return None
+
+    paths = _resolve_event_video_paths(event_id)
+    if camera in ("qr", "content"):
+        return paths.get(camera)
+
+    for preferred in ("qr", "content"):
+        if paths.get(preferred):
+            return paths[preferred]
     return None
 
 
 @router.get("/event/{event_id}/video")
-async def get_event_clip(event_id: str, request: Request):
+async def get_event_clip(
+    event_id: str,
+    request: Request,
+    camera: str = Query("auto", pattern="^(auto|qr|content)$"),
+):
     """Stream the event MP4 regardless of which camera produced it.
 
     Resolves the clip by checking both the QR-camera and content-camera
     output directories, returning the first match.  Supports HTTP Range
     requests so ``<video>`` tags can seek without full downloads.
     """
-    path = _resolve_event_video_path(event_id)
+    path = _resolve_event_video_path(event_id, camera=camera)
     if path is None:
         return JSONResponse(status_code=404, content={"error": "Video not found"})
 

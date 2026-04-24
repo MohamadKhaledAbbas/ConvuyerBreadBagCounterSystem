@@ -58,6 +58,7 @@ import cv2
 import numpy as np
 
 from src.utils.AppLogging import logger
+from src.container.content.SyncDebugOverlay import draw_sync_debug_overlay
 
 # A ring-buffer entry: (monotonic_timestamp_seconds, BGR frame).
 _FrameEntry = Tuple[float, np.ndarray]
@@ -81,6 +82,7 @@ class ContentRecorderConfig:
     max_recording_seconds: float = 15.0 # safety cap: auto-finalize any recording longer than this
     frame_size: Optional[Tuple[int, int]] = None   # (w, h); detected from stream
     codec: str = "mp4v"                 # four-cc for ``cv2.VideoWriter``
+    debug_sync_overlay: bool = False    # dev-only overlay for saved content clips
 
     # Masked representation of the URL for logging.
     @property
@@ -109,6 +111,7 @@ class _PendingRecording:
     """
     event_id: str
     trigger_time: float                 # monotonic time the event was triggered
+    sync_anchor_time: Optional[float]   # shared anchor used by QR/content debug overlays
     pre_frames: List[_FrameEntry]       # snapshot of ring buffer within [trigger - pre, trigger]
     capture_until: float                # monotonic deadline for post-roll
     post_frames: List[_FrameEntry]      # filled by reader thread within (trigger, trigger + post]
@@ -297,6 +300,7 @@ class ContentCameraRecorder:
                 # are treated as post-roll.  Frames already in the ring
                 # buffer ([t_anchor, t_now]) are already in pre_frames.
                 trigger_time=t_now,
+                sync_anchor_time=t_anchor,
                 pre_frames=pre,
                 capture_until=t_now + self.config.post_event_seconds,
                 post_frames=[],
@@ -364,6 +368,7 @@ class ContentCameraRecorder:
             rec = _PendingRecording(
                 event_id=event_id,
                 trigger_time=t_now,
+                sync_anchor_time=t_anchor,
                 pre_frames=pre,
                 # Safety cap — auto-finalized by the reader loop if
                 # end_event_recording is never called (e.g. crash, bug).
@@ -584,7 +589,20 @@ class ContentCameraRecorder:
         h, w = first_frame.shape[:2]
         path = os.path.join(self.config.output_dir, f"{rec.event_id}.mp4")
         tmp_path = path + ".writing.mp4"
-        bare_frames = [f for _, f in entries]
+        if self.config.debug_sync_overlay:
+            anchor_mono = rec.sync_anchor_time if rec.sync_anchor_time is not None else entries[0][0]
+            bare_frames = [
+                draw_sync_debug_overlay(
+                    frame,
+                    event_id=rec.event_id,
+                    camera="content",
+                    capture_monotonic=ts,
+                    anchor_monotonic=anchor_mono,
+                )
+                for ts, frame in entries
+            ]
+        else:
+            bare_frames = [f for _, f in entries]
 
         # Use the actual measured sampling rate so the video plays at
         # real-time speed even when the camera delivers fewer fps than

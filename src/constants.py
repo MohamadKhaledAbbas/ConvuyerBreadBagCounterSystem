@@ -56,9 +56,9 @@ container_event_video_stationary_px = "container_event_video_stationary_px"  # D
 container_event_video_pre_seconds = "container_event_video_pre_seconds"    # Default: 2.0 (pre-entry capture)
 container_event_video_post_seconds = "container_event_video_post_seconds"  # Default: 2.0 (post-exit capture)
 
-# Event video recording:
-#   "qr"      -> encode from QR camera frames (always available, single camera)
-#   "content" -> use content camera ring buffer (3D angle); falls back to "qr" if unavailable
+# Default event-video source presented by the UI when both clips exist:
+#   "qr"      -> prefer the overhead QR clip
+#   "content" -> prefer the side/content clip; fall back to QR when unavailable
 container_event_video_source = "container_event_video_source"  # Default: "qr"
 
 # Content Camera (3D angle view of container contents, 192.168.2.128)

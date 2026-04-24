@@ -114,6 +114,14 @@ class EventVideoCoordinator:
     def source_preference(self) -> str:
         return self._preference
 
+    @property
+    def content_output_relroot(self) -> str:
+        return self._content_output_relroot
+
+    @property
+    def qr_output_relroot(self) -> str:
+        return self._qr_output_relroot
+
     def capture(
         self,
         *,
@@ -207,6 +215,29 @@ class EventVideoCoordinator:
         return self._submit_qr_video(
             event_id=event_id, frames=qr_frames, metadata=metadata,
             fallback=False, fps_override=qr_fps_override,
+        )
+
+    def capture_qr(
+        self,
+        *,
+        event_id: str,
+        qr_frames: List[np.ndarray],
+        metadata: dict,
+        qr_fps_override: Optional[float] = None,
+        fallback: bool = False,
+    ) -> EventVideoResult:
+        """Queue a QR-camera clip encode regardless of source preference.
+
+        Used by the dual-camera container flow where the content camera
+        may also have recorded the same event, but the overhead QR clip
+        must still be persisted as an additional selectable source.
+        """
+        return self._submit_qr_video(
+            event_id=event_id,
+            frames=qr_frames,
+            metadata=metadata,
+            fallback=fallback,
+            fps_override=qr_fps_override,
         )
 
     # ------------------------------------------------------------------

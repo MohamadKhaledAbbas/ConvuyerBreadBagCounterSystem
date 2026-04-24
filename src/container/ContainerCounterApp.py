@@ -326,15 +326,20 @@ class ContainerConfig:
     content_pre_event_seconds: float = 3.0
     content_post_event_seconds: float = 2.0
     content_buffer_seconds: float = 5.0
-    content_video_fps: int = 10    # every 2nd frame from 20fps source ≈ 150 frames/15s max
+    content_video_fps: int = 10    # preserves full stream resolution; limits only temporal sampling
     # Safety cap: auto-finalize any begin/end recording longer than this.
     content_max_recording_seconds: float = 15.0
 
-    # Event video source:
-    #   "qr"      -> always use the overhead camera's buffered frames
-    #   "content" -> use the content camera recorder when available;
-    #                fall back to QR frames otherwise.
+    # Default camera shown by the web UI when both event clips exist:
+    #   "qr"      -> prefer the overhead QR clip
+    #   "content" -> prefer the side/content clip and fall back to QR
     event_video_source: str = "qr"
+    # Dev-only overlay for saved event clips. Off by default and not DB-backed.
+    debug_sync_overlay: bool = field(
+        default_factory=lambda: os.getenv(
+            "CONTAINER_DEBUG_SYNC_OVERLAY", "0"
+        ).strip().lower() in ("1", "true", "yes", "on")
+    )
 
     # ---- Automatic data retention (mirrors pipeline_core.py pattern) ----
     # QR-camera event clip directories (data/container_snapshots/).
@@ -940,27 +945,22 @@ class ContainerCounterApp:
                 f"/cam/realmonitor?channel=1&subtype={subtype}"
             )
 
-            unified_pre = max(
-                float(self.config.content_pre_event_seconds),
-                float(self.config.event_video_pre_seconds),
-            )
-            unified_post = max(
-                float(self.config.content_post_event_seconds),
-                float(self.config.event_video_post_seconds),
-            )
-            unified_buffer = max(
+            content_pre = max(0.0, float(self.config.content_pre_event_seconds))
+            content_post = max(0.0, float(self.config.content_post_event_seconds))
+            content_buffer = max(
                 float(self.config.content_buffer_seconds),
-                unified_pre + unified_post + 3.0,
+                content_pre + content_post + 3.0,
             )
 
             rc_cfg = ContentRecorderConfig(
                 rtsp_url=rtsp_url,
                 output_dir=CONTAINER_CONTENT_VIDEOS_DIR,
-                buffer_seconds=unified_buffer,
-                pre_event_seconds=unified_pre,
-                post_event_seconds=unified_post,
+                buffer_seconds=content_buffer,
+                pre_event_seconds=content_pre,
+                post_event_seconds=content_post,
                 target_fps=self.config.content_video_fps,
                 max_recording_seconds=self.config.content_max_recording_seconds,
+                debug_sync_overlay=self.config.debug_sync_overlay,
             )
             self._content_recorder = ContentCameraRecorder(rc_cfg)
             self._content_recorder.start()
@@ -1013,7 +1013,8 @@ class ContainerCounterApp:
             f"buffer={self.config.event_video_max_seconds:.1f}s "
             f"stationary_px={self.config.event_video_stationary_px} "
             f"min_detections={self.config.min_detections_for_event} "
-            f"content={'yes' if self._content_recorder else 'no'}"
+            f"content={'yes' if self._content_recorder else 'no'} "
+            f"sync_overlay={'on' if self.config.debug_sync_overlay else 'off'}"
         )
     
     def run(self, max_frames: Optional[int] = None) -> None:
@@ -1653,13 +1654,14 @@ class ContainerCounterApp:
         content_event_id: Optional[str] = None
         content_already_started = False
         was_capped = False
-        elapsed = 0.0  # time from begin_event_recording → end call (content cam only)
         if content_entry and self._content_recorder is not None:
             content_event_id, begin_mono = content_entry
             self._content_recorder.end_event_recording(content_event_id)
             content_already_started = True
-            elapsed = time.monotonic() - begin_mono
-            was_capped = elapsed >= (self.config.content_max_recording_seconds - 0.5)
+            was_capped = (
+                time.monotonic() - begin_mono
+                >= (self.config.content_max_recording_seconds - 0.5)
+            )
 
         # ── Pop per-track buffer (cleanup only — not used for video) ──
         buf = self._track_buffers.pop(event.qr_value, None)
@@ -1675,6 +1677,27 @@ class ContainerCounterApp:
         exit_mono = time.monotonic()
         pre_seconds = float(self.config.event_video_pre_seconds)
         post_seconds = float(self.config.event_video_post_seconds)
+        qr_video_relpath = self._qr_video_relpath(event_id)
+        qr_clip_duration_seconds = pre_seconds + event.duration_seconds + post_seconds
+        content_video_relpath = (
+            self._content_video_relpath(event_id)
+            if content_already_started else None
+        )
+        content_clip_duration_seconds = None
+        content_recording_status = "no_video"
+        if content_already_started:
+            if was_capped:
+                content_clip_duration_seconds = float(
+                    self.config.content_max_recording_seconds
+                )
+            else:
+                content_clip_duration_seconds = min(
+                    float(self.config.content_pre_event_seconds)
+                    + event.duration_seconds
+                    + float(self.config.content_post_event_seconds),
+                    float(self.config.content_max_recording_seconds),
+                )
+            content_recording_status = "capped" if was_capped else "ok"
 
         # ── Defer the QR video write so post-exit frames are captured ──
         # The per-track frame list already contains pre + transit frames.
@@ -1691,9 +1714,9 @@ class ContainerCounterApp:
             'exit_mono': exit_mono,
             'pre_seconds': pre_seconds,
             'deadline': exit_mono + post_seconds,
-            'content_already_started': content_already_started,
-            'was_capped': was_capped,
-            'elapsed': elapsed,
+            'content_video_relpath': content_video_relpath,
+            'content_recording_status': content_recording_status,
+            'content_clip_duration_seconds': content_clip_duration_seconds,
             'buf_stats': buf.stats() if buf is not None else None,
         }
         self._pending_video_writes.append(pending)
@@ -1709,38 +1732,26 @@ class ContainerCounterApp:
         # We write a preliminary DB row now so the event appears in the
         # dashboard in real-time.  The snapshot_path and clip_duration are
         # re-computed when the video is finalized.
-        preliminary_result = None
-        if content_already_started:
-            # Content video path is known immediately.
-            from src.container.content.EventVideoCoordinator import EventVideoResult
-            rel = f"{self._event_video._content_output_relroot}/{event_id}.mp4"
-            preliminary_result = EventVideoResult(
-                camera="content", fallback=False, video_relpath=rel
-            )
-
-        # Compute preliminary clip_duration for the DB row
-        if content_already_started and not (preliminary_result and preliminary_result.fallback):
-            if was_capped:
-                clip_duration_seconds: float = self.config.content_max_recording_seconds
-            else:
-                clip_duration_seconds = min(
-                    elapsed + self.config.content_post_event_seconds,
-                    self.config.content_max_recording_seconds,
-                )
-        else:
-            clip_duration_seconds = pre_seconds + event.duration_seconds + post_seconds
-
-        recording_status = "pending"
-        if content_already_started:
-            recording_status = "capped" if was_capped else "ok"
+        media_kwargs = {
+            'qr_video_relpath': qr_video_relpath,
+            'qr_recording_status': 'pending',
+            'qr_clip_duration_seconds': qr_clip_duration_seconds,
+            'content_video_relpath': content_video_relpath,
+            'content_recording_status': content_recording_status,
+            'content_clip_duration_seconds': content_clip_duration_seconds,
+        }
 
         self._record_event(
             event,
             event_id=event_id,
             is_lost=is_lost,
-            video_result=preliminary_result,
-            recording_status=recording_status,
-            clip_duration_seconds=clip_duration_seconds,
+            **media_kwargs,
+        )
+        _, media_metadata = self._build_event_media_payload(
+            event=event,
+            event_id=event_id,
+            is_lost=is_lost,
+            **media_kwargs,
         )
 
         # Add to recent events (for live dashboard).
@@ -1752,10 +1763,10 @@ class ContainerCounterApp:
             'duration': round(event.duration_seconds, 2),
             'is_lost': is_lost,
             'lost_reason': event.lost_reason if is_lost else "",
-            'camera': preliminary_result.camera if preliminary_result else 'qr',
-            'fallback': bool(preliminary_result.fallback) if preliminary_result else False,
-            'recording_status': recording_status,
-            'clip_duration_seconds': round(clip_duration_seconds, 1),
+            'camera': media_metadata.get('camera') or 'qr',
+            'fallback': bool(media_metadata.get('fallback')),
+            'recording_status': media_metadata.get('recording_status', 'pending'),
+            'clip_duration_seconds': media_metadata.get('clip_duration_seconds'),
         }
         self.state.add_event(event_dict)
 
@@ -1802,15 +1813,9 @@ class ContainerCounterApp:
         pre_seconds = pw['pre_seconds']
         post_deadline = pw['deadline']
         post_seconds = max(0.0, post_deadline - exit_mono)
-        content_already_started = pw['content_already_started']
 
         # Stop collecting post-exit frames for this QR.
         self._post_exit_qr.discard(event.qr_value)
-
-        # Content-camera events were written immediately — nothing to finalize.
-        if content_already_started:
-            self._track_video_frames.pop(event.qr_value, None)
-            return
 
         # Grab the per-track frame list (pre + transit + post, continuous).
         all_entries = self._track_video_frames.pop(event.qr_value, [])
@@ -1851,38 +1856,43 @@ class ContainerCounterApp:
                 f"[ContainerCounterApp] No pre-event frames for {event_id}"
             )
 
-        # Dispatch to coordinator.
-        video_result = self._capture_event_video(
+        # Persist the QR clip even when the content camera also recorded
+        # the same event. The web layer will expose both sources.
+        video_result = self._queue_qr_event_video(
             event_id=event_id,
             event=event,
-            track_frames=track_frames,
+            track_entries=all_entries,
             qr_measured_fps=qr_measured_fps,
             is_lost=is_lost,
-            content_already_started=False,
         )
 
-        # Update DB row with final video path and recording status.
-        if video_result is not None and video_result.video_relpath is not None:
-            recording_status = "ok"
-        else:
-            recording_status = "no_video"
+        qr_video_relpath = self._qr_video_relpath(event_id)
+        qr_recording_status = (
+            "ok"
+            if video_result is not None and video_result.video_relpath is not None
+            else "no_video"
+        )
 
         try:
-            new_metadata = json.dumps({
-                'recording_status': recording_status,
-                'camera': video_result.camera if video_result else None,
-                'fallback': bool(video_result.fallback) if video_result else False,
-                'video_relpath': video_result.video_relpath if video_result else None,
-                'clip_duration_seconds': round(clip_duration_seconds, 1),
-                'frame_count': len(track_frames),
-            })
+            snapshot_path, metadata = self._build_event_media_payload(
+                event=event,
+                event_id=event_id,
+                is_lost=is_lost,
+                qr_video_relpath=qr_video_relpath,
+                qr_recording_status=qr_recording_status,
+                qr_clip_duration_seconds=clip_duration_seconds,
+                content_video_relpath=pw.get('content_video_relpath'),
+                content_recording_status=pw.get('content_recording_status', 'no_video'),
+                content_clip_duration_seconds=pw.get('content_clip_duration_seconds'),
+            )
+            metadata['frame_count'] = len(track_frames)
             self.db.enqueue_write(
                 """UPDATE container_events
                    SET snapshot_path = ?, metadata = ?
                    WHERE timestamp = ? AND qr_code_value = ? AND track_id = ?""",
                 (
-                    video_result.video_relpath if video_result else None,
-                    new_metadata,
+                    snapshot_path,
+                    json.dumps(metadata),
                     event.timestamp.isoformat(),
                     event.qr_value,
                     event.track_id,
@@ -1901,22 +1911,139 @@ class ContainerCounterApp:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         return f"qr{event.qr_value}_{event.direction.value}_{ts}"
 
-    def _capture_event_video(
+    def _qr_video_relpath(self, event_id: str) -> str:
+        qr_root = self.config.snapshot_dir.rstrip("/").replace("\\", "/")
+        if qr_root.startswith("data/"):
+            qr_root = qr_root[5:]
+        return f"{qr_root}/{event_id}/video.mp4"
+
+    @staticmethod
+    def _content_video_relpath(event_id: str) -> str:
+        from src.config.paths import CONTAINER_CONTENT_VIDEOS_DIR
+
+        root = CONTAINER_CONTENT_VIDEOS_DIR.rstrip("/").replace("\\", "/")
+        if root.startswith("data/"):
+            root = root[5:]
+        else:
+            root = os.path.basename(root)
+        return f"{root}/{event_id}.mp4"
+
+    def _build_event_media_payload(
+        self,
+        *,
+        event: ContainerEvent,
+        event_id: Optional[str],
+        is_lost: bool,
+        qr_video_relpath: Optional[str],
+        qr_recording_status: str,
+        qr_clip_duration_seconds: Optional[float],
+        content_video_relpath: Optional[str],
+        content_recording_status: str,
+        content_clip_duration_seconds: Optional[float],
+    ) -> Tuple[Optional[str], Dict]:
+        """Build the DB metadata payload for dual-camera event media."""
+        preferred_camera = (
+            self.config.event_video_source
+            if self.config.event_video_source in ("qr", "content")
+            else "qr"
+        )
+
+        def _round_duration(value: Optional[float]) -> Optional[float]:
+            return round(value, 1) if value is not None else None
+
+        video_sources = {
+            'qr': {
+                'video_relpath': qr_video_relpath,
+                'recording_status': qr_recording_status,
+                'clip_duration_seconds': _round_duration(qr_clip_duration_seconds),
+            },
+            'content': {
+                'video_relpath': content_video_relpath,
+                'recording_status': content_recording_status,
+                'clip_duration_seconds': _round_duration(content_clip_duration_seconds),
+            },
+        }
+
+        def _is_viable(camera: str) -> bool:
+            source = video_sources[camera]
+            return bool(
+                source.get('video_relpath')
+                and source.get('recording_status') != 'no_video'
+            )
+
+        primary_camera: Optional[str] = None
+        if _is_viable(preferred_camera):
+            primary_camera = preferred_camera
+        elif _is_viable('content'):
+            primary_camera = 'content'
+        elif _is_viable('qr'):
+            primary_camera = 'qr'
+        elif video_sources[preferred_camera]['video_relpath']:
+            primary_camera = preferred_camera
+        elif video_sources['content']['video_relpath']:
+            primary_camera = 'content'
+        elif video_sources['qr']['video_relpath']:
+            primary_camera = 'qr'
+
+        fallback = bool(primary_camera and primary_camera != preferred_camera)
+        primary_source = video_sources.get(primary_camera) if primary_camera else None
+        primary_video_relpath = (
+            primary_source.get('video_relpath') if primary_source else None
+        )
+        primary_recording_status = (
+            primary_source.get('recording_status')
+            if primary_source
+            else (
+                'pending'
+                if any(
+                    src.get('recording_status') == 'pending'
+                    for src in video_sources.values()
+                )
+                else 'no_video'
+            )
+        )
+        primary_clip_duration_seconds = (
+            primary_source.get('clip_duration_seconds') if primary_source else None
+        )
+
+        snapshot_path = primary_video_relpath
+        if snapshot_path is None and event_id:
+            qr_root = self.config.snapshot_dir
+            if qr_root.startswith('data/'):
+                qr_root = qr_root[5:]
+            snapshot_path = os.path.join(qr_root, event_id)
+
+        metadata = {
+            'event_id': event_id,
+            'position_count': len(event.positions),
+            'entry_x': event.entry_x,
+            'exit_x': event.exit_x,
+            'preferred_camera': preferred_camera,
+            'camera': primary_camera,
+            'fallback': fallback,
+            'video_relpath': primary_video_relpath,
+            'recording_status': primary_recording_status,
+            # Default clip duration shown by the UI. Source-specific
+            # durations remain available under video_sources.
+            'clip_duration_seconds': primary_clip_duration_seconds,
+            'video_sources': video_sources,
+            'lost_reason': event.lost_reason if is_lost else None,
+        }
+        return snapshot_path, metadata
+
+    def _queue_qr_event_video(
         self,
         *,
         event_id: str,
         event: ContainerEvent,
-        track_frames: list,
+        track_entries: list,
         qr_measured_fps: Optional[float] = None,
         is_lost: bool,
-        content_already_started: bool = False,
     ):
-        """Delegate event-video capture to the coordinator.
+        """Queue the QR-camera event clip encode.
 
-        Builds the metadata payload that gets written alongside the QR
-        video (and echoed into the DB ``metadata`` column).  Returns the
-        :class:`EventVideoResult` or ``None`` if no coordinator exists
-        (e.g. during unit tests with a partial init).
+        The QR clip is always retained as the overhead-camera source,
+        even when the content camera also recorded the same event.
         """
         if self._event_video is None:
             return None
@@ -1931,35 +2058,41 @@ class ContainerCounterApp:
             'track_id': event.track_id,
             'entry_x': event.entry_x,
             'exit_x': event.exit_x,
-            'frame_count': len(track_frames),
+            'frame_count': len(track_entries),
             'detection_count': event.detection_count,
         }
 
-        # Anchor the content-camera pre-roll at the track's *entry*
-        # moment (when the container first became visible) rather than
-        # "now" (event completion).  This is what delivers the 3-second
-        # lead-in the operator sees in the final clip.  If the event
-        # carries no monotonic anchor (legacy data), fall back to a
-        # wall-clock-derived estimate so we never crash.
-        if event.entry_time_monotonic > 0.0:
-            trigger_mono = event.entry_time_monotonic
+        if self.config.debug_sync_overlay:
+            from src.container.content import draw_sync_debug_overlay
+
+            anchor_mono = (
+                event.entry_time_monotonic
+                if event.entry_time_monotonic > 0.0
+                else (track_entries[0][0] if track_entries else None)
+            )
+            qr_frames = [
+                draw_sync_debug_overlay(
+                    frame,
+                    event_id=event_id,
+                    camera="qr",
+                    capture_monotonic=ts,
+                    anchor_monotonic=anchor_mono,
+                )
+                for ts, frame in track_entries
+            ]
         else:
-            # Best-effort fallback: shift "now" back by the track's
-            # duration so the ring buffer still captures the lead-in.
-            trigger_mono = time.monotonic() - max(0.0, event.duration_seconds)
+            qr_frames = [frame for _, frame in track_entries]
 
         try:
-            return self._event_video.capture(
+            return self._event_video.capture_qr(
                 event_id=event_id,
-                trigger_monotonic_time=trigger_mono,
-                qr_frames=track_frames,
+                qr_frames=qr_frames,
                 qr_fps_override=qr_measured_fps,
                 metadata=metadata,
-                content_already_started=content_already_started,
             )
         except Exception as e:
             logger.error(
-                f"[ContainerCounterApp] EventVideoCoordinator.capture failed: {e}",
+                f"[ContainerCounterApp] EventVideoCoordinator.capture_qr failed: {e}",
                 exc_info=True,
             )
             return None
@@ -1970,43 +2103,26 @@ class ContainerCounterApp:
         *,
         event_id: Optional[str],
         is_lost: bool = False,
-        video_result=None,
-        recording_status: str = "ok",
-        clip_duration_seconds: float = 0.0,
+        qr_video_relpath: Optional[str],
+        qr_recording_status: str,
+        qr_clip_duration_seconds: Optional[float],
+        content_video_relpath: Optional[str],
+        content_recording_status: str,
+        content_clip_duration_seconds: Optional[float],
     ) -> None:
         """Record event to database."""
         try:
-            # ``snapshot_path`` is the legacy column name; it now points to
-            # the directory (QR camera) or file (content camera) that holds
-            # the event clip — whichever the coordinator chose.
-            snapshot_path: Optional[str] = None
-            camera = video_result.camera if video_result else None
-            fallback = bool(video_result.fallback) if video_result else False
-            video_relpath = video_result.video_relpath if video_result else None
-
-            if video_relpath:
-                snapshot_path = video_relpath
-            elif event_id:
-                # No video produced, but we still point at the metadata dir
-                # (QR path) so the UI can render "no video" gracefully.
-                qr_root = self.config.snapshot_dir
-                if qr_root.startswith('data/'):
-                    qr_root = qr_root[5:]
-                snapshot_path = os.path.join(qr_root, event_id)
-
-            metadata = json.dumps({
-                'position_count': len(event.positions),
-                'entry_x': event.entry_x,
-                'exit_x': event.exit_x,
-                'camera': camera,
-                'fallback': fallback,
-                'video_relpath': video_relpath,
-                'recording_status': recording_status,
-                # Actual video clip length (pre-roll + transit + post-roll).
-                # Distinct from duration_seconds which is QR tracking time only.
-                'clip_duration_seconds': round(clip_duration_seconds, 1),
-                'lost_reason': event.lost_reason if is_lost else None,
-            })
+            snapshot_path, metadata = self._build_event_media_payload(
+                event=event,
+                event_id=event_id,
+                is_lost=is_lost,
+                qr_video_relpath=qr_video_relpath,
+                qr_recording_status=qr_recording_status,
+                qr_clip_duration_seconds=qr_clip_duration_seconds,
+                content_video_relpath=content_video_relpath,
+                content_recording_status=content_recording_status,
+                content_clip_duration_seconds=content_clip_duration_seconds,
+            )
 
             # Insert into database (entry_y/exit_y columns store X positions
             # since tracking axis is horizontal).
@@ -2028,7 +2144,7 @@ class ContainerCounterApp:
                     event.duration_seconds,
                     snapshot_path,
                     1 if is_lost else 0,
-                    metadata,
+                    json.dumps(metadata),
                 )
             )
             

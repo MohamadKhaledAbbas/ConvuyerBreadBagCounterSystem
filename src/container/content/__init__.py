@@ -13,6 +13,9 @@ from src.container.content.EventVideoCoordinator import (
     EventVideoCoordinator,
     EventVideoResult,
 )
+from src.container.content.SyncDebugOverlay import (
+    draw_sync_debug_overlay,
+)
 
 __all__ = [
     "ContentCameraRecorder",
@@ -22,4 +25,5 @@ __all__ = [
     "FrameEntry",
     "EventVideoCoordinator",
     "EventVideoResult",
+    "draw_sync_debug_overlay",
 ]

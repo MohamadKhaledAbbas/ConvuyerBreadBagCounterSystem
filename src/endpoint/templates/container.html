@@ -217,6 +217,31 @@
         .snap-btn:hover { background: rgba(56,189,248,0.12); }
         .snap-btn.no-snap { color: var(--text-muted); cursor: default; }
         .snap-btn.no-snap:hover { background: none; }
+        .snap-actions {
+            display: flex;
+            gap: 0.35rem;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .snap-btn.camera-btn {
+            border: 1px solid rgba(255,255,255,0.08);
+            padding: 0.24rem 0.55rem;
+            min-width: 58px;
+        }
+        .snap-btn.camera-btn.qr {
+            color: var(--accent-primary);
+        }
+        .snap-btn.camera-btn.content {
+            color: var(--accent-purple);
+        }
+        .snap-btn.camera-btn:disabled {
+            color: var(--text-muted);
+            cursor: not-allowed;
+            border-color: rgba(255,255,255,0.04);
+        }
+        .snap-btn.camera-btn:disabled:hover {
+            background: none;
+        }
 
         /* Footage modal */
         .modal-overlay {
@@ -660,24 +685,116 @@
         return last;
     }
 
-    function getEventRecordingStatus(event) {
-        const meta = (event && event.metadata) || {};
-        return meta.recording_status || (event && event.recording_status) || 'ok';
+    function getEventVideoSources(event) {
+        const raw = (event && event.video_sources) || {};
+        const eventId = event && (event.video_event_id || getEventIdFromPath(event.snapshot_path || ''));
+        const sources = {};
+        ['qr', 'content'].forEach((camera) => {
+            const info = raw[camera] || {};
+            const fallbackUrl = eventId
+                ? '/container/event/' + encodeURIComponent(eventId) + '/video?camera=' + camera
+                : null;
+            const url = info.url || fallbackUrl;
+            sources[camera] = {
+                camera,
+                label: camera === 'content' ? 'كاميرا المحتوى' : 'كاميرا QR',
+                available: Boolean(info.available && url),
+                url: info.available ? url : null,
+                recording_status: info.recording_status || 'no_video',
+                clip_duration_seconds: info.clip_duration_seconds,
+                is_default: Boolean(info.is_default),
+                preferred: Boolean(info.preferred),
+            };
+        });
+        return sources;
     }
 
-    function getEventVideoUrl(event) {
+    function getDefaultEventCamera(event) {
+        const sources = getEventVideoSources(event);
+        const preferred = event && event.default_video_camera;
+        if (preferred && sources[preferred] && sources[preferred].available) return preferred;
+        if (sources.content.available) return 'content';
+        if (sources.qr.available) return 'qr';
+        return null;
+    }
+
+    function getEventRecordingStatus(event, camera = null) {
+        const sources = getEventVideoSources(event);
+        if (camera && sources[camera]) {
+            return sources[camera].recording_status || 'no_video';
+        }
+        const selectedCamera = getDefaultEventCamera(event);
+        if (selectedCamera && sources[selectedCamera]) {
+            return sources[selectedCamera].recording_status || 'no_video';
+        }
+        const meta = (event && event.metadata) || {};
+        return (event && event.recording_status) || meta.recording_status || 'ok';
+    }
+
+    function getEventVideoUrl(event, camera = null) {
         if (!event) return null;
+        const sources = getEventVideoSources(event);
+        const selectedCamera = camera || getDefaultEventCamera(event);
+        if (selectedCamera && sources[selectedCamera] && sources[selectedCamera].available) {
+            return sources[selectedCamera].url;
+        }
         if (event.video_url) return event.video_url;
-        if (event.has_video === false) return null;
-        if (getEventRecordingStatus(event) === 'no_video') return null;
-        const eventId = event.video_event_id || getEventIdFromPath(event.snapshot_path || '');
-        return eventId ? '/container/event/' + encodeURIComponent(eventId) + '/video' : null;
+        return null;
+    }
+
+    function getClipDurationSeconds(event, camera = null) {
+        const sources = getEventVideoSources(event);
+        const selectedCamera = camera || getDefaultEventCamera(event);
+        if (selectedCamera && sources[selectedCamera]) {
+            const dur = sources[selectedCamera].clip_duration_seconds;
+            if (dur != null) return dur;
+        }
+        if (event && event.clip_duration_seconds != null) return event.clip_duration_seconds;
+        const meta = (event && event.metadata) || {};
+        if (meta.clip_duration_seconds != null) return meta.clip_duration_seconds;
+        return event && event.duration_seconds != null ? event.duration_seconds : null;
     }
 
     function getMissingVideoMessage(event) {
-        return getEventRecordingStatus(event) === 'no_video'
+        const status = getEventRecordingStatus(event);
+        if (status === 'pending') return 'جاري تجهيز المقطع';
+        return status === 'no_video'
             ? 'لا يوجد مقطع محفوظ'
             : 'مقطع الفيديو غير متاح';
+    }
+
+    function renderVideoSourceButtons(event, activeCamera, idx) {
+        const sources = getEventVideoSources(event);
+        const available = ['qr', 'content'].filter((camera) => sources[camera].available);
+        if (available.length < 2) return '';
+        return `
+            <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.8rem;">
+                ${available.map((camera) => {
+                    const isActive = camera === activeCamera;
+                    const bg = isActive ? 'var(--accent-primary)' : 'rgba(255,255,255,0.08)';
+                    const color = isActive ? '#fff' : 'var(--text-primary)';
+                    return `<button type="button"
+                        onclick="openFootage(${idx}, '${camera}')"
+                        style="border:none; border-radius:999px; padding:0.42rem 0.9rem; cursor:pointer; background:${bg}; color:${color}; font-size:0.86rem; font-weight:600;">
+                        ${sources[camera].label}
+                    </button>`;
+                }).join('')}
+            </div>
+        `;
+    }
+
+    function renderEventCameraActionButtons(event, idx) {
+        const sources = getEventVideoSources(event);
+        const buttons = ['qr', 'content'].map((camera) => {
+            const source = sources[camera];
+            const disabled = source.available ? '' : 'disabled';
+            const icon = camera === 'content' ? 'fa-cube' : 'fa-qrcode';
+            return `<button class="snap-btn camera-btn ${camera}" ${disabled}
+                onclick="openFootage(${idx}, '${camera}')">
+                <i class="fa-solid ${icon}"></i> ${source.label}
+            </button>`;
+        }).join('');
+        return `<div class="snap-actions">${buttons}</div>`;
     }
 
     function renderEvents(events) {
@@ -692,18 +809,15 @@
             const time = e.timestamp ? new Date(e.timestamp).toLocaleTimeString('en-GB', {hour12: false}) : '—';
             const dirLabel = e.direction === 'positive' ? 'خروج ↑' : e.direction === 'negative' ? 'عودة ↓' : 'غير محدد';
             const dirClass = e.direction || 'unknown';
-            const meta = e.metadata || {};
-            const clipDur = meta.clip_duration_seconds != null
-                ? meta.clip_duration_seconds.toFixed(1) + 's'
-                : (e.duration_seconds != null ? e.duration_seconds.toFixed(1) + 's' : '—');
+            const clipDurSec = getClipDurationSeconds(e);
+            const clipDur = clipDurSec != null
+                ? clipDurSec.toFixed(1) + 's'
+                : '—';
             const transitTitle = e.duration_seconds != null
                 ? `مدة العبور: ${e.duration_seconds.toFixed(1)}s`
                 : '';
             const duration = `<span class="numbers" title="${esc(transitTitle)}">${esc(clipDur)}</span>`;
-            const videoUrl = getEventVideoUrl(e);
-            const snapBtn = videoUrl
-                ? `<button class="snap-btn" onclick="openFootage(${idx})"><i class="fa-solid fa-play"></i> عرض</button>`
-                : '<span class="snap-btn no-snap">—</span>';
+            const snapBtn = renderEventCameraActionButtons(e, idx);
             const statusBadge = e.is_lost
                 ? '<span class="status-badge lost"><i class="fa-solid fa-triangle-exclamation"></i> مفقود</span>'
                 : '<span class="status-badge complete"><i class="fa-solid fa-circle-check"></i> سليم</span>';
@@ -711,6 +825,8 @@
             let recBadge = '';
             if (recStatus === 'capped') {
                 recBadge = '<span class="status-badge capped" title="التسجيل قُطع بسبب وقوف العربة طويلاً"><i class="fa-solid fa-stopwatch"></i> مقطوع</span>';
+            } else if (recStatus === 'pending') {
+                recBadge = '<span class="status-badge fallback"><i class="fa-solid fa-hourglass-half"></i> قيد التجهيز</span>';
             } else if (recStatus === 'fallback') {
                 recBadge = '<span class="status-badge fallback" title="كاميرا المحتوى غير متاحة، تم استخدام كاميرا QR"><i class="fa-solid fa-video-slash"></i> احتياطي</span>';
             } else if (recStatus === 'no_video') {
@@ -731,10 +847,12 @@
 
     /* ── Footage modal ── */
 
-    function openFootage(idx) {
+    function openFootage(idx, camera = null) {
         const event = (window._dashboardEvents || [])[idx];
         if (!event) return;
-        const videoUrl = getEventVideoUrl(event);
+        const activeCamera = camera || getDefaultEventCamera(event);
+        const videoUrl = getEventVideoUrl(event, activeCamera);
+        const activeSource = activeCamera ? getEventVideoSources(event)[activeCamera] : null;
         const dirLabel = event.direction === 'positive' ? 'خروج' : event.direction === 'negative' ? 'عودة' : '';
         const stateLabel = event.is_lost ? 'مفقود ويحتاج مراجعة' : 'مكتمل بدون مشكلة';
         document.getElementById('modalEventTitle').textContent =
@@ -744,14 +862,16 @@
             content.innerHTML = `<div class="modal-error"><i class="fa-solid fa-video-slash"></i> ${getMissingVideoMessage(event)}</div>`;
         } else {
             const time = event.timestamp ? new Date(event.timestamp).toLocaleString('en-GB', {hour12: false}) : '';
-            const evMeta = event.metadata || {};
-            const clipDurSec = evMeta.clip_duration_seconds != null ? evMeta.clip_duration_seconds : event.duration_seconds;
+            const clipDurSec = getClipDurationSeconds(event, activeCamera);
             const clipDurStr = clipDurSec != null ? clipDurSec.toFixed(1) + 's' : '';
             const transitStr = event.duration_seconds != null ? event.duration_seconds.toFixed(1) + 's' : '';
             const durDisplay = clipDurStr
                 + (transitStr && transitStr !== clipDurStr ? ` <span style="font-size:0.8em;color:var(--text-muted);">عبور: ${esc(transitStr)}</span>` : '');
+            const sourceButtons = renderVideoSourceButtons(event, activeCamera, idx);
+            const sourceLabel = activeSource ? activeSource.label : '';
             content.innerHTML = `
                 <div style="display:flex; flex-direction:column; height:100%;">
+                    ${sourceButtons}
                     <div style="flex:1 1 0; min-height:0; display:flex; align-items:center; justify-content:center; background:#000; border-radius:10px; overflow:hidden;">
                         <video id="modalVideo" src="${videoUrl}" controls autoplay preload="auto"
                                style="width:100%; height:100%; object-fit:contain; background:#000;"
@@ -761,7 +881,7 @@
                         <i class="fa-solid fa-circle-exclamation"></i> تعذّر تحميل الفيديو
                     </div>
                     <div style="margin-top:0.7rem; display:flex; justify-content:space-between; gap:1rem; flex-wrap:wrap; font-size:0.85rem; color:var(--text-secondary);">
-                        <span class="numbers">${esc(time)}</span>
+                        <span>${esc(sourceLabel)} <span class="numbers">${esc(time)}</span></span>
                         <span class="numbers">${durDisplay}</span>
                     </div>
                 </div>`;
