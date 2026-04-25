@@ -52,7 +52,7 @@ class FrameServer(Node, FrameSource):
     ACK-free mode - frames are buffered in input_queue and smart degraded mode handles overload.
     """
 
-    def __init__(self, topic: str = '/nv12_images', target_fps: float = 20.0):
+    def __init__(self, topic: str = '/nv12_images', target_fps: float = 20.0, health_monitor=None):
         """
         Initialize the ROS2 frame server.
 
@@ -61,8 +61,12 @@ class FrameServer(Node, FrameSource):
         Args:
             topic: ROS2 topic to subscribe to
             target_fps: Target frames per second (for logging only)
+            health_monitor: Optional CodecHealthMonitor instance for timestamp-based stall detection
         """
         super().__init__('frame_server')
+
+        # Health monitor for timestamp-based stall detection
+        self._health_monitor = health_monitor
 
         # Support ROS_TARGET_FPS environment variable override
         env_fps = os.getenv('ROS_TARGET_FPS')
@@ -127,6 +131,10 @@ class FrameServer(Node, FrameSource):
         """Handle incoming ROS2 image message."""
         now = time.time()
         self.frames_received += 1
+
+        # Update health monitor timestamp on every frame (for fast stall detection)
+        if self._health_monitor is not None:
+            self._health_monitor.update_frame_timestamp()
 
         t_callback_start = time.perf_counter()
         self.frames_processed += 1

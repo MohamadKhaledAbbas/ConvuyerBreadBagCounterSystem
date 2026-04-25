@@ -132,7 +132,7 @@ def generate_launch_description():
                 'rtsp_transport': 'tcp',  # TCP for reliability
                 'rtsp_subtype': subtype,
                 # Buffer configuration
-                'rtp_reassembly_buffer_bytes': 1048576,  # 1MB buffer
+                'rtp_reassembly_buffer_bytes': 4194304,  # 4MB buffer
                 # Output topic override (requires hobot_rtsp_client version with this param)
                 # If not supported, we may need to remap
             }
@@ -150,6 +150,8 @@ def generate_launch_description():
         executable='hobot_codec_republish',
         name='container_codec',  # Unique node name
         output='screen',
+        respawn=True,
+        respawn_delay=2.0,
         parameters=[
             {
                 'in_format': 'h264',
@@ -158,6 +160,7 @@ def generate_launch_description():
                 'sub_topic': CONTAINER_RTSP_TOPIC,   # From container RTSP client
                 'pub_topic': CONTAINER_NV12_TOPIC,   # Output for QR detection
                 'dump_output': False,
+                'input_message_qos_depth': 200,
             }
         ],
         arguments=['--ros-args', '--log-level', 'ERROR']

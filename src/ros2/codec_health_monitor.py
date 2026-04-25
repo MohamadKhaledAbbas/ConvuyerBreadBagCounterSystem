@@ -56,10 +56,8 @@ class HealthState(Enum):
     """Health monitor state."""
     UNKNOWN = "unknown"
     HEALTHY = "healthy"
-    DEGRADED = "degraded"       # Missed some checks but not yet critical
     CRITICAL = "critical"       # Requires restart
     RECOVERING = "recovering"   # Restart in progress
-    ESCALATING = "escalating"   # Recovery failed, escalating to next stage
 
 
 class HealthCheckpoint(Enum):
@@ -70,8 +68,8 @@ class HealthCheckpoint(Enum):
 
 class RecoveryStage(Enum):
     """Staged recovery escalation levels."""
-    CODEC_ONLY = 1          # Stage 1: restart hobot_codec only
-    MEDIA_STACK = 2         # Stage 2: restart breadcount-ros2
+    CODEC_ONLY = 1          # Stage 1: restart both ROS2 pipelines (breadcount-ros2 + breadcount-container-ros2)
+    MEDIA_STACK = 2         # Stage 2: restart breadcount-ros2 + breadcount-container-ros2
     BROAD_SERVICES = 3      # Stage 3: all services except uvicorn
     REBOOT_RECOMMENDED = 4  # Stage 4: log recommendation; don't actually reboot
 
@@ -111,16 +109,17 @@ class MonitorConfig:
     rtsp_topic: str = "/rtsp_image_ch_0"
 
     # How long to wait for a message before considering the topic stalled
-    message_timeout_sec: float = 10.0
+    message_timeout_sec: float = 2.5
 
     # How often to check topic health
-    check_interval_sec: float = 15.0
+    check_interval_sec: float = 2.0
 
     # Number of consecutive failures before triggering restart
-    failure_threshold: int = 2
+    failure_threshold: int = 1
 
     # Cooldown period after restart before checking again
-    restart_cooldown_sec: float = 30.0
+    # Increased to 10s to allow ROS2/DDS time to stabilize after codec restart
+    restart_cooldown_sec: float = 10.0
 
     # Maximum restarts per hour (circuit breaker)
     max_restarts_per_hour: int = 5
@@ -171,6 +170,8 @@ class MonitorStats:
     escalation_count: int = 0
     recovery_events: List[dict] = field(default_factory=list)
     health_checkpoints: dict = field(default_factory=dict)
+    # Timestamp-based detection
+    last_frame_time: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -378,6 +379,16 @@ class CodecHealthMonitor:
         with self._lock:
             return self.stats.state == HealthState.HEALTHY
 
+    def update_frame_timestamp(self):
+        """
+        Update the last frame timestamp for timestamp-based stall detection.
+
+        This method MUST be called on every frame received from the codec.
+        It is the replacement for slow subprocess-based health checks.
+        """
+        with self._lock:
+            self.stats.last_frame_time = time.time()
+
     def force_restart(self) -> bool:
         """
         Manually trigger a codec restart (bypasses rate limiting).
@@ -568,15 +579,19 @@ class CodecHealthMonitor:
 
         return results
 
-    def _detect_stalled_process(self) -> bool:
+    def _detect_stalled_process(
+        self,
+        codec_alive: bool,
+        proc_info: Optional[dict] = None
+    ) -> bool:
         """
         Detect if hobot_codec process exists but the pipeline is stalled
         (process alive, no output).
         """
-        proc_info = self._get_codec_process_info()
+        if proc_info is None:
+            proc_info = self._get_codec_process_info()
         if proc_info and proc_info.get("running"):
-            alive, _ = self._check_topic_alive(self.config.topic)
-            if not alive:
+            if not codec_alive:
                 logger.warning(
                     "[CodecHealthMonitor] Process exists but pipeline stalled "
                     f"(PIDs={proc_info.get('pids')})"
@@ -738,8 +753,6 @@ class CodecHealthMonitor:
                 stage, "reboot_recommended", False,
                 "All automated recovery stages exhausted"
             )
-            with self._lock:
-                self.stats.state = HealthState.ESCALATING
             return False
 
         self._record_recovery_event(stage, stage.name, success)
@@ -767,42 +780,42 @@ class CodecHealthMonitor:
     # -- Individual stage implementations --------------------------------
 
     def _recovery_stage_1(self) -> bool:
-        """Stage 1: Gracefully terminate/restart hobot_codec only."""
-        logger.warning("[CodecHealthMonitor] Stage 1: Restarting hobot_codec only")
-
-        proc_info = self._get_codec_process_info()
-        vpu_status = self._check_vpu_status()
-        if proc_info:
-            logger.info(f"[CodecHealthMonitor] Process state: {proc_info}")
-        if vpu_status:
-            logger.info(f"[CodecHealthMonitor] VPU status:\n{vpu_status}")
+        """Stage 1: Restart both ROS2 services via supervisor (safest for ROS2 context)."""
+        logger.warning("[CodecHealthMonitor] Stage 1: Restarting both ROS2 services via supervisor")
 
         try:
-            if proc_info and not proc_info.get("running"):
-                return self._run_restart_command()
+            # Use supervisor to cleanly restart BOTH the main and container ROS2 pipelines
+            # This is safer than pkill because supervisor properly manages the service lifecycle
+            result = subprocess.run(
+                "sudo supervisorctl restart breadcount-ros2 breadcount-container-ros2",
+                shell=True,
+                executable="/bin/bash",
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
 
-            self._kill_process_gracefully(self.config.process_pattern)
-            time.sleep(2)
-
-            if not self._wait_for_process(self.config.process_start_timeout_sec):
-                logger.warning("[CodecHealthMonitor] Codec did not auto-respawn")
-                if not self._run_restart_command():
-                    return False
-
-            return True
+            if result.returncode == 0:
+                logger.info("[CodecHealthMonitor] Both ROS2 services restarted successfully via supervisor")
+                return True
+            else:
+                logger.error(
+                    f"[CodecHealthMonitor] Stage 1 supervisorctl failed: {result.stderr.strip()}"
+                )
+                return False
 
         except Exception as e:
             logger.error(f"[CodecHealthMonitor] Stage 1 failed: {e}")
             return False
 
     def _recovery_stage_2(self) -> bool:
-        """Stage 2: Restart breadcount-ros2 (full media stack)."""
+        """Stage 2: Restart both ROS2 services (breadcount-ros2 + breadcount-container-ros2)."""
         logger.warning(
-            "[CodecHealthMonitor] Stage 2: Restarting breadcount-ros2"
+            "[CodecHealthMonitor] Stage 2: Restarting both ROS2 services"
         )
         try:
             result = subprocess.run(
-                "sudo supervisorctl restart breadcount-ros2",
+                "sudo supervisorctl restart breadcount-ros2 breadcount-container-ros2",
                 shell=True,
                 executable="/bin/bash",
                 capture_output=True, text=True, timeout=30,
@@ -865,7 +878,7 @@ class CodecHealthMonitor:
 
             prev_name = self.stats.current_recovery_stage.name
             self.stats.current_recovery_stage = next_stage
-            self.stats.state = HealthState.ESCALATING
+            # Note: ESCALATING state removed for simplicity, just track escalation_count
 
         logger.warning(
             f"[CodecHealthMonitor] ESCALATING: {prev_name} → {next_stage.name} | "
@@ -919,88 +932,70 @@ class CodecHealthMonitor:
         logger.info("[CodecHealthMonitor] Monitor loop stopped")
 
     def _run_health_check(self):
-        """Run a single health check cycle."""
+        """Run a single health check cycle using timestamp-based stall detection."""
         with self._lock:
             self.stats.checks_total += 1
+            now = time.time()
+            last_frame = self.stats.last_frame_time
 
-        # ------ Multi-point health assessment ------
-        checkpoints = self._check_all_health_points()
-        with self._lock:
-            self.stats.health_checkpoints = checkpoints
+        # Calculate time since last frame
+        if last_frame > 0:
+            delta = now - last_frame
+        else:
+            # No frames received yet
+            delta = 0.0
 
-        # Primary signal: codec output
-        codec_cp = checkpoints.get(HealthCheckpoint.CODEC_OUTPUT.value, {})
-        codec_alive = codec_cp.get("alive", False)
-        codec_reason = codec_cp.get("reason", "unknown")
-
-        # Detect stalled process (running but no output)
-        stalled = self._detect_stalled_process()
-
-        is_alive = codec_alive and not stalled
-        reason = codec_reason if not stalled else "process_stalled"
-
-        if is_alive:
-            # Healthy
+        if delta <= self.config.message_timeout_sec:
+            # Healthy - frames are flowing
             with self._lock:
                 self.stats.checks_healthy += 1
                 self.stats.consecutive_failures = 0
-                self.stats.last_healthy_time = time.time()
+                self.stats.last_healthy_time = now
                 self.stats.state = HealthState.HEALTHY
 
-            self._reset_escalation()
-
             if self.config.verbose:
-                logger.debug(f"[CodecHealthMonitor] Health check passed: {reason}")
+                logger.debug(f"[CodecHealthMonitor] Health check passed: frames active ({delta:.1f}s ago)")
+
+            with self._lock:
+                self.stats.current_recovery_stage = RecoveryStage.CODEC_ONLY
         else:
-            # Failed
+            # Stall detected - no frames received within timeout
             with self._lock:
                 self.stats.checks_failed += 1
                 self.stats.consecutive_failures += 1
-                self.stats.last_failure_reason = reason
-
-                if self.stats.consecutive_failures >= self.config.failure_threshold:
-                    self.stats.state = HealthState.CRITICAL
-                else:
-                    self.stats.state = HealthState.DEGRADED
+                self.stats.last_failure_reason = f"no_frames_for_{delta:.1f}s"
+                self.stats.state = HealthState.CRITICAL
 
             logger.warning(
-                f"[CodecHealthMonitor] Health check FAILED | "
-                f"reason={reason} | "
-                f"consecutive={self.stats.consecutive_failures}/{self.config.failure_threshold} | "
-                f"checkpoints={checkpoints}"
+                f"[CodecHealthMonitor] No frames for {delta:.1f}s "
+                f"(timeout={self.config.message_timeout_sec}s) | "
+                f"consecutive={self.stats.consecutive_failures}"
             )
 
-            # Check if we should attempt recovery
+            # Trigger recovery immediately when threshold is met
             if self.stats.consecutive_failures >= self.config.failure_threshold:
                 can_restart, restart_reason = self._can_restart()
 
                 if can_restart:
-                    stage = self.stats.current_recovery_stage
-
-                    proc_info = self._get_codec_process_info()
                     logger.error(
-                        f"[CodecHealthMonitor] CRITICAL | "
-                        f"topic={self.config.topic} stalled | "
-                        f"failures={self.stats.consecutive_failures} | "
-                        f"process={proc_info} | "
-                        f"stage={stage.name} | "
-                        f"action=RECOVER"
+                        f"[CodecHealthMonitor] CRITICAL: triggering recovery | "
+                        f"no_frames_for={delta:.1f}s | "
+                        f"stage={self.stats.current_recovery_stage.name}"
                     )
 
-                    success = self._execute_recovery(stage)
+                    success = self._execute_recovery(self.stats.current_recovery_stage)
 
                     if success:
                         with self._lock:
                             self.stats.consecutive_failures = 0
 
                         logger.info(
-                            f"[CodecHealthMonitor] Waiting "
-                            f"{self.config.restart_cooldown_sec}s "
-                            f"for pipeline to reinitialize..."
+                            f"[CodecHealthMonitor] Recovery succeeded, waiting "
+                            f"{self.config.restart_cooldown_sec}s for pipeline to reinitialize..."
                         )
                         self._stop_event.wait(self.config.restart_cooldown_sec)
                     else:
-                        # Recovery at this stage failed – escalate
+                        # Recovery failed - try escalation
                         self._escalate()
                 else:
                     logger.error(
@@ -1025,23 +1020,8 @@ def main():
     if os.getenv("CODEC_MONITOR_ENABLE_STARTUP_CLEANUP", "true").lower() == "true":
         perform_startup_cleanup()
 
-    # Configure from environment
-    config = MonitorConfig(
-        topic=os.getenv("CODEC_MONITOR_TOPIC", "/nv12_images"),
-        rtsp_topic=os.getenv("CODEC_MONITOR_RTSP_TOPIC", "/rtsp_image_ch_0"),
-        message_timeout_sec=float(os.getenv("CODEC_MONITOR_TIMEOUT", "10")),
-        check_interval_sec=float(os.getenv("CODEC_MONITOR_INTERVAL", "15")),
-        failure_threshold=int(os.getenv("CODEC_MONITOR_THRESHOLD", "2")),
-        restart_cooldown_sec=float(os.getenv("CODEC_MONITOR_COOLDOWN", "30")),
-        max_restarts_per_hour=int(os.getenv("CODEC_MONITOR_MAX_RESTARTS", "5")),
-        restart_command=os.getenv("CODEC_RESTART_COMMAND", ""),
-        process_start_timeout_sec=float(os.getenv("CODEC_MONITOR_PROCESS_START_TIMEOUT", "10")),
-        enable_restart=os.getenv("CODEC_MONITOR_ENABLE_RESTART", "true").lower() == "true",
-        verbose=os.getenv("CODEC_MONITOR_VERBOSE", "false").lower() == "true",
-        graceful_kill_timeout_sec=float(os.getenv("CODEC_MONITOR_GRACEFUL_KILL_TIMEOUT", "5")),
-        enable_startup_cleanup=os.getenv("CODEC_MONITOR_ENABLE_STARTUP_CLEANUP", "true").lower() == "true",
-        max_recovery_events=int(os.getenv("CODEC_MONITOR_MAX_RECOVERY_EVENTS", "20")),
-    )
+    # Use hardcoded defaults (no environment variable overrides)
+    config = MonitorConfig()
 
     logger.info(f"[CodecHealthMonitor] Starting standalone service with config: {config}")
 
@@ -1071,4 +1051,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

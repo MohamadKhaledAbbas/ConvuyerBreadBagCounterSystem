@@ -41,7 +41,8 @@ class FrameSourceFactory:
             # Import ROS2 frame source only when needed
             from src.frame_source.Ros2FrameServer import FrameServer
             topic = kwargs.get('topic', '/nv12_images')
-            return FrameServer(topic=topic)
+            health_monitor = kwargs.get('health_monitor', None)
+            return FrameServer(topic=topic, health_monitor=health_monitor)
         
         elif source_type.lower() == 'opencv':
             source = kwargs.get('source', 0)

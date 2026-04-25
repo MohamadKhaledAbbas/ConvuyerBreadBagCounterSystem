@@ -86,6 +86,8 @@ def generate_launch_description():
         package='hobot_rtsp_client',
         executable='hobot_rtsp_client',
         output='screen',
+        respawn=True,
+        respawn_delay=2.0,
         parameters=[
             {
                 'rtsp_url_num': 1,
@@ -93,8 +95,8 @@ def generate_launch_description():
                 # Transport configuration
                 'rtsp_transport': 'tcp',  # TCP for reliability (avoids UDP packet loss)
                 'rtsp_subtype': subtype,
-                # Buffer configuration (increase for high-bitrate streams)
-                'rtp_reassembly_buffer_bytes': 1048576,  # 1MB buffer
+                # Buffer configuration (increased to 4MB for high-bitrate streams)
+                'rtp_reassembly_buffer_bytes': 4194304,  # 4MB buffer
             }
         ]
     )
@@ -107,6 +109,8 @@ def generate_launch_description():
         package='hobot_codec',
         executable='hobot_codec_republish',
         output='screen',
+        respawn=True,
+        respawn_delay=2.0,
         parameters=[
             {
                 'in_format': 'h264',
@@ -115,6 +119,8 @@ def generate_launch_description():
                 'sub_topic': '/rtsp_image_ch_0',   # Direct from RTSP client
                 'pub_topic': '/nv12_images',        # Output for detection
                 'dump_output': False,
+                # Codec queue depth increased for buffering during brief stalls
+                'input_message_qos_depth': 200,
             }
         ],
         arguments=['--ros-args', '--log-level', 'ERROR']
@@ -123,4 +129,3 @@ def generate_launch_description():
     logger.info("[Ros2PipelineLauncher] Launch description generated")
 
     return LaunchDescription(env_setup + [rtsp_node, hw_decode_node])
-

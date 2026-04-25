@@ -514,21 +514,18 @@ class ConveyorCounterApp:
                 from src.ros2.IPC import init_ros2_context
                 self._ros_executor = init_ros2_context()
 
-                source_type = 'ros2'
-                self._frame_source = FrameSourceFactory.create(source_type)
-                logger.info(f"[ConveyorCounterApp] Production mode: using ROS2 frame source")
-
-                # Start codec health monitor to auto-recover from VPU decoder stalls
+                # Start codec health monitor FIRST (before frame source so it can be passed in)
                 # This monitors /nv12_images and restarts hobot_codec if it stops publishing
                 if CodecHealthMonitor is not None:
                     restart_cmd = os.getenv("CODEC_RESTART_COMMAND", "")
                     self._codec_health_monitor = CodecHealthMonitor(
                         config=MonitorConfig(
                             topic="/nv12_images",
-                            message_timeout_sec=10.0,
-                            check_interval_sec=15.0,
-                            failure_threshold=2,
-                            restart_cooldown_sec=30.0,
+                            message_timeout_sec=2.5,
+                            check_interval_sec=2.0,
+                            failure_threshold=1,
+                            # Increased to 10s to allow ROS2/DDS to stabilize after restart
+                            restart_cooldown_sec=10.0,
                             max_restarts_per_hour=12,
                             restart_command=restart_cmd,
                             process_start_timeout_sec=12.0,
@@ -541,6 +538,14 @@ class ConveyorCounterApp:
                         logger.warning("[ConveyorCounterApp] CODEC_RESTART_COMMAND is empty; monitor can only kill, not relaunch missing codec")
                     self._codec_health_monitor.start()
                     logger.info("[ConveyorCounterApp] Codec health monitor started")
+
+                # Create frame source WITH health monitor reference for timestamp updates
+                source_type = 'ros2'
+                self._frame_source = FrameSourceFactory.create(
+                    source_type,
+                    health_monitor=self._codec_health_monitor
+                )
+                logger.info(f"[ConveyorCounterApp] Production mode: using ROS2 frame source")
             else:
                 # Non-RDK (Windows/Linux): use OpenCV
                 source_type = 'opencv'
