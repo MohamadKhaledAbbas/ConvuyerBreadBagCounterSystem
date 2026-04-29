@@ -87,3 +87,4 @@ datasets/
 
 # OS
 Thumbs.db
+.aider*

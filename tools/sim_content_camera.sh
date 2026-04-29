@@ -43,7 +43,7 @@ MEDIAMTX_BIN="$TOOLS_DIR/mediamtx"
 MEDIAMTX_CFG="$TOOLS_DIR/mediamtx.yml"
 
 # ── Video source ────────────────────────────────────────────────────────────
-VIDEO="${1:-$REPO_ROOT/data/test_round_tip.avi}"
+VIDEO="${1:-/home/khaled/Downloads/cam_content.mp4}"
 if [[ ! -f "$VIDEO" ]]; then
     echo "[sim] ERROR: Video file not found: $VIDEO"
     exit 1
