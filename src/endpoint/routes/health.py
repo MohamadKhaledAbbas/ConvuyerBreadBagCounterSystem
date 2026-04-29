@@ -208,6 +208,9 @@ async def get_container_health() -> JSONResponse:
                 "frame_count": state.get("frame_count", 0),
                 "qr_stats": qr_stats,
                 "uptime_seconds": state.get("uptime_seconds", 0),
+                "content_recorder": state.get("content_recorder"),
+                "content_recorder2": state.get("content_recorder2"),
+                "config_info": state.get("config_info", {}),
             },
             status_code=200
         )

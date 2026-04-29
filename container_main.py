@@ -87,6 +87,16 @@ SIM_CONTENT_PORT = os.getenv("CONTAINER_SIM_CONTENT_PORT", "8554").strip() or "8
 SIM_CONTENT_USER = os.getenv("CONTAINER_SIM_CONTENT_USER", "sim").strip() or "sim"
 SIM_CONTENT_PASSWORD = os.getenv("CONTAINER_SIM_CONTENT_PASSWORD", "sim")
 
+# Content camera 2 simulator config (shares MediaMTX with content1 on port 8554)
+SIM_CONTENT2_AUTO_ENABLE = (
+    os.getenv("CONTAINER_AUTO_SIM_CONTENT2", "1").strip().lower()
+    not in ("0", "false", "no", "off")
+)
+SIM_CONTENT2_HOST = os.getenv("CONTAINER_SIM_CONTENT2_HOST", "127.0.0.1").strip() or "127.0.0.1"
+SIM_CONTENT2_PORT = os.getenv("CONTAINER_SIM_CONTENT2_PORT", "8554").strip() or "8554"
+SIM_CONTENT2_USER = os.getenv("CONTAINER_SIM_CONTENT2_USER", "sim").strip() or "sim"
+SIM_CONTENT2_PASSWORD = os.getenv("CONTAINER_SIM_CONTENT2_PASSWORD", "sim")
+
 
 def _tcp_reachable(host: str, port: int, timeout: float = 0.35) -> bool:
     """Best-effort TCP probe used to auto-detect the local content-camera sim."""
@@ -136,6 +146,46 @@ def _maybe_enable_local_content_sim(db: DatabaseManager) -> bool:
     return True
 
 
+def _maybe_enable_local_content2_sim(db: DatabaseManager) -> bool:
+    """Enable the localhost content-camera 2 simulator for local development.
+
+    When ``tools/sim_content_camera2.sh`` is running on port 8554 (shared MediaMTX)
+    it exposes RTSP on ``127.0.0.1:8554/cam/realmonitor2``.  Auto-enabling that feed
+    here keeps the dev workflow to a single obvious step: start the simulator, then
+    start ``container_main.py``.
+    """
+    if not DEVELOPMENT or IS_RDK or not SIM_CONTENT2_AUTO_ENABLE:
+        return False
+
+    try:
+        port_int = int(SIM_CONTENT2_PORT)
+    except ValueError:
+        logger.warning(
+            f"[container_main] Invalid CONTAINER_SIM_CONTENT2_PORT={SIM_CONTENT2_PORT!r}; "
+            "skipping local content-camera 2 auto-detect"
+        )
+        return False
+
+    if not _tcp_reachable(SIM_CONTENT2_HOST, port_int):
+        logger.info(
+            f"[container_main] No local content-camera 2 simulator detected at "
+            f"{SIM_CONTENT2_HOST}:{port_int}"
+        )
+        return False
+
+    db.set_config(constants.content2_recording_enabled_key, "1")
+    db.set_config(constants.content2_rtsp_host, SIM_CONTENT2_HOST)
+    db.set_config(constants.content2_rtsp_port, str(port_int))
+    db.set_config(constants.content2_rtsp_username, SIM_CONTENT2_USER)
+    db.set_config(constants.content2_rtsp_password, SIM_CONTENT2_PASSWORD)
+    db.set_config(constants.content2_rtsp_path, "cam/realmonitor2")
+    logger.info(
+        f"[container_main] Local content-camera 2 simulator detected; "
+        f"using rtsp://{SIM_CONTENT2_USER}:***@{SIM_CONTENT2_HOST}:{port_int}/cam/realmonitor2"
+    )
+    return True
+
+
 def main():
     """Main entry point for container tracking application."""
     logger.info("=" * 60)
@@ -155,7 +205,8 @@ def main():
         logger.info(f"Development mode set from container_main: {DEVELOPMENT}")
         logger.info(f"Display mode set from container_main: {ENABLE_DISPLAY}")
         _maybe_enable_local_content_sim(db)
-        
+        _maybe_enable_local_content2_sim(db)
+
         is_development = db.get_config(constants.is_development_key, '0') == '1'
         
         # Log configuration

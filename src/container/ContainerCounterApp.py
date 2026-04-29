@@ -330,6 +330,20 @@ class ContainerConfig:
     # Safety cap: auto-finalize any begin/end recording longer than this.
     content_max_recording_seconds: float = 15.0
 
+    # Content camera 2 (second side view, 192.168.2.138)
+    content2_recording_enabled: bool = False
+    content2_rtsp_host: str = "192.168.2.138"
+    content2_rtsp_port: str = "554"
+    content2_rtsp_username: str = ""
+    content2_rtsp_password: str = ""
+    content2_rtsp_path: str = "cam/realmonitor"
+    content2_rtsp_subtype: int = 1  # 1=sub-stream for 480p optimized
+    content2_pre_event_seconds: float = 3.0
+    content2_post_event_seconds: float = 2.0
+    content2_buffer_seconds: float = 5.0
+    content2_video_fps: int = 10
+    content2_max_recording_seconds: float = 15.0
+
     # Default camera shown by the web UI when both event clips exist:
     #   "qr"      -> prefer the overhead QR clip
     #   "content" -> prefer the side/content clip and fall back to QR
@@ -348,6 +362,9 @@ class ContainerConfig:
     # Content-camera MP4 files (data/container_content_videos/).
     content_videos_retention_hours: float = 72.0
     content_videos_max_count: int = 200
+    # Content camera 2 MP4 files (data/container_content2_videos/).
+    content2_videos_retention_hours: float = 72.0
+    content2_videos_max_count: int = 200
     # container_events DB rows.
     db_events_retention_hours: float = 168.0     # 7 days
     # How often the purge thread wakes up.
@@ -469,6 +486,53 @@ class ContainerConfig:
         except ValueError:
             pass
 
+        # ---- Content camera 2 settings ----
+        config.content2_recording_enabled = (
+            db.get_config(constants.content2_recording_enabled_key, '0') == '1'
+        )
+        config.content2_rtsp_host = db.get_config(
+            constants.content2_rtsp_host, config.content2_rtsp_host
+        )
+        config.content2_rtsp_port = db.get_config(
+            constants.content2_rtsp_port, config.content2_rtsp_port
+        )
+        config.content2_rtsp_username = db.get_config(
+            constants.content2_rtsp_username, config.content2_rtsp_username
+        )
+        config.content2_rtsp_password = db.get_config(
+            constants.content2_rtsp_password, config.content2_rtsp_password
+        )
+        config.content2_rtsp_path = db.get_config(
+            constants.content2_rtsp_path, config.content2_rtsp_path
+        )
+        try:
+            config.content2_pre_event_seconds = float(
+                db.get_config(constants.content2_pre_event_seconds,
+                              str(config.content2_pre_event_seconds))
+            )
+            config.content2_post_event_seconds = float(
+                db.get_config(constants.content2_post_event_seconds,
+                              str(config.content2_post_event_seconds))
+            )
+            config.content2_buffer_seconds = float(
+                db.get_config(constants.content2_buffer_seconds,
+                              str(config.content2_buffer_seconds))
+            )
+            config.content2_video_fps = max(1, int(
+                db.get_config(constants.content2_video_fps,
+                              str(config.content2_video_fps))
+            ))
+            config.content2_rtsp_subtype = max(0, int(
+                db.get_config(constants.content2_rtsp_subtype,
+                              str(config.content2_rtsp_subtype))
+            ))
+            config.content2_max_recording_seconds = float(
+                db.get_config(constants.content2_max_recording_seconds,
+                              str(config.content2_max_recording_seconds))
+            )
+        except ValueError:
+            pass
+
         # Event video source preference ("qr" | "content").
         source = db.get_config(
             constants.container_event_video_source, config.event_video_source
@@ -500,6 +564,14 @@ class ContainerConfig:
             config.content_videos_max_count = max(0, int(
                 db.get_config(constants.container_content_videos_max_count,
                               str(config.content_videos_max_count))
+            ))
+            config.content2_videos_retention_hours = max(0.0, float(
+                db.get_config(constants.container_content2_videos_retention_hours,
+                              str(config.content2_videos_retention_hours))
+            ))
+            config.content2_videos_max_count = max(0, int(
+                db.get_config(constants.container_content2_videos_max_count,
+                              str(config.content2_videos_max_count))
             ))
             config.db_events_retention_hours = max(0.0, float(
                 db.get_config(constants.container_db_events_retention_hours,
@@ -649,7 +721,9 @@ class ContainerCounterApp:
         self._visualizer: Optional[ContainerVisualizer] = None
         self._snapshot_writer: Optional[SnapshotWriter] = None
         self._content_snapshot_writer: Optional[SnapshotWriter] = None
+        self._content2_snapshot_writer: Optional[SnapshotWriter] = None
         self._content_recorder = None  # ContentCameraRecorder (optional)
+        self._content_recorder2 = None  # ContentCameraRecorder 2 (optional, second side view)
         self._last_content_snapshot_check: float = 0.0
         self._event_video = None       # EventVideoCoordinator (always set in _init_components)
         self._qr_engine_requested: str = 'auto'
@@ -738,10 +812,15 @@ class ContainerCounterApp:
         # captured from the global pre-roll buffer.
         self._pending_video_writes: List[dict] = []
 
-        # Maps qr_value → (event_id, begin_monotonic) for content-camera
+        # Maps qr_value → (event_id, begin_monotonic, cameras_started_set)
         # recordings started at QR-detection-threshold time (begin/end model).
         # begin_monotonic is used to detect whether the safety cap fired.
-        self._active_content_events: Dict[int, Tuple[str, float]] = {}
+        # Value: (event_id, begin_monotonic, cameras_started_set)
+        self._active_content_events: Dict[int, Tuple[str, float, Set[str]]] = {}
+        
+        # Flags to track if retroactive start is needed (optimization)
+        self._content_retro_pending: bool = False
+        self._content2_retro_pending: bool = False
         
         # Async I/O for snapshot saving (never blocks the main loop)
         from concurrent.futures import ThreadPoolExecutor
@@ -873,6 +952,11 @@ class ContainerCounterApp:
             snapshot_dir=SNAPSHOT_DIR,
             prefix="content_",
         )
+        # Content camera 2 on-demand snapshot writer (writes content2_latest_*.jpg)
+        self._content2_snapshot_writer = SnapshotWriter(
+            snapshot_dir=SNAPSHOT_DIR,
+            prefix="content2_",
+        )
         
         # Frame Server (platform-dependent)
         self._init_frame_server()
@@ -928,59 +1012,114 @@ class ContainerCounterApp:
         as it passes by.  Enabled via the ``content_recording_enabled``
         config key (DB).
         """
-        if not self.config.content_recording_enabled:
+        # Initialize Content Camera 1 (if enabled)
+        if self.config.content_recording_enabled:
+            try:
+                from src.container.content import (
+                    ContentCameraRecorder,
+                    ContentRecorderConfig,
+                )
+                from src.config.paths import CONTAINER_CONTENT_VIDEOS_DIR
+
+                user = self.config.content_rtsp_username or "admin"
+                pwd = self.config.content_rtsp_password or ""
+                host = self.config.content_rtsp_host or "192.168.2.128"
+                port = self.config.content_rtsp_port or "554"
+                subtype = self.config.content_rtsp_subtype  # 0=main, 1=sub-stream
+                rtsp_url = (
+                    f"rtsp://{user}:{pwd}@{host}:{port}"
+                    f"/cam/realmonitor?channel=1&subtype={subtype}"
+                )
+
+                content_pre = max(0.0, float(self.config.content_pre_event_seconds))
+                content_post = max(0.0, float(self.config.content_post_event_seconds))
+                content_buffer = max(
+                    float(self.config.content_buffer_seconds),
+                    content_pre + content_post + 3.0,
+                )
+
+                rc_cfg = ContentRecorderConfig(
+                    rtsp_url=rtsp_url,
+                    output_dir=CONTAINER_CONTENT_VIDEOS_DIR,
+                    buffer_seconds=content_buffer,
+                    pre_event_seconds=content_pre,
+                    post_event_seconds=content_post,
+                    target_fps=self.config.content_video_fps,
+                    max_recording_seconds=self.config.content_max_recording_seconds,
+                    debug_sync_overlay=self.config.debug_sync_overlay,
+                )
+                self._content_recorder = ContentCameraRecorder(rc_cfg)
+                self._content_recorder.start()
+                logger.info(
+                    f"[ContainerCounterApp] Content recorder started: "
+                    f"{rc_cfg.rtsp_url_masked} -> {CONTAINER_CONTENT_VIDEOS_DIR}"
+                )
+            except Exception as e:
+                logger.error(
+                    f"[ContainerCounterApp] Failed to init content recorder: {e}",
+                    exc_info=True,
+                )
+                self._content_recorder = None
+        else:
             logger.info(
                 "[ContainerCounterApp] Content recording disabled (set "
                 "content_recording_enabled=1 in config to enable)"
             )
-            return
 
-        try:
-            from src.container.content import (
-                ContentCameraRecorder,
-                ContentRecorderConfig,
-            )
-            from src.config.paths import CONTAINER_CONTENT_VIDEOS_DIR
+        # Initialize Content Camera 2 (if enabled)
+        if self.config.content2_recording_enabled:
+            try:
+                from src.container.content import (
+                    ContentCameraRecorder,
+                    ContentRecorderConfig,
+                )
+                from src.config.paths import CONTAINER_CONTENT2_VIDEOS_DIR
 
-            user = self.config.content_rtsp_username or "admin"
-            pwd = self.config.content_rtsp_password or ""
-            host = self.config.content_rtsp_host or "192.168.2.128"
-            port = self.config.content_rtsp_port or "554"
-            subtype = self.config.content_rtsp_subtype  # 0=main, 1=sub-stream
-            rtsp_url = (
-                f"rtsp://{user}:{pwd}@{host}:{port}"
-                f"/cam/realmonitor?channel=1&subtype={subtype}"
-            )
+                user = self.config.content2_rtsp_username or "admin"
+                pwd = self.config.content2_rtsp_password or ""
+                host = self.config.content2_rtsp_host or "192.168.2.138"
+                port = self.config.content2_rtsp_port or "554"
+                path = self.config.content2_rtsp_path or "cam/realmonitor"
+                subtype = self.config.content2_rtsp_subtype  # 1=sub-stream for 480p
+                rtsp_url = (
+                    f"rtsp://{user}:{pwd}@{host}:{port}"
+                    f"/{path}?channel=1&subtype={subtype}"
+                )
 
-            content_pre = max(0.0, float(self.config.content_pre_event_seconds))
-            content_post = max(0.0, float(self.config.content_post_event_seconds))
-            content_buffer = max(
-                float(self.config.content_buffer_seconds),
-                content_pre + content_post + 3.0,
-            )
+                content_pre = max(0.0, float(self.config.content2_pre_event_seconds))
+                content_post = max(0.0, float(self.config.content2_post_event_seconds))
+                content_buffer = max(
+                    float(self.config.content2_buffer_seconds),
+                    content_pre + content_post + 3.0,
+                )
 
-            rc_cfg = ContentRecorderConfig(
-                rtsp_url=rtsp_url,
-                output_dir=CONTAINER_CONTENT_VIDEOS_DIR,
-                buffer_seconds=content_buffer,
-                pre_event_seconds=content_pre,
-                post_event_seconds=content_post,
-                target_fps=self.config.content_video_fps,
-                max_recording_seconds=self.config.content_max_recording_seconds,
-                debug_sync_overlay=self.config.debug_sync_overlay,
-            )
-            self._content_recorder = ContentCameraRecorder(rc_cfg)
-            self._content_recorder.start()
+                rc_cfg = ContentRecorderConfig(
+                    rtsp_url=rtsp_url,
+                    output_dir=CONTAINER_CONTENT2_VIDEOS_DIR,
+                    buffer_seconds=content_buffer,
+                    pre_event_seconds=content_pre,
+                    post_event_seconds=content_post,
+                    target_fps=self.config.content2_video_fps,
+                    max_recording_seconds=self.config.content2_max_recording_seconds,
+                    debug_sync_overlay=self.config.debug_sync_overlay,
+                )
+                self._content_recorder2 = ContentCameraRecorder(rc_cfg)
+                self._content_recorder2.start()
+                logger.info(
+                    f"[ContainerCounterApp] Content recorder 2 started: "
+                    f"{rc_cfg.rtsp_url_masked} -> {CONTAINER_CONTENT2_VIDEOS_DIR}"
+                )
+            except Exception as e:
+                logger.error(
+                    f"[ContainerCounterApp] Failed to init content recorder 2: {e}",
+                    exc_info=True,
+                )
+                self._content_recorder2 = None
+        else:
             logger.info(
-                f"[ContainerCounterApp] Content recorder started: "
-                f"{rc_cfg.rtsp_url_masked} -> {CONTAINER_CONTENT_VIDEOS_DIR}"
+                "[ContainerCounterApp] Content recording 2 disabled (set "
+                "content2_recording_enabled=1 in config to enable)"
             )
-        except Exception as e:
-            logger.error(
-                f"[ContainerCounterApp] Failed to init content recorder: {e}",
-                exc_info=True,
-            )
-            self._content_recorder = None
 
     def _init_event_video_coordinator(self) -> None:
         """Initialise the camera-source coordinator used per event.
@@ -992,7 +1131,7 @@ class ContainerCounterApp:
         first event.
         """
         from src.container.content import EventVideoCoordinator
-        from src.config.paths import CONTAINER_CONTENT_VIDEOS_DIR
+        from src.config.paths import CONTAINER_CONTENT_VIDEOS_DIR, CONTAINER_CONTENT2_VIDEOS_DIR
 
         qr_dir = self.config.snapshot_dir
         qr_relroot = qr_dir[5:] if qr_dir.startswith("data/") else qr_dir
@@ -1001,18 +1140,27 @@ class ContainerCounterApp:
             content_dir[5:] if content_dir.startswith("data/") else
             os.path.basename(content_dir.rstrip("/"))
         )
+        content2_dir = CONTAINER_CONTENT2_VIDEOS_DIR
+        content2_relroot = (
+            content2_dir[5:] if content2_dir.startswith("data/") else
+            os.path.basename(content2_dir.rstrip("/"))
+        )
 
         effective_fps = float(self.config.event_video_fps)
         self._event_video = EventVideoCoordinator(
             source_preference=self.config.event_video_source,
             content_recorder=self._content_recorder,
+            content_recorder2=self._content_recorder2,
             qr_output_dir=qr_dir,
             qr_output_relroot=qr_relroot,
             content_output_relroot=content_relroot,
+            content2_output_relroot=content2_relroot,
             qr_fps=effective_fps,
             executor=self._snapshot_io,
             jpeg_quality=self._TRACK_SNAPSHOT_QUALITY,
         )
+        content_status = 'yes' if self._content_recorder else 'no'
+        content2_status = 'yes' if self._content_recorder2 else 'no'
         logger.info(
             f"[ContainerCounterApp] Event video coordinator ready "
             f"source={self.config.event_video_source} "
@@ -1020,7 +1168,7 @@ class ContainerCounterApp:
             f"buffer={self.config.event_video_max_seconds:.1f}s "
             f"stationary_px={self.config.event_video_stationary_px} "
             f"min_detections={self.config.min_detections_for_event} "
-            f"content={'yes' if self._content_recorder else 'no'} "
+            f"content1={content_status} content2={content2_status} "
             f"sync_overlay={'on' if self.config.debug_sync_overlay else 'off'}"
         )
     
@@ -1099,6 +1247,10 @@ class ContainerCounterApp:
 
                 # Check on-demand snapshot request
                 self._maybe_capture_snapshot(frame)
+                
+                # Check if content cameras became available and need to start recording retroactively
+                self._maybe_start_content_retroactive()
+                self._maybe_start_content2_retroactive()
                 
                 # ── Budget-aware frame pacing ──
                 now = time.time()
@@ -1365,7 +1517,7 @@ class ContainerCounterApp:
             for q in stale_content:
                 entry = self._active_content_events.pop(q, None)
                 if entry and self._content_recorder is not None:
-                    eid, _begin = entry
+                    eid, _begin, _cameras = entry
                     self._content_recorder.end_event_recording(eid)
                     logger.debug(
                         f"[ContainerCounterApp] Cleaned up orphan content "
@@ -1656,32 +1808,209 @@ class ContainerCounterApp:
                 self.db.set_config(constants.content_snapshot_requested_key, "0")
             except Exception:
                 pass
+
+        # ---- Content camera 2 snapshot (new) ----
+        try:
+            requested = self.db.get_config(constants.content2_snapshot_requested_key, "0")
+            if requested == "1":
+                # Try to get the latest decoded frame from the content2 recorder
+                frame_c2 = None
+                try:
+                    if self._content_recorder2 is not None:
+                        frame_c2 = self._content_recorder2.get_latest_frame()
+                except Exception as e:
+                    logger.error(f"[ContainerCounterApp] Failed to get latest content2 frame: {e}")
+
+                success = False
+                try:
+                    if frame_c2 is not None and self._content2_snapshot_writer is not None:
+                        success = self._content2_snapshot_writer.write_snapshot(
+                            frame=frame_c2,
+                            frame_with_overlay=None,
+                            frame_number=self.state.frame_count,
+                        )
+                    else:
+                        logger.warning("[ContainerCounterApp] No content2 frame available to capture")
+                except Exception as e:
+                    logger.error(f"[ContainerCounterApp] Content2 snapshot write failed: {e}")
+
+                # Clear the flag immediately
+                try:
+                    self.db.set_config(constants.content2_snapshot_requested_key, "0")
+                except Exception:
+                    pass
+
+                if success:
+                    logger.debug("[ContainerCounterApp] Content2 snapshot captured")
+                else:
+                    logger.warning("[ContainerCounterApp] Content2 snapshot capture failed")
+        except Exception as e:
+            logger.error(f"[ContainerCounterApp] Content2 snapshot error: {e}")
+            try:
+                self.db.set_config(constants.content2_snapshot_requested_key, "0")
+            except Exception:
+                pass
     
+    def _maybe_start_content_retroactive(self) -> None:
+        """Start content1 recording for active events if it just became available.
+
+        This handles the case where content1 connects after an event has already
+        started (e.g., RTSP server is slow or content1 is restarted).
+        
+        Optimized with _content_retro_pending flag to avoid per-frame overhead.
+        """
+        # Early return if no retroactive work is needed
+        if not self._content_retro_pending:
+            return
+
+        # If content1 is still unavailable, nothing to do
+        if self._content_recorder is None or not self._content_recorder.is_available():
+            return
+
+        # Content1 is available, try to start retroactive recordings
+        started_any = False
+        for qr_value, (event_id, begin_mono, cameras_started) in list(self._active_content_events.items()):
+            # Skip if content1 already started for this event
+            if "content1" in cameras_started:
+                continue
+
+            try:
+                self._content_recorder.begin_event_recording(event_id, begin_mono)
+                cameras_started.add("content1")
+                self._active_content_events[qr_value] = (event_id, begin_mono, cameras_started)
+                started_any = True
+                logger.info(
+                    f"[ContainerCounterApp] Content1 recording started retroactively: "
+                    f"QR={qr_value} event_id={event_id}"
+                )
+            except Exception as e:
+                logger.debug(
+                    f"[ContentRec] QR={qr_value}: content1 retroactive start failed: {e}"
+                )
+
+        # Clear flag if all active events now have content1
+        if started_any:
+            all_have_content1 = all(
+                "content1" in cameras_started
+                for _, _, cameras_started in self._active_content_events.values()
+            )
+            if all_have_content1:
+                self._content_retro_pending = False
+
+    def _maybe_start_content2_retroactive(self) -> None:
+        """Start content2 recording for active events if it just became available.
+
+        This handles the case where content2 connects after an event has already
+        started (e.g., content2 takes longer to connect than content1).
+        
+        Optimized with _content2_retro_pending flag to avoid per-frame overhead.
+        """
+        # Early return if no retroactive work is needed
+        if not self._content2_retro_pending:
+            return
+
+        # If content2 is still unavailable, nothing to do
+        if self._content_recorder2 is None or not self._content_recorder2.is_available():
+            return
+
+        # Content2 is available, try to start retroactive recordings
+        started_any = False
+        for qr_value, (event_id, begin_mono, cameras_started) in list(self._active_content_events.items()):
+            # Skip if content2 already started for this event
+            if "content2" in cameras_started:
+                continue
+
+            try:
+                self._content_recorder2.begin_event_recording(event_id, begin_mono)
+                cameras_started.add("content2")
+                self._active_content_events[qr_value] = (event_id, begin_mono, cameras_started)
+                started_any = True
+                logger.info(
+                    f"[ContainerCounterApp] Content2 recording started retroactively: "
+                    f"QR={qr_value} event_id={event_id}"
+                )
+            except Exception as e:
+                logger.debug(
+                    f"[ContentRec] QR={qr_value}: content2 retroactive start failed: {e}"
+                )
+
+        # Clear flag if all active events now have content2
+        if started_any:
+            all_have_content2 = all(
+                "content2" in cameras_started
+                for _, _, cameras_started in self._active_content_events.values()
+            )
+            if all_have_content2:
+                self._content2_retro_pending = False
+
     def _maybe_begin_content_recording(self, qr_value: int) -> None:
         """Start content-camera recording when QR detection threshold is first met.
 
         Called on every real detection that does NOT fire an exit event.
         Only triggers once per track: when ``detection_count`` first
         reaches ``min_detections_for_event``.
+
+        Both content cameras (1 and 2) are triggered simultaneously in parallel.
         """
         if qr_value in self._active_content_events:
             return  # already started for this track
-        if self._content_recorder is None or not self._content_recorder.is_available():
-            return
+
         track = self.tracker.get_track(qr_value)
         if track is None:
             return
-        if track.detection_count != self.tracker.min_detections_for_event:
+        if track.detection_count < self.tracker.min_detections_for_event:
+            logger.debug(
+                f"[ContentRec] QR={qr_value}: detection_count={track.detection_count} "
+                f"< min_detections={self.tracker.min_detections_for_event}"
+            )
             return
+
         event_id = f"qr{qr_value}_{datetime.now():%Y%m%d_%H%M%S_%f}"
-        self._content_recorder.begin_event_recording(
-            event_id, track.entry_time_monotonic,
-        )
-        self._active_content_events[qr_value] = (event_id, time.monotonic())
-        logger.info(
-            f"[ContainerCounterApp] Content recording started: "
-            f"QR={qr_value} event_id={event_id}"
-        )
+        started = False
+        cameras_started = set()
+
+        # Start Content Camera 1 (if available)
+        if self._content_recorder is not None and self._content_recorder.is_available():
+            self._content_recorder.begin_event_recording(
+                event_id, track.entry_time_monotonic,
+            )
+            started = True
+            cameras_started.add("content1")
+            logger.info(
+                f"[ContainerCounterApp] Content recording started: "
+                f"QR={qr_value} event_id={event_id}"
+            )
+        else:
+            logger.debug(
+                f"[ContentRec] QR={qr_value}: recorder1 unavailable "
+                f"(recorder={self._content_recorder is not None}, "
+                f"available={self._content_recorder.is_available() if self._content_recorder else False})"
+            )
+            # Set retroactive pending flag if content1 is unavailable
+            self._content_retro_pending = True
+
+        # Start Content Camera 2 (if available)
+        if self._content_recorder2 is not None and self._content_recorder2.is_available():
+            self._content_recorder2.begin_event_recording(
+                event_id, track.entry_time_monotonic,
+            )
+            started = True
+            cameras_started.add("content2")
+            logger.info(
+                f"[ContainerCounterApp] Content recording 2 started: "
+                f"QR={qr_value} event_id={event_id}"
+            )
+        else:
+            logger.debug(
+                f"[ContentRec] QR={qr_value}: recorder2 unavailable "
+                f"(recorder={self._content_recorder2 is not None}, "
+                f"available={self._content_recorder2.is_available() if self._content_recorder2 else False})"
+            )
+            # Set retroactive pending flag if content2 is unavailable
+            self._content2_retro_pending = True
+
+        if started:
+            self._active_content_events[qr_value] = (event_id, time.monotonic(), cameras_started)
 
     def _handle_container_event(
         self,
@@ -1709,18 +2038,41 @@ class ContainerCounterApp:
         if is_lost:
             self.state.total_lost += 1
 
-        # ── End content-camera recording if one was started at threshold ──
+        # ── End content-camera recordings if one was started at threshold ──
         content_entry = self._active_content_events.pop(event.qr_value, None)
         content_event_id: Optional[str] = None
         content_already_started = False
+        content2_already_started = False
         was_capped = False
-        if content_entry and self._content_recorder is not None:
-            content_event_id, begin_mono = content_entry
-            self._content_recorder.end_event_recording(content_event_id)
-            content_already_started = True
-            was_capped = (
-                time.monotonic() - begin_mono
-                >= (self.config.content_max_recording_seconds - 0.5)
+        was_capped2 = False
+        if content_entry:
+            content_event_id, begin_mono, cameras_started = content_entry
+            logger.info(
+                f"[ContainerCounterApp] Finalizing content recordings for "
+                f"QR={event.qr_value} event_id={content_event_id} cameras={cameras_started}"
+            )
+            # End Content Camera 1
+            if "content1" in cameras_started and self._content_recorder is not None:
+                self._content_recorder.end_event_recording(content_event_id)
+                content_already_started = True
+                was_capped = (
+                    time.monotonic() - begin_mono
+                    >= (self.config.content_max_recording_seconds - 0.5)
+                )
+                logger.info(f"[ContainerCounterApp] Content1 recording finalized")
+            # End Content Camera 2
+            if "content2" in cameras_started and self._content_recorder2 is not None:
+                self._content_recorder2.end_event_recording(content_event_id)
+                content2_already_started = True
+                was_capped2 = (
+                    time.monotonic() - begin_mono
+                    >= (self.config.content2_max_recording_seconds - 0.5)
+                )
+                logger.info(f"[ContainerCounterApp] Content2 recording finalized")
+        else:
+            logger.info(
+                f"[ContainerCounterApp] No active content recording for QR={event.qr_value} "
+                f"(content was never started)"
             )
 
         # ── Pop per-track buffer (cleanup only — not used for video) ──
@@ -1743,8 +2095,14 @@ class ContainerCounterApp:
             self._content_video_relpath(event_id)
             if content_already_started else None
         )
+        content2_video_relpath = (
+            self._content2_video_relpath(event_id)
+            if content2_already_started else None
+        )
         content_clip_duration_seconds = None
+        content2_clip_duration_seconds = None
         content_recording_status = "no_video"
+        content2_recording_status = "no_video"
         if content_already_started:
             if was_capped:
                 content_clip_duration_seconds = float(
@@ -1758,6 +2116,19 @@ class ContainerCounterApp:
                     float(self.config.content_max_recording_seconds),
                 )
             content_recording_status = "capped" if was_capped else "ok"
+        if content2_already_started:
+            if was_capped2:
+                content2_clip_duration_seconds = float(
+                    self.config.content2_max_recording_seconds
+                )
+            else:
+                content2_clip_duration_seconds = min(
+                    float(self.config.content2_pre_event_seconds)
+                    + event.duration_seconds
+                    + float(self.config.content2_post_event_seconds),
+                    float(self.config.content2_max_recording_seconds),
+                )
+            content2_recording_status = "capped" if was_capped2 else "ok"
 
         # ── Defer the QR video write so post-exit frames are captured ──
         # The per-track frame list already contains pre + transit frames.
@@ -1777,6 +2148,9 @@ class ContainerCounterApp:
             'content_video_relpath': content_video_relpath,
             'content_recording_status': content_recording_status,
             'content_clip_duration_seconds': content_clip_duration_seconds,
+            'content2_video_relpath': content2_video_relpath,
+            'content2_recording_status': content2_recording_status,
+            'content2_clip_duration_seconds': content2_clip_duration_seconds,
             'buf_stats': buf.stats() if buf is not None else None,
         }
         self._pending_video_writes.append(pending)
@@ -1799,6 +2173,9 @@ class ContainerCounterApp:
             'content_video_relpath': content_video_relpath,
             'content_recording_status': content_recording_status,
             'content_clip_duration_seconds': content_clip_duration_seconds,
+            'content2_video_relpath': content2_video_relpath,
+            'content2_recording_status': content2_recording_status,
+            'content2_clip_duration_seconds': content2_clip_duration_seconds,
         }
 
         self._record_event(
@@ -1988,6 +2365,17 @@ class ContainerCounterApp:
             root = os.path.basename(root)
         return f"{root}/{event_id}.mp4"
 
+    @staticmethod
+    def _content2_video_relpath(event_id: str) -> str:
+        from src.config.paths import CONTAINER_CONTENT2_VIDEOS_DIR
+
+        root = CONTAINER_CONTENT2_VIDEOS_DIR.rstrip("/").replace("\\", "/")
+        if root.startswith("data/"):
+            root = root[5:]
+        else:
+            root = os.path.basename(root)
+        return f"{root}/{event_id}.mp4"
+
     def _build_event_media_payload(
         self,
         *,
@@ -2000,8 +2388,11 @@ class ContainerCounterApp:
         content_video_relpath: Optional[str],
         content_recording_status: str,
         content_clip_duration_seconds: Optional[float],
+        content2_video_relpath: Optional[str] = None,
+        content2_recording_status: str = "no_video",
+        content2_clip_duration_seconds: Optional[float] = None,
     ) -> Tuple[Optional[str], Dict]:
-        """Build the DB metadata payload for dual-camera event media."""
+        """Build the DB metadata payload for multi-camera event media."""
         preferred_camera = (
             self.config.event_video_source
             if self.config.event_video_source in ("qr", "content")
@@ -2016,11 +2407,19 @@ class ContainerCounterApp:
                 'video_relpath': qr_video_relpath,
                 'recording_status': qr_recording_status,
                 'clip_duration_seconds': _round_duration(qr_clip_duration_seconds),
+                'available': bool(qr_video_relpath and qr_recording_status != 'no_video'),
             },
             'content': {
                 'video_relpath': content_video_relpath,
                 'recording_status': content_recording_status,
                 'clip_duration_seconds': _round_duration(content_clip_duration_seconds),
+                'available': bool(content_video_relpath and content_recording_status != 'no_video'),
+            },
+            'content2': {
+                'video_relpath': content2_video_relpath,
+                'recording_status': content2_recording_status,
+                'clip_duration_seconds': _round_duration(content2_clip_duration_seconds),
+                'available': bool(content2_video_relpath and content2_recording_status != 'no_video'),
             },
         }
 
@@ -2036,12 +2435,16 @@ class ContainerCounterApp:
             primary_camera = preferred_camera
         elif _is_viable('content'):
             primary_camera = 'content'
+        elif _is_viable('content2'):
+            primary_camera = 'content2'
         elif _is_viable('qr'):
             primary_camera = 'qr'
         elif video_sources[preferred_camera]['video_relpath']:
             primary_camera = preferred_camera
         elif video_sources['content']['video_relpath']:
             primary_camera = 'content'
+        elif video_sources['content2']['video_relpath']:
+            primary_camera = 'content2'
         elif video_sources['qr']['video_relpath']:
             primary_camera = 'qr'
 
@@ -2169,6 +2572,9 @@ class ContainerCounterApp:
         content_video_relpath: Optional[str],
         content_recording_status: str,
         content_clip_duration_seconds: Optional[float],
+        content2_video_relpath: Optional[str] = None,
+        content2_recording_status: str = "no_video",
+        content2_clip_duration_seconds: Optional[float] = None,
     ) -> None:
         """Record event to database."""
         try:
@@ -2182,6 +2588,9 @@ class ContainerCounterApp:
                 content_video_relpath=content_video_relpath,
                 content_recording_status=content_recording_status,
                 content_clip_duration_seconds=content_clip_duration_seconds,
+                content2_video_relpath=content2_video_relpath,
+                content2_recording_status=content2_recording_status,
+                content2_clip_duration_seconds=content2_clip_duration_seconds,
             )
 
             # Insert into database (entry_y/exit_y columns store X positions
@@ -2321,6 +2730,8 @@ class ContainerCounterApp:
                 'tracker': self.tracker.get_stats() if self.tracker else {},
                 'snapshotter': self.snapshotter.get_stats() if self.snapshotter else {},
                 'qr_detector': self.qr_detector.get_stats() if self.qr_detector else {},
+                'content_recorder': self._content_recorder.get_health() if self._content_recorder else None,
+                'content_recorder2': self._content_recorder2.get_health() if self._content_recorder2 else None,
                 # Config / deployment info for the health page
                 'config_info': {
                     'qr_rtsp_source': cfg.video_source or 'rtsp',
@@ -2329,8 +2740,15 @@ class ContainerCounterApp:
                     'content_recording_enabled': cfg.content_recording_enabled,
                     'content_rtsp_host': cfg.content_rtsp_host if cfg.content_recording_enabled else None,
                     'content_rtsp_port': cfg.content_rtsp_port if cfg.content_recording_enabled else None,
+                    'content2_recording_enabled': cfg.content2_recording_enabled,
+                    'content2_rtsp_host': cfg.content2_rtsp_host if cfg.content2_recording_enabled else None,
+                    'content2_rtsp_port': cfg.content2_rtsp_port if cfg.content2_recording_enabled else None,
                     'event_video_source': cfg.event_video_source,
-                    'camera_mode': 'dual' if cfg.content_recording_enabled else 'single',
+                    'camera_mode': (
+                        'triple' if (cfg.content_recording_enabled and cfg.content2_recording_enabled)
+                        else 'dual' if (cfg.content_recording_enabled or cfg.content2_recording_enabled)
+                        else 'single'
+                    ),
                     'source_pacing': 'live' if self._source_is_live_paced else 'app',
                     'detect_interval': cfg.detect_interval,
                     'motion_threshold': cfg.motion_threshold,
@@ -2391,8 +2809,10 @@ class ContainerCounterApp:
             f"[ContainerPurger] Started "
             f"(snap_ret={self.config.snapshots_retention_hours}h "
             f"snap_max={self.config.snapshots_max_count} "
-            f"vid_ret={self.config.content_videos_retention_hours}h "
-            f"vid_max={self.config.content_videos_max_count} "
+            f"vid1_ret={self.config.content_videos_retention_hours}h "
+            f"vid1_max={self.config.content_videos_max_count} "
+            f"vid2_ret={self.config.content2_videos_retention_hours}h "
+            f"vid2_max={self.config.content2_videos_max_count} "
             f"db_ret={self.config.db_events_retention_hours}h "
             f"interval={self.config.purge_interval_minutes}min)"
         )
@@ -2475,15 +2895,37 @@ class ContainerCounterApp:
             )
 
     def _purge_content_videos(self) -> None:
-        """Delete old content-camera MP4 files (data/container_content_videos/).
+        """Delete old content-camera MP4 files (data/container_content_videos/ and content2_videos/).
 
         Two-phase time + count purge, same algorithm as ``_purge_container_snapshots``.
+        Purges both content1 and content2 directories.
         """
+        self._purge_single_content_dir(
+            'content1',
+            'CONTAINER_CONTENT_VIDEOS_DIR',
+            self.config.content_videos_retention_hours,
+            self.config.content_videos_max_count
+        )
+        self._purge_single_content_dir(
+            'content2',
+            'CONTAINER_CONTENT2_VIDEOS_DIR',
+            self.config.content2_videos_retention_hours,
+            self.config.content2_videos_max_count
+        )
+
+    def _purge_single_content_dir(
+        self,
+        name: str,
+        dir_constant: str,
+        retention_hours: float,
+        max_count: int
+    ) -> None:
+        """Purge a single content video directory."""
         try:
-            from src.config.paths import CONTAINER_CONTENT_VIDEOS_DIR
+            from src.config.paths import CONTAINER_CONTENT_VIDEOS_DIR, CONTAINER_CONTENT2_VIDEOS_DIR
+            vid_dir = CONTAINER_CONTENT_VIDEOS_DIR if dir_constant == 'CONTAINER_CONTENT_VIDEOS_DIR' else CONTAINER_CONTENT2_VIDEOS_DIR
         except ImportError:
             return
-        vid_dir = CONTAINER_CONTENT_VIDEOS_DIR
         if not os.path.isdir(vid_dir):
             return
         try:
@@ -2506,7 +2948,7 @@ class ContainerCounterApp:
         deleted_time = deleted_count = 0
 
         # Phase 1 – time-based
-        ret_h = self.config.content_videos_retention_hours
+        ret_h = retention_hours
         if ret_h > 0:
             cutoff = time.time() - ret_h * 3600
             keep = []
@@ -2526,7 +2968,7 @@ class ContainerCounterApp:
             entries = keep
 
         # Phase 2 – count-based
-        max_c = self.config.content_videos_max_count
+        max_c = max_count
         if max_c > 0 and len(entries) > max_c:
             entries.sort(key=lambda x: x[1])
             for path, _ in entries[:len(entries) - max_c]:
@@ -2542,7 +2984,7 @@ class ContainerCounterApp:
         total = deleted_time + deleted_count
         if total:
             logger.info(
-                f"[ContainerPurger] Content videos: "
+                f"[ContainerPurger] Content {name} videos: "
                 f"time={deleted_time} count={deleted_count} "
                 f"remaining={initial - total}"
             )
@@ -2632,13 +3074,19 @@ class ContainerCounterApp:
         if self.frame_server and hasattr(self.frame_server, 'destroy_node'):
             self.frame_server.destroy_node()
 
-        # Stop content recorder
+        # Stop content recorders
         if self._content_recorder is not None:
             try:
                 self._content_recorder.stop()
             except Exception as e:
                 logger.error(f"[ContainerCounterApp] Content recorder stop failed: {e}")
             self._content_recorder = None
+        if self._content_recorder2 is not None:
+            try:
+                self._content_recorder2.stop()
+            except Exception as e:
+                logger.error(f"[ContainerCounterApp] Content recorder 2 stop failed: {e}")
+            self._content_recorder2 = None
 
         # Clean up ROS2 context if on RDK
         if IS_RDK:

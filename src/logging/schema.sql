@@ -332,6 +332,19 @@ INSERT OR IGNORE INTO config (key, value) VALUES
     ('content_buffer_seconds',       '5.0'),
     ('content_video_fps',            '10'),
     ('content_max_recording_seconds','15.0'),
+    -- Content camera 2 (second side view, optional)
+    ('content2_recording_enabled',    '0'),
+    ('content2_rtsp_host',            '192.168.2.138'),
+    ('content2_rtsp_port',            '554'),
+    ('content2_rtsp_username',        'admin'),
+    ('content2_rtsp_password',        ''),
+    ('content2_rtsp_path',            'cam/realmonitor2'),
+    ('content2_rtsp_subtype',         '1'),
+    ('content2_pre_event_seconds',    '3.0'),
+    ('content2_post_event_seconds',   '2.0'),
+    ('content2_buffer_seconds',       '5.0'),
+    ('content2_video_fps',            '10'),
+    ('content2_max_recording_seconds','15.0'),
     -- Display
     ('container_enable_display', '0'),
     -- UI card visibility (1=visible, 0=hidden)
@@ -349,6 +362,8 @@ INSERT OR IGNORE INTO config (key, value) VALUES
     ('container_snapshots_max_count',            '500'),
     ('container_content_videos_retention_hours', '72.0'),
     ('container_content_videos_max_count',       '200'),
+    ('container_content2_videos_retention_hours', '72.0'),
+    ('container_content2_videos_max_count',       '200'),
     ('container_db_events_retention_hours',      '168.0'),
     ('container_purge_interval_minutes',         '60.0');
 

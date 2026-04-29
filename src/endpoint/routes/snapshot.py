@@ -46,6 +46,10 @@ CONTAINER_SNAPSHOT_META_PATH = os.path.join(SNAPSHOT_DIR, "container_latest_meta
 CONTENT_SNAPSHOT_RAW_PATH = os.path.join(SNAPSHOT_DIR, "content_latest_raw.jpg")
 CONTENT_SNAPSHOT_OVERLAY_PATH = os.path.join(SNAPSHOT_DIR, "content_latest_overlay.jpg")
 CONTENT_SNAPSHOT_META_PATH = os.path.join(SNAPSHOT_DIR, "content_latest_meta.json")
+# Content camera 2 snapshot paths (second side view, e.g. 192.168.2.138)
+CONTENT2_SNAPSHOT_RAW_PATH = os.path.join(SNAPSHOT_DIR, "content2_latest_raw.jpg")
+CONTENT2_SNAPSHOT_OVERLAY_PATH = os.path.join(SNAPSHOT_DIR, "content2_latest_overlay.jpg")
+CONTENT2_SNAPSHOT_META_PATH = os.path.join(SNAPSHOT_DIR, "content2_latest_meta.json")
 
 
 def _get_snapshot_paths(camera: str = "bread") -> tuple[str, str, str]:
@@ -54,6 +58,8 @@ def _get_snapshot_paths(camera: str = "bread") -> tuple[str, str, str]:
         return CONTAINER_SNAPSHOT_RAW_PATH, CONTAINER_SNAPSHOT_OVERLAY_PATH, CONTAINER_SNAPSHOT_META_PATH
     if camera == "content":
         return CONTENT_SNAPSHOT_RAW_PATH, CONTENT_SNAPSHOT_OVERLAY_PATH, CONTENT_SNAPSHOT_META_PATH
+    if camera == "content2":
+        return CONTENT2_SNAPSHOT_RAW_PATH, CONTENT2_SNAPSHOT_OVERLAY_PATH, CONTENT2_SNAPSHOT_META_PATH
     return SNAPSHOT_RAW_PATH, SNAPSHOT_OVERLAY_PATH, SNAPSHOT_META_PATH
 
 
@@ -65,6 +71,9 @@ def _get_snapshot_flag_key(camera: str = "bread") -> str:
     if camera == "content":
         from src.constants import content_snapshot_requested_key
         return content_snapshot_requested_key
+    if camera == "content2":
+        from src.constants import content2_snapshot_requested_key
+        return content2_snapshot_requested_key
     return snapshot_requested_key
 
 
@@ -251,7 +260,7 @@ async def snapshot(
         JPEG image response or 503 if capture failed
     """
     # Validate camera parameter
-    if camera not in ("bread", "container", "content"):
+    if camera not in ("bread", "container", "content", "content2"):
         camera = "bread"
 
     # Get current snapshot timestamp before requesting new one
@@ -401,7 +410,7 @@ async def snapshot_info(
     camera: str = Query("bread", description="Camera source: bread or container"),
 ) -> dict:
     """Get information about the current snapshot."""
-    if camera not in ("bread", "container"):
+    if camera not in ("bread", "container", "content", "content2"):
         camera = "bread"
     _, meta = await run_in_threadpool(_read_snapshot, False, camera)
 
@@ -476,7 +485,7 @@ async def snapshot_view(
         overlay: Include detection overlays
         camera: Which camera to view ("bread" or "container")
     """
-    if camera not in ("bread", "container", "content"):
+    if camera not in ("bread", "container", "content", "content2"):
         camera = "bread"
     overlay_param = "true" if overlay else "false"
     auto_refresh_js = f"setInterval(refreshNow, {int(refresh * 1000)});" if refresh > 0 else ""
@@ -485,12 +494,16 @@ async def snapshot_view(
     bread_selected = 'selected' if camera == 'bread' else ''
     container_selected = 'selected' if camera == 'container' else ''
     content_selected = 'selected' if camera == 'content' else ''
+    content2_selected = 'selected' if camera == 'content2' else ''
     if camera == 'container':
         page_title = "البث المباشر — كاميرا العربات"
         page_subtitle = "عرض حي لكاميرا مراقبة العربات (صالة)"
     elif camera == 'content':
         page_title = "البث المباشر — كاميرا المحتوى"
         page_subtitle = "عرض حي لكاميرا المحتوى (زاوية 3D)"
+    elif camera == 'content2':
+        page_title = "البث المباشر — كاميرا المحتوى 2"
+        page_subtitle = "عرض حي لكاميرا المحتوى الثانية (زاوية جانبية)"
     else:
         page_title = "البث المباشر"
         page_subtitle = "عرض حي للكاميرا مع إطارات الكشف والتعرف"
@@ -778,6 +791,7 @@ async def snapshot_view(
                 <option value="bread" {bread_selected}>🍞 كاميرا الخبز</option>
                 <option value="container" {container_selected}>📦 كاميرا العربات</option>
                 <option value="content" {content_selected}>🎥 كاميرا المحتوى</option>
+                <option value="content2" {content2_selected}>🎥 كاميرا المحتوى 2</option>
             </select>
             <select id="autoRefresh" onchange="updateAutoRefresh()">
                 <option value="0" {"selected" if refresh == 0 else ""}>يدوي</option>

@@ -678,9 +678,21 @@ function renderComponents(components) {
     } else {
         contDot    = cont.healthy ? 'green' : 'red';
         contSub    = cont.healthy ? 'تعمل بكفاءة' : 'تحقق من الخدمة';
-        const mode = cont.camera_mode === 'dual' ? '2 cameras' : '1 camera';
-        contDetail = mode + ' · ' + (cont.fps || 0).toFixed(1) + ' fps'
-                   + (cont.content_rtsp_host ? ' · content: ' + cont.content_rtsp_host : '');
+        let mode;
+        if (cont.camera_mode === 'triple') {
+            mode = '3 cameras';
+        } else if (cont.camera_mode === 'dual') {
+            mode = '2 cameras';
+        } else {
+            mode = '1 camera';
+        }
+        contDetail = mode + ' · ' + (cont.fps || 0).toFixed(1) + ' fps';
+        if (cont.content_rtsp_host) {
+            contDetail += ' · content1: ' + cont.content_rtsp_host;
+        }
+        if (cont.content2_rtsp_host) {
+            contDetail += ' · content2: ' + cont.content2_rtsp_host;
+        }
         if (formatQrEngine(cont) !== '—') {
             contDetail += ' · qr: ' + formatQrEngine(cont);
         }

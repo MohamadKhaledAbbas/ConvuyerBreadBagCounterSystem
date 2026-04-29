@@ -689,15 +689,23 @@
         const raw = (event && event.video_sources) || {};
         const eventId = event && (event.video_event_id || getEventIdFromPath(event.snapshot_path || ''));
         const sources = {};
-        ['qr', 'content'].forEach((camera) => {
+        ['qr', 'content', 'content2'].forEach((camera) => {
             const info = raw[camera] || {};
             const fallbackUrl = eventId
                 ? '/container/event/' + encodeURIComponent(eventId) + '/video?camera=' + camera
                 : null;
             const url = info.url || fallbackUrl;
+            let label;
+            if (camera === 'content') {
+                label = 'كاميرا المحتوى';
+            } else if (camera === 'content2') {
+                label = 'كاميرا المحتوى 2';
+            } else {
+                label = 'كاميرا QR';
+            }
             sources[camera] = {
                 camera,
-                label: camera === 'content' ? 'كاميرا المحتوى' : 'كاميرا QR',
+                label: label,
                 available: Boolean(info.available && url),
                 url: info.available ? url : null,
                 recording_status: info.recording_status || 'no_video',
@@ -765,7 +773,7 @@
 
     function renderVideoSourceButtons(event, activeCamera, idx) {
         const sources = getEventVideoSources(event);
-        const available = ['qr', 'content'].filter((camera) => sources[camera].available);
+        const available = ['qr', 'content', 'content2'].filter((camera) => sources[camera].available);
         if (available.length < 2) return '';
         return `
             <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.8rem;">
@@ -785,10 +793,10 @@
 
     function renderEventCameraActionButtons(event, idx) {
         const sources = getEventVideoSources(event);
-        const buttons = ['qr', 'content'].map((camera) => {
+        const buttons = ['qr', 'content', 'content2'].map((camera) => {
             const source = sources[camera];
             const disabled = source.available ? '' : 'disabled';
-            const icon = camera === 'content' ? 'fa-cube' : 'fa-qrcode';
+            const icon = camera === 'content' || camera === 'content2' ? 'fa-cube' : 'fa-qrcode';
             return `<button class="snap-btn camera-btn ${camera}" ${disabled}
                 onclick="openFootage(${idx}, '${camera}')">
                 <i class="fa-solid ${icon}"></i> ${source.label}

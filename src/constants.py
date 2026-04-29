@@ -20,6 +20,7 @@ container_rtsp_username = "container_rtsp_username"  # Same credentials
 container_rtsp_password = "container_rtsp_password"  # Same credentials
 container_snapshot_requested_key = "container_snapshot_requested"
 content_snapshot_requested_key = "content_snapshot_requested"
+content2_snapshot_requested_key = "content2_snapshot_requested_key"
 container_enable_display_key = "container_enable_display"
 container_ui_card_visible = "container_ui_card_visible"
 
@@ -75,12 +76,28 @@ content_video_fps = "content_video_fps"                       # Default: 20 (out
 content_rtsp_subtype = "content_rtsp_subtype"                 # 0=main stream (720p), 1=sub-stream (360p, higher fps)
 content_max_recording_seconds = "content_max_recording_seconds" # Default: 15.0 (safety cap for begin/end recordings)
 
+# Content Camera 2 (second side view, 192.168.2.138)
+content2_rtsp_host = "content2_rtsp_host"        # Default: 192.168.2.138
+content2_rtsp_port = "content2_rtsp_port"        # Default: 554
+content2_rtsp_username = "content2_rtsp_username"
+content2_rtsp_password = "content2_rtsp_password"
+content2_rtsp_path = "content2_rtsp_path"        # Default: cam/realmonitor (or cam/realmonitor2 for second simulator)
+content2_recording_enabled_key = "content2_recording_enabled"   # '1' to enable content2 recording
+content2_pre_event_seconds = "content2_pre_event_seconds"       # Default: 3.0
+content2_post_event_seconds = "content2_post_event_seconds"     # Default: 2.0
+content2_buffer_seconds = "content2_buffer_seconds"           # Default: 5.0
+content2_video_fps = "content2_video_fps"                       # Default: 10 (480p optimized)
+content2_rtsp_subtype = "content2_rtsp_subtype"                 # 0=main, 1=sub-stream (use 1 for 480p)
+content2_max_recording_seconds = "content2_max_recording_seconds" # Default: 15.0
+
 # Container data retention / automatic purge
 # Mirrors the pattern used by pipeline_core.py for classified ROIs.
 container_snapshots_retention_hours   = "container_snapshots_retention_hours"   # Default: 72  (3 days)
 container_snapshots_max_count         = "container_snapshots_max_count"         # Default: 500
 container_content_videos_retention_hours = "container_content_videos_retention_hours"  # Default: 72 (3 days)
 container_content_videos_max_count    = "container_content_videos_max_count"    # Default: 200
+container_content2_videos_retention_hours = "container_content2_videos_retention_hours"  # Default: 72 (3 days)
+container_content2_videos_max_count    = "container_content2_videos_max_count"    # Default: 200
 container_db_events_retention_hours   = "container_db_events_retention_hours"   # Default: 168 (7 days)
 container_purge_interval_minutes      = "container_purge_interval_minutes"      # Default: 60
 
@@ -127,6 +144,7 @@ CONTENT_CONFIG_KEYS = [
     content_rtsp_username,
     content_rtsp_password,
     content_snapshot_requested_key,
+    content2_snapshot_requested_key,
     content_recording_enabled_key,
     content_pre_event_seconds,
     content_post_event_seconds,
@@ -134,6 +152,22 @@ CONTENT_CONFIG_KEYS = [
     content_video_fps,
     content_rtsp_subtype,
     content_max_recording_seconds,
+    # Content camera 2
+    content2_rtsp_host,
+    content2_rtsp_port,
+    content2_rtsp_username,
+    content2_rtsp_password,
+    content2_recording_enabled_key,
+    content2_pre_event_seconds,
+    content2_post_event_seconds,
+    content2_buffer_seconds,
+    content2_video_fps,
+    content2_rtsp_path,
+    content2_rtsp_subtype,
+    content2_max_recording_seconds,
+    # Content camera 2 retention
+    container_content2_videos_retention_hours,
+    container_content2_videos_max_count,
 ]
 
 # All configuration keys

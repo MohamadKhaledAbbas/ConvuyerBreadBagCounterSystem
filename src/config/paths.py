@@ -178,3 +178,6 @@ CONTAINER_SNAPSHOT_DIR: str = os.path.join(DATA_DIR, "container_snapshots")
 
 # Content camera recordings (3D-angle view of container contents)
 CONTAINER_CONTENT_VIDEOS_DIR: str = os.path.join(DATA_DIR, "container_content_videos")
+
+# Content camera 2 recordings (second side view)
+CONTAINER_CONTENT2_VIDEOS_DIR: str = os.path.join(DATA_DIR, "container_content2_videos")

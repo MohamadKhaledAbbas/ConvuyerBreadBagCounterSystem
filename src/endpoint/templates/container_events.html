@@ -463,7 +463,6 @@
             flex-direction: column;
             overflow: hidden;
         }
-        }
 
         .modal-title {
             display: flex;
@@ -956,15 +955,24 @@ function getVideoSources(event) {
     const raw = (event && event.video_sources) || {};
     const eventId = event && (event.video_event_id || getEventId(event.snapshot_path));
     const sources = {};
-    ['qr', 'content'].forEach((camera) => {
+    ['qr', 'content', 'content2'].forEach((camera) => {
         const info = raw[camera] || {};
         const fallbackUrl = eventId
             ? '/container/event/' + encodeURIComponent(eventId) + '/video?camera=' + camera
             : null;
         const url = info.url || fallbackUrl;
+        // Determine label based on camera type
+        let label;
+        if (camera === 'content') {
+            label = 'كاميرا المحتوى';
+        } else if (camera === 'content2') {
+            label = 'كاميرا المحتوى 2';
+        } else {
+            label = 'كاميرا QR';
+        }
         sources[camera] = {
             camera,
-            label: camera === 'content' ? 'كاميرا المحتوى' : 'كاميرا QR',
+            label: label,
             available: Boolean(info.available && url),
             url: info.available ? url : null,
             recording_status: info.recording_status || 'no_video',
@@ -981,6 +989,7 @@ function getDefaultVideoCamera(event) {
     const preferred = event && event.default_video_camera;
     if (preferred && sources[preferred] && sources[preferred].available) return preferred;
     if (sources.content.available) return 'content';
+    if (sources.content2.available) return 'content2';
     if (sources.qr.available) return 'qr';
     return null;
 }
@@ -1045,6 +1054,9 @@ function renderCameraChip(event) {
     if (sources.content.available) {
         chips.push('<span class="badge-soft cam-content"><i class="fa-solid fa-cube"></i> كاميرا المحتوى</span>');
     }
+    if (sources.content2.available) {
+        chips.push('<span class="badge-soft cam-content"><i class="fa-solid fa-cube"></i> كاميرا المحتوى 2</span>');
+    }
     if (sources.qr.available) {
         const qrLabel = event.video_fallback && getDefaultVideoCamera(event) === 'qr'
             ? '<span class="badge-soft cam-fallback" title="تم استخدام QR لأن كاميرا المحتوى غير متاحة"><i class="fa-solid fa-right-left"></i> QR (بديل)</span>'
@@ -1054,7 +1066,7 @@ function renderCameraChip(event) {
     if (chips.length) return chips.join(' ');
 
     const { camera, fallback } = getCameraInfo(event);
-    if (camera === 'content') {
+    if (camera === 'content' || camera === 'content2') {
         return '<span class="badge-soft cam-content"><i class="fa-solid fa-cube"></i> كاميرا المحتوى</span>';
     }
     if (fallback) {
@@ -1065,7 +1077,7 @@ function renderCameraChip(event) {
 
 function renderFootageSourceButtons(event, activeCamera) {
     const sources = getVideoSources(event);
-    const available = ['qr', 'content'].filter((camera) => sources[camera].available);
+    const available = ['qr', 'content', 'content2'].filter((camera) => sources[camera].available);
     if (available.length < 2) return '';
     return `
         <div style="display:flex; gap:0.55rem; flex-wrap:wrap; margin-bottom:0.9rem;">
@@ -1085,10 +1097,17 @@ function renderFootageSourceButtons(event, activeCamera) {
 
 function renderEventActionButtons(event, idx) {
     const sources = getVideoSources(event);
-    return ['qr', 'content'].map((camera) => {
+    return ['qr', 'content', 'content2'].map((camera) => {
         const source = sources[camera];
-        const klass = camera === 'content' ? 'btn-camera-content' : 'btn-primary-soft';
-        const icon = camera === 'content' ? 'fa-cube' : 'fa-qrcode';
+        // Determine button style based on camera type
+        let klass, icon;
+        if (camera === 'content' || camera === 'content2') {
+            klass = 'btn-camera-content';
+            icon = 'fa-cube';
+        } else {
+            klass = 'btn-primary-soft';
+            icon = 'fa-qrcode';
+        }
         const disabled = source.available ? '' : 'disabled';
         return `
             <button class="${klass}" type="button" ${disabled}

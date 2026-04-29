@@ -84,21 +84,25 @@ class EventVideoCoordinator:
         *,
         source_preference: SourcePreference,
         content_recorder,                     # Optional[ContentCameraRecorder]
+        content_recorder2 = None,              # Optional[ContentCameraRecorder] for second side view
         qr_output_dir: str,                   # e.g. data/container_snapshots
         qr_output_relroot: str,               # relative path (e.g. "container_snapshots")
         content_output_relroot: str,          # relative path (e.g. "container_content_videos")
+        content2_output_relroot: str = "",    # relative path (e.g. "container_content2_videos")
         qr_fps: float,                        # effective QR-frame sampling fps
         executor: Executor,                   # thread pool for async encoding
         codec: str = "mp4v",
         jpeg_quality: int = 60,
     ):
         self._preference: SourcePreference = (
-            source_preference if source_preference in ("qr", "content") else "qr"
+            source_preference if source_preference in ("qr", "content", "content2") else "qr"
         )
         self._content = content_recorder
+        self._content2 = content_recorder2
         self._qr_output_dir = qr_output_dir
         self._qr_output_relroot = qr_output_relroot.strip("/")
         self._content_output_relroot = content_output_relroot.strip("/")
+        self._content2_output_relroot = content2_output_relroot.strip("/")
         self._qr_fps = max(1.0, float(qr_fps))
         self._executor = executor
         self._codec = codec
@@ -117,6 +121,10 @@ class EventVideoCoordinator:
     @property
     def content_output_relroot(self) -> str:
         return self._content_output_relroot
+
+    @property
+    def content2_output_relroot(self) -> str:
+        return self._content2_output_relroot
 
     @property
     def qr_output_relroot(self) -> str:
@@ -163,6 +171,54 @@ class EventVideoCoordinator:
             raises on the hot path — all errors are logged and converted
             into a ``video_relpath=None`` result.
         """
+        # --- Content camera 2 already recording (begin/end model) --------
+        if self._preference == "content2" and content_already_started:
+            rel = f"{self._content2_output_relroot}/{event_id}.mp4"
+            logger.info(
+                f"[EventVideo] event={event_id} source=content2 "
+                f"(begin/end model) file={rel}"
+            )
+            return EventVideoResult(
+                camera="content2", fallback=False, video_relpath=rel
+            )
+        # --- Try content2 recorder if preferred and healthy ----------------
+        if self._preference == "content2":
+            if self._content2 is not None and self._content2.is_available():
+                try:
+                    fname = self._content2.trigger_recording(
+                        event_id, trigger_time=trigger_monotonic_time
+                    )
+                    if fname:
+                        rel = f"{self._content2_output_relroot}/{fname}"
+                        logger.info(
+                            f"[EventVideo] event={event_id} source=content2 "
+                            f"file={rel}"
+                        )
+                        return EventVideoResult(
+                            camera="content2", fallback=False, video_relpath=rel
+                        )
+                    logger.warning(
+                        f"[EventVideo] content2 recorder returned None for {event_id}"
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"[EventVideo] content2 recorder raised for {event_id}: {e}",
+                        exc_info=True,
+                    )
+            else:
+                reason = (
+                    "disabled" if self._content2 is None else "not available"
+                )
+                logger.warning(
+                    f"[EventVideo] content2 camera {reason} for {event_id} "
+                    f"— falling back to QR camera"
+                )
+            # Fall back to QR
+            return self._submit_qr_video(
+                event_id=event_id, frames=qr_frames, metadata=metadata,
+                fallback=True, fps_override=qr_fps_override,
+            )
+
         # --- Content camera already recording (begin/end model) ----------
         if self._preference == "content" and content_already_started:
             rel = f"{self._content_output_relroot}/{event_id}.mp4"
