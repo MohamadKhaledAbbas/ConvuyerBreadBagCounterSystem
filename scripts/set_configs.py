@@ -100,6 +100,24 @@ def configure_content_camera(conn, ni):
             _set(conn, key, _ask(conn, key, default, label, ni))
 
 
+def configure_content2_camera(conn, ni):
+    _section("Content2 Camera (optional 3D-angle recorder)")
+    enabled = _ask(conn, "content2_recording_enabled", "0",
+                   "Enable content2 recording? (1=yes / 0=no)", ni)
+    _set(conn, "content2_recording_enabled", enabled)
+    if enabled == "1" or not ni:
+        configs = [
+            ("content2_rtsp_host",     "192.168.2.138",   "Content2 camera IP"),
+            ("content2_rtsp_port",     "554",             "RTSP port"),
+            ("content2_rtsp_username", "admin",           "Username"),
+            ("content2_rtsp_password", "",                "Password"),
+            ("content2_rtsp_path",     "cam/realmonitor", "RTSP path"),
+            ("content2_rtsp_subtype",  "0",               "Subtype (0=main, 1=sub)"),
+        ]
+        for key, default, label in configs:
+            _set(conn, key, _ask(conn, key, default, label, ni))
+
+
 def configure_tracking(conn, ni):
     _section("Container Tracking Behaviour")
     configs = [
@@ -138,6 +156,11 @@ def configure_event_video(conn, ni):
         ("content_buffer_seconds",              "5.0", "Content ring buffer size (seconds)"),
         ("content_video_fps",                   "10",  "Content video FPS"),
         ("content_max_recording_seconds",       "15.0","Content max clip length (seconds)"),
+        ("content2_pre_event_seconds",          "3.0", "Content2 pre-event (seconds)"),
+        ("content2_post_event_seconds",         "2.0", "Content2 post-event (seconds)"),
+        ("content2_buffer_seconds",             "5.0", "Content2 ring buffer size (seconds)"),
+        ("content2_video_fps",                  "10",  "Content2 video FPS"),
+        ("content2_max_recording_seconds",      "15.0","Content2 max clip length (seconds)"),
     ]
     for key, default, label in configs:
         _set(conn, key, _ask(conn, key, default, label, ni))
@@ -150,6 +173,8 @@ def configure_purge(conn, ni):
         ("container_snapshots_max_count",            "500",   "Snapshots max count"),
         ("container_content_videos_retention_hours", "72.0",  "Content videos retention (hours)"),
         ("container_content_videos_max_count",       "200",   "Content videos max count"),
+        ("container_content2_videos_retention_hours", "72.0", "Content2 videos retention (hours)"),
+        ("container_content2_videos_max_count",       "200",  "Content2 videos max count"),
         ("container_db_events_retention_hours",      "168.0", "DB events retention (hours)"),
         ("container_purge_interval_minutes",         "60.0",  "Purge check interval (minutes)"),
     ]
@@ -188,6 +213,7 @@ def configure_display(conn, ni):
 SECTIONS = [
     configure_qr_camera,
     configure_content_camera,
+    configure_content2_camera,
     configure_tracking,
     configure_snapshots,
     configure_event_video,

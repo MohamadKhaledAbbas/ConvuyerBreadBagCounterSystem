@@ -456,6 +456,10 @@
                     <div class="label"><i class="fa-solid fa-camera-rotate"></i> IP — كاميرا المحتوى</div>
                     <div class="value eng" id="cContentIp" style="font-size:1rem;">—</div>
                 </div>
+                <div class="info-card">
+                    <div class="label"><i class="fa-solid fa-camera-rotate"></i> IP — كاميرا المحتوى 2</div>
+                    <div class="value eng" id="cContent2Ip" style="font-size:1rem;">—</div>
+                </div>
             </div>
             <!-- Counts row -->
             <div class="info-grid" style="margin-bottom:1rem;">
@@ -784,6 +788,15 @@ function renderContainerSection(c) {
     } else {
         cIpEl.textContent = 'غير مفعّل';
         cIpEl.className = 'value eng muted';
+    }
+
+    const c2IpEl = $('cContent2Ip');
+    if (c.content2_recording_enabled && c.content2_rtsp_host) {
+        c2IpEl.textContent = c.content2_rtsp_host + ':' + (c.content2_rtsp_port || '554');
+        c2IpEl.className = 'value eng primary';
+    } else {
+        c2IpEl.textContent = 'غير مفعّل';
+        c2IpEl.className = 'value eng muted';
     }
 
     // Counts
