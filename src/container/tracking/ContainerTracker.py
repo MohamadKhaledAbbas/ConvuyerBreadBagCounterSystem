@@ -74,6 +74,9 @@ class TrackedContainer:
     def add_position(self, x: int, y: int, timestamp: float) -> None:
         """Record a position in the history."""
         self.positions.append((x, y, timestamp))
+        # Cap position history to last 300 entries (~10 sec @ 30 fps)
+        if len(self.positions) > 300:
+            self.positions.pop(0)
         self.last_x = x
         self.last_time = timestamp
     

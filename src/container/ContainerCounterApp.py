@@ -826,6 +826,10 @@ class ContainerCounterApp:
         from concurrent.futures import ThreadPoolExecutor
         self._snapshot_io = ThreadPoolExecutor(max_workers=2, thread_name_prefix="snap")
         
+        # Semaphore to throttle QR encode tasks (max 4 in-flight encodes).
+        # Prevents unbounded accumulation in executor's internal queue.
+        self._qr_encode_semaphore = threading.Semaphore(4)
+        
         # Only handle SIGTERM (supervisor stop). Ctrl+C (SIGINT) is left to
         # Python's default so it raises KeyboardInterrupt, which immediately
         # interrupts time.sleep / cap.read / cv2.waitKey rather than waiting
@@ -1381,8 +1385,12 @@ class ContainerCounterApp:
         self._qr_preroll.add(half, center_x=0, timestamp=now_mono)
 
         # Append to every per-track video frame list (active + post-exit).
+        # Cap each list to MAX_TRACK_FRAMES to prevent unbounded accumulation.
+        MAX_TRACK_FRAMES = 1800  # ~60 sec @ 30 fps
         for _tvf_list in self._track_video_frames.values():
             _tvf_list.append((now_mono, half))
+            if len(_tvf_list) > MAX_TRACK_FRAMES:
+                _tvf_list.pop(0)  # Remove oldest frame
 
         if _dbg:
             _dbg_t['half+preroll'] = (time.time() - _t) * 1000
@@ -1516,12 +1524,16 @@ class ContainerCounterApp:
             ]
             for q in stale_content:
                 entry = self._active_content_events.pop(q, None)
-                if entry and self._content_recorder is not None:
+                if entry:
                     eid, _begin, _cameras = entry
-                    self._content_recorder.end_event_recording(eid)
+                    # End both content1 and content2 recordings if they were started
+                    if self._content_recorder is not None and "content1" in _cameras:
+                        self._content_recorder.end_event_recording(eid)
+                    if self._content_recorder2 is not None and "content2" in _cameras:
+                        self._content_recorder2.end_event_recording(eid)
                     logger.debug(
                         f"[ContainerCounterApp] Cleaned up orphan content "
-                        f"recording QR={q} event_id={eid}"
+                        f"recording QR={q} event_id={eid} cameras={_cameras}"
                     )
                 self._track_video_frames.pop(q, None)
                 self._post_exit_qr.discard(q)

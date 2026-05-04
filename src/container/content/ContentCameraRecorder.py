@@ -164,7 +164,8 @@ class ContentCameraRecorder:
         # In-flight recordings that still need post-roll frames appended.
         self._active: List[_PendingRecording] = []
         # Jobs that are done collecting frames and ready for disk encoding.
-        self._write_queue: "Queue[_PendingRecording]" = Queue()
+        # Bounded to 10 to prevent unbounded accumulation of pending encodes.
+        self._write_queue: "Queue[_PendingRecording]" = Queue(maxsize=10)
 
         # Reader health counters.
         self._last_frame_time: float = 0.0

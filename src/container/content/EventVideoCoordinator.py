@@ -107,6 +107,10 @@ class EventVideoCoordinator:
         self._executor = executor
         self._codec = codec
         self._jpeg_quality = int(jpeg_quality)
+        
+        # Semaphore to throttle QR encode tasks (max 4 in-flight).
+        import threading
+        self._semaphore = threading.Semaphore(4)
 
         os.makedirs(self._qr_output_dir, exist_ok=True)
 
@@ -343,7 +347,15 @@ class EventVideoCoordinator:
                     exc_info=True,
                 )
 
-        self._executor.submit(_encode_job)
+        def _encode_with_semaphore() -> None:
+            """Acquire semaphore, run encode, release semaphore."""
+            try:
+                self._semaphore.acquire()
+                _encode_job()
+            finally:
+                self._semaphore.release()
+
+        self._executor.submit(_encode_with_semaphore)
         logger.info(
             f"[EventVideo] event={event_id} source=qr fallback={fallback} "
             f"queued frames={len(frames)} fps={fps:.1f} -> {rel}"
