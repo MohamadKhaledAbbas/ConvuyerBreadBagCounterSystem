@@ -489,6 +489,7 @@ class ContentCameraRecorder:
                     self.config.frame_size = (frame.shape[1], frame.shape[0])
 
                 entry: _FrameEntry = (now, frame)
+                completed_recs: List[_PendingRecording] = []
                 with self._lock:
                     self._ring.append(entry)
                     # Feed any active post-roll recordings — only frames
@@ -503,7 +504,17 @@ class ContentCameraRecorder:
                         else:
                             # Post-roll complete — queue for writing.
                             self._active.remove(rec)
-                            self._write_queue.put(rec)
+                            completed_recs.append(rec)
+
+                # Queue completed recordings OUTSIDE the lock so a full
+                # write queue cannot deadlock the reader thread.
+                for rec in completed_recs:
+                    try:
+                        self._write_queue.put_nowait(rec)
+                    except Empty:
+                        logger.warning(
+                            f"[ContentRecorder] Write queue full, dropping recording {rec.event_id}"
+                        )
 
                 # Periodic health log.
                 if now >= next_health_log:

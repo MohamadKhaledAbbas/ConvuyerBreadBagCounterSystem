@@ -347,15 +347,25 @@ class EventVideoCoordinator:
                     exc_info=True,
                 )
 
-        def _encode_with_semaphore() -> None:
-            """Acquire semaphore, run encode, release semaphore."""
+        def _run_encode_and_release() -> None:
+            """Run encode job and always release semaphore on exit."""
             try:
-                self._semaphore.acquire()
                 _encode_job()
             finally:
                 self._semaphore.release()
 
-        self._executor.submit(_encode_with_semaphore)
+        # Gate submit() itself so the executor queue is also bounded.
+        # Acquiring here prevents unbounded accumulation of closures
+        # that hold large frame lists when encode jobs run slower than
+        # events arrive.
+        if not self._semaphore.acquire(blocking=False):
+            logger.warning(
+                f"[EventVideo] Dropping QR encode for {event_id} — "
+                f"too many in-flight encode jobs"
+            )
+            return EventVideoResult(camera="qr", fallback=fallback, video_relpath=None)
+
+        self._executor.submit(_run_encode_and_release)
         logger.info(
             f"[EventVideo] event={event_id} source=qr fallback={fallback} "
             f"queued frames={len(frames)} fps={fps:.1f} -> {rel}"
