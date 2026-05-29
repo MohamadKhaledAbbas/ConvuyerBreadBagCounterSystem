@@ -1386,7 +1386,7 @@ class ContainerCounterApp:
 
         # Append to every per-track video frame list (active + post-exit).
         # Cap each list to MAX_TRACK_FRAMES to prevent unbounded accumulation.
-        MAX_TRACK_FRAMES = 1800  # ~60 sec @ 30 fps
+        MAX_TRACK_FRAMES = 400   # ~20 sec @ 20 fps (matches typical 15s pass-through)
         for _tvf_list in self._track_video_frames.values():
             _tvf_list.append((now_mono, half))
             if len(_tvf_list) > MAX_TRACK_FRAMES:

@@ -19,7 +19,7 @@ Usage:
 
 Environment Variables:
     CONTAINER_VIDEO_PATH: Optional fallback video path when VIDEO_PATH is empty
-    USE_CONTAINER_RTSP_SUBSTREAM: 'true' to use substream instead of main stream
+    USE_CONTAINER_RTSP_SUBSTREAM: Default 'true' (substream/D1). Set 'false' for main stream (720p+).
     CONTAINER_DEBUG_SYNC_OVERLAY: '1' to stamp saved QR/content clips with
         a shared event-relative clock for sync verification on dev machines
 
