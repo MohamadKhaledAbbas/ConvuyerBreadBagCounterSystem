@@ -100,8 +100,8 @@ def generate_launch_description():
 
     # Build RTSP URL
     # Default to sub stream (D1 ~704×480, lower memory footprint).
-    # Set USE_CONTAINER_RTSP_SUBSTREAM=false to use main stream (720p+).
-    use_substream = os.getenv('USE_CONTAINER_RTSP_SUBSTREAM', 'true').lower() != 'false'
+    # Use subtype=0 for main stream (higher quality for QR detection)
+    use_substream = os.getenv('USE_CONTAINER_RTSP_SUBSTREAM', 'false').lower() == 'true'
     subtype = 1 if use_substream else 0
 
     rtsp_url = (
