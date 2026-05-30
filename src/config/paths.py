@@ -20,6 +20,7 @@ Environment variables override every path:
 
 import os
 import subprocess
+import time
 
 from src.utils.platform import IS_LINUX, IS_RDK
 
@@ -33,28 +34,14 @@ _PROJECT_ROOT: str = os.getenv("PROJECT_ROOT", "/home/sunrise/ConvuyerBreadCount
 
 _APP_DIR_NAME = "ConvuyerBreadCounting"
 
+# How many times to retry detecting the SSD after running mount -a.
+# Handles the case where paths.py is imported before auto-mount completes.
+_MOUNT_RETRIES: int = int(os.getenv("MOUNT_RETRIES", "3"))
+_MOUNT_RETRY_DELAY: float = 2.0
 
-def _resolve_root_ssd_drive() -> str:
-    """Resolve the mounted SSD/USB root that contains the application data directory.
 
-    Resolution order:
-      1. ``ROOT_SSD_DRIVE`` env var — explicit override, used as-is.
-      2. Query the live mount table (``findmnt``) for all removable drives
-         mounted under ``/media/``.  Among those candidates, return the first
-         one whose root contains a ``ConvuyerBreadCounting`` directory —
-         regardless of what the drive or mountpoint is named.
-      3. If no drive has the application directory yet, return the first
-         removable mount found (so the app can bootstrap itself on a fresh
-         drive on first run).
-      4. Return ``""`` to fall back to the local ``data/`` directory.
-    """
-    env_root = os.getenv("ROOT_SSD_DRIVE")
-    if env_root:
-        return env_root
-
-    if not IS_LINUX:
-        return ""
-
+def _query_findmnt() -> list[str]:
+    """Run findmnt and return candidate mount targets under /media/."""
     try:
         result = subprocess.run(
             [
@@ -71,13 +58,12 @@ def _resolve_root_ssd_drive() -> str:
             timeout=3,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return ""
+        return []
 
     if not result or result.returncode != 0:
-        return ""
+        return []
 
     candidates: list[str] = []
-    # Internal RDK mount points that must never be used as data storage.
     _INTERNAL_MOUNTS = {"mass_storage", "sdcard1", "sdcard2"}
     for line in result.stdout.splitlines():
         parts = line.split()
@@ -86,24 +72,69 @@ def _resolve_root_ssd_drive() -> str:
         target = parts[0]
         if not target.startswith("/media/"):
             continue
-        # Exclude known internal/virtual RDK storage devices.
         mount_name = target.split("/")[-1]
         if mount_name in _INTERNAL_MOUNTS:
             continue
         candidates.append(target)
+    return candidates
 
-    # Prefer a drive that already has the application directory AND is writable.
+
+def _pick_best_candidate(candidates: list[str]) -> str:
+    """Among candidates, prefer one with existing app dir, else first writable."""
     for target in candidates:
         if os.path.isdir(os.path.join(target, _APP_DIR_NAME)) and os.access(target, os.W_OK):
             return target
-
-    # No drive has the app directory yet — use the first writable mount
-    # so the app can create its data layout on a fresh drive.
     for target in candidates:
         if os.access(target, os.W_OK):
             return target
+    return ""
 
-    # All candidates exist but none are writable (read-only mount).
+
+def _resolve_root_ssd_drive() -> str:
+    """Resolve the mounted SSD/USB root that contains the application data directory.
+
+    Resolution order:
+      1. ``ROOT_SSD_DRIVE`` env var — explicit override, used as-is.
+      2. Query the live mount table (``findmnt``) for all removable drives
+         mounted under ``/media/``.
+      3. If none found, run ``mount -a`` and retry (up to ``MOUNT_RETRIES``
+         times, 2 s apart) to give systemd or fstab time to catch up.
+      4. Return ``""`` to fall back to the local ``data/`` directory.
+    """
+    env_root = os.getenv("ROOT_SSD_DRIVE")
+    if env_root:
+        return env_root
+
+    if not IS_LINUX:
+        return ""
+
+    # First pass — maybe it's already mounted.
+    candidates = _query_findmnt()
+    if candidates:
+        picked = _pick_best_candidate(candidates)
+        if picked:
+            return picked
+        # Drives exist but none are writable — mount -a won't help.
+        return ""
+
+    # Second pass — run mount -a and retry a few times (drive detected but
+    # fstab mount hadn't run yet when findmnt first queried).
+    for attempt in range(1, _MOUNT_RETRIES + 1):
+        try:
+            subprocess.run(
+                ["mount", "-a"],
+                capture_output=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        time.sleep(_MOUNT_RETRY_DELAY)
+        candidates = _query_findmnt()
+        if candidates:
+            picked = _pick_best_candidate(candidates)
+            if picked:
+                return picked
+
     return ""
 
 
@@ -120,14 +151,19 @@ DATA_DIR: str = os.getenv(
     DEFAULT_DATA_DIR,
 )
 
+# Local fallback path (used when no USB/SSD drive is mounted).
+# Exported publicly so other modules can detect and merge storage splits.
+FALLBACK_DATA_DIR: str = os.path.join(_PROJECT_ROOT, "data")
+
 # Spool directory (retained for lost_snapshots sub-directory)
 SPOOL_DIR: str = os.getenv(
     "SPOOL_DIR",
     os.path.join(DATA_DIR, "spool"),
 )
 
-# Logs
-LOG_DIR: str = os.getenv("LOG_DIR", os.path.join(DATA_DIR, "logs"))
+# Logs — always on the local SD/eMMC path so they survive SSD failures
+# or read-only transitions.  Separate from DATA_DIR for this reason.
+LOG_DIR: str = os.getenv("LOG_DIR", os.path.join(_PROJECT_ROOT, "data", "logs"))
 
 # Cross-process IPC status files.
 # /tmp is RAM-backed tmpfs on RDK — fast and avoids eMMC wear.

@@ -22,6 +22,8 @@ Usage:
 import json
 import os
 import queue
+import shutil
+import sqlite3
 import signal
 import threading
 import time
@@ -865,7 +867,14 @@ class ContainerCounterApp:
         
         # Database
         self.db = DatabaseManager(self.config.db_path)
-        
+
+        # Merge orphaned events from the local fallback path (SD/eMMC) into the
+        # primary DB on SSD when the SSD was unavailable on a previous boot.
+        # This runs once per startup and handles the STORAGE_SPLIT case where
+        # the drive mounted after the application had already started recording
+        # to the fallback local data directory.
+        self._merge_fallback_data()
+
         # Load DB-backed settings without losing runtime overrides such as video_source.
         self.config = ContainerConfig.from_database(self.db, base_config=self.config)
         self.enable_display = self.config.enable_display
@@ -2571,6 +2580,207 @@ class ContainerCounterApp:
                 exc_info=True,
             )
             return None
+
+    def _merge_fallback_data(self) -> None:
+        """Merge orphaned data from the local fallback path into the primary SSD path.
+
+        When the SSD failed to mount on a previous boot, ``DATA_DIR`` fell back
+        to the local SD/eMMC path and events were recorded there.  If the SSD
+        is available on this boot, copy all rows from the fallback DB into the
+        primary DB as new records (letting auto-increment assign fresh PKs).
+        The two DBs span disjoint time ranges so no dedup is needed.
+
+        Order of operations (safe against crashes):
+          1. Rename fallback DB to ``.merging`` (atomic claim — crash-safe).
+          2. Copy media files (snapshots, videos) to SSD — retryable.
+          3. Merge DB rows and commit.
+          4. Delete fallback data (DB + media dirs).
+
+        If the process crashes after the commit but before deletion, the
+        ``.merging`` file remains on disk.  On the next boot the renamed
+        path does not exist, so the merge is not re-entered and no
+        duplicates are produced.
+
+        Connections are always closed via ``try/finally`` so a read-only or
+        corrupt fallback DB cannot stall the pipeline.
+        """
+        from src.config import paths as cfg_paths
+
+        primary_data = cfg_paths.DATA_DIR
+        fallback_data = cfg_paths.FALLBACK_DATA_DIR
+        if primary_data == fallback_data:
+            return  # running on fallback already — no split
+
+        primary_db = self.config.db_path
+        if not os.path.isfile(primary_db):
+            return
+
+        # ── 1. Claim fallback DB atomically, or detect a row from a previous crash ──
+        fallback_db = os.path.join(fallback_data, "db", "bag_events.db")
+        merge_file = fallback_db + ".merging"
+
+        if os.path.isfile(merge_file):
+            logger.warning(
+                "[ContainerCounterApp] Orphaned merge file found — "
+                "previous merge may have crashed mid-way. "
+                "Skipping to avoid duplicates: %s", merge_file
+            )
+            return
+
+        if not os.path.isfile(fallback_db):
+            return
+
+        try:
+            os.rename(fallback_db, merge_file)
+        except OSError:
+            logger.warning(
+                "[ContainerCounterApp] Failed to claim fallback DB, skipping"
+            )
+            return
+
+        logger.info(
+            "[ContainerCounterApp] Claimed fallback DB: %s → %s",
+            fallback_db, merge_file
+        )
+
+        # ── 2. Copy media files first (retryable — no DB changes yet) ──
+        for subdir in ("container_snapshots", "roi_candidates"):
+            src = os.path.join(fallback_data, subdir)
+            dst = os.path.join(primary_data, subdir)
+            if not os.path.isdir(src):
+                continue
+            os.makedirs(dst, exist_ok=True)
+            for entry in os.listdir(src):
+                s = os.path.join(src, entry)
+                d = os.path.join(dst, entry)
+                if os.path.isdir(s):
+                    if os.path.exists(d):
+                        logger.warning(
+                            f"[ContainerCounterApp] Dir collision "
+                            f"(already exists on SSD), skipping: {d}"
+                        )
+                        continue
+                    try:
+                        shutil.copytree(s, d)
+                    except Exception as e:
+                        logger.warning(
+                            f"[ContainerCounterApp] copy {subdir}/{entry}: {e}"
+                        )
+
+        for subdir in ("container_content_videos", "container_content2_videos",
+                       "snapshot", "recordings", "classified_rois", "spool/lost_snapshots"):
+            src = os.path.join(fallback_data, subdir)
+            dst = os.path.join(primary_data, subdir)
+            if not os.path.isdir(src):
+                continue
+            os.makedirs(dst, exist_ok=True)
+            for fname in os.listdir(src):
+                s = os.path.join(src, fname)
+                d = os.path.join(dst, fname)
+                if os.path.isfile(s):
+                    if os.path.exists(d):
+                        logger.warning(
+                            f"[ContainerCounterApp] File collision "
+                            f"(already exists on SSD), skipping: {d}"
+                        )
+                        continue
+                    try:
+                        shutil.copy2(s, d)
+                    except Exception as e:
+                        logger.warning(
+                            f"[ContainerCounterApp] copy {subdir}/{fname}: {e}"
+                        )
+
+        # ── 3. Merge DB rows ──
+        fb_conn = None
+        pk_conn = None
+        try:
+            fb_conn = sqlite3.connect(merge_file, timeout=5.0)
+            pk_conn = sqlite3.connect(primary_db, timeout=5.0)
+            pk_conn.execute("PRAGMA foreign_keys = ON")
+            pk_conn.execute("PRAGMA synchronous = NORMAL")
+
+            TABLES = (
+                "container_events",
+                "events",
+                "track_events",
+                "track_event_details",
+                "container_stats",
+            )
+
+            merged_total = 0
+            for tname in TABLES:
+                try:
+                    cur = pk_conn.execute(f"SELECT * FROM {tname} LIMIT 0")
+                    cols = [d[0] for d in cur.description]
+                    data_cols = [c for c in cols if c != "id"]
+                    col_list = ", ".join(data_cols)
+                    placeholders = ", ".join("?" for _ in data_cols)
+
+                    rows = fb_conn.execute(
+                        f"SELECT {col_list} FROM {tname} ORDER BY id"
+                    ).fetchall()
+                    if not rows:
+                        continue
+
+                    pk_conn.executemany(
+                        f"INSERT INTO {tname} ({col_list}) VALUES ({placeholders})",
+                        rows,
+                    )
+                    merged_total += len(rows)
+                    logger.info(
+                        f"[ContainerCounterApp] Merged {len(rows)} rows into {tname}"
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"[ContainerCounterApp] Skipped table {tname}: {e}"
+                    )
+
+            if merged_total == 0:
+                return
+
+            pk_conn.commit()
+            logger.info(
+                "[ContainerCounterApp] Merged %d total rows "
+                "from fallback DB (%s)",
+                merged_total, merge_file
+            )
+
+        except Exception as e:
+            logger.warning(
+                f"[ContainerCounterApp] Fallback merge skipped: {e}"
+            )
+            return
+        finally:
+            for c in (fb_conn, pk_conn):
+                if c is not None:
+                    try:
+                        c.close()
+                    except Exception:
+                        pass
+
+        # ── 4. Delete fallback data (success confirmed — clean up) ──
+        try:
+            os.remove(merge_file)
+            logger.info(
+                f"[ContainerCounterApp] Removed fallback DB: {merge_file}"
+            )
+        except Exception as e:
+            logger.warning(
+                f"[ContainerCounterApp] Failed to remove fallback DB: {e}"
+            )
+        for d in (
+            os.path.join(fallback_data, "container_snapshots"),
+            os.path.join(fallback_data, "container_content_videos"),
+            os.path.join(fallback_data, "container_content2_videos"),
+            os.path.join(fallback_data, "snapshot"),
+            os.path.join(fallback_data, "recordings"),
+            os.path.join(fallback_data, "roi_candidates"),
+            os.path.join(fallback_data, "classified_rois"),
+            os.path.join(fallback_data, "spool", "lost_snapshots"),
+        ):
+            if os.path.isdir(d):
+                shutil.rmtree(d, ignore_errors=True)
 
     def _record_event(
         self,
